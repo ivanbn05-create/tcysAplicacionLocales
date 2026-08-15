@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tocayos}
+      POSTGRES_USER: ${POSTGRES_USER:-tocayos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tocayos-local}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tocayos} -d ${POSTGRES_DB:-tocayos}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  web:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DB_ENGINE: postgres
+      POSTGRES_HOST: db
+    ports:
+      - "8000:8000"
+    volumes:
+      - impresiones:/app/media/impresiones
+    depends_on:
+      db:
+        condition: service_healthy
+
+  impresion:
+    build: .
+    restart: unless-stopped
+    command: python manage.py procesar_impresiones
+    env_file:
+      - .env
+    environment:
+      DB_ENGINE: postgres
+      POSTGRES_HOST: db
+      PRINT_SYNC: "false"
+    volumes:
+      - impresiones:/app/media/impresiones
+    depends_on:
+      web:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  impresiones:
