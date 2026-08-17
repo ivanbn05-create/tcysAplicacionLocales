@@ -7,40 +7,65 @@
   <meta name="theme-color" content="#ffed00">
   <title>Los Tocayos · {% if modo_tableta %}Tabletas{% else %}Punto de venta{% endif %}</title>
   <link rel="icon" href="{% static 'ventas/brand/logoactual.jpeg' %}" type="image/jpeg">
-  <link rel="manifest" href="{% url 'ventas:manifest' %}">
+  <link rel="manifest" href="{% url 'ventas:manifest' %}{% if modo_tableta %}?modo=tableta{% endif %}">
   <link rel="stylesheet" href="{% static 'ventas/app.css' %}">
 </head>
 <body class="{% if modo_tableta %}modo-tableta{% endif %}" data-modo-tableta="{{ modo_tableta|yesno:'true,false' }}">
   <form class="csrf-holder">{% csrf_token %}</form>
-  <header class="topbar">
-    <div class="marca" role="img" aria-label="Los Tocayos, tacos de barbacoa"><span class="solo-lectores">Los Tocayos</span></div>
-    <div class="sucursal">
-      <span class="eyebrow">Sucursal</span>
-      <strong>{{ sucursal.nombre }}</strong>
-    </div>
-    <div class="estados-sistema">
-      <div class="conexion" id="conexion"><i></i><span>Sistema local</span></div>
-      <button class="impresora-estado comprobando" id="impresora-estado" type="button" title="Comprobar impresora">
-        <i></i><span>Comprobando impresora</span>
-      </button>
-    </div>
-  </header>
-
-  <main>
-    <section id="vista-posiciones" class="vista-posiciones">
-      <div class="encabezado-vista">
-        <div>
-          <p class="eyebrow">{% if modo_tableta %}Captura para tabletas{% else %}Operación del día{% endif %}</p>
-          <h1 id="titulo-canal">Comedor</h1>
+  {% if not modo_tableta %}
+    <section id="pantalla-acceso" class="pantalla-acceso">
+      <header class="topbar">
+        <div class="marca" role="img" aria-label="Los Tocayos, tacos de barbacoa">
+          <img src="{% static 'ventas/brand/logoactual.jpeg' %}" alt="" aria-hidden="true">
+          <span class="solo-lectores">Los Tocayos</span>
         </div>
-        <button class="boton secundario" id="actualizar-estado" type="button">Actualizar</button>
+        <div class="sucursal">
+          <span class="eyebrow">Sucursal</span>
+          <strong>{{ sucursal.nombre }}</strong>
+        </div>
+        <div class="estados-sistema">
+          <div class="conexion" id="conexion"><i></i><span>Sistema local</span></div>
+          <button class="impresora-estado comprobando" id="impresora-estado" type="button" title="Comprobar impresora">
+            <i></i><span>Comprobando impresora</span>
+          </button>
+        </div>
+      </header>
+      <div class="acceso-contenido">
+        <div class="perfiles-acceso">
+          <button id="entrar-mesero" class="perfil-acceso mesero" type="button">
+            <span class="perfil-icono" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="7" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg>
+            </span><strong>Mesero</strong><small>Comedor y domicilio</small>
+          </button>
+          <button class="perfil-acceso administrador" type="button" disabled>
+            <span class="perfil-icono" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 11.6-4"/><circle cx="17.5" cy="17.5" r="3.5"/><path d="M17.5 12.5v2M17.5 20.5v2M12.5 17.5h2M20.5 17.5h2"/></svg>
+            </span><strong>Administrador</strong><small>Próximamente · acceso con contraseña</small>
+          </button>
+        </div>
       </div>
+    </section>
+  {% endif %}
+
+  <main{% if not modo_tableta %} class="oculto"{% endif %}>
+    {% if modo_tableta %}
+      <button id="pantalla-completa" class="control-operacion pantalla-completa" type="button" aria-label="Abrir pantalla completa" title="Pantalla completa">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+      </button>
+    {% endif %}
+    <section id="vista-posiciones" class="vista-posiciones">
       {% if not modo_tableta %}
-        <nav class="canales" aria-label="Canales de venta">
-          <button class="canal activo" data-canal="comedor" type="button"><span>01</span>Comedor</button>
-          <button class="canal" data-canal="domicilio" type="button"><span>02</span>Domicilio</button>
-          <button class="canal" data-canal="sucursales" type="button"><span>03</span>Sucursales</button>
-        </nav>
+        <div class="canales-fila">
+          <nav class="canales" aria-label="Canales de venta">
+            <button class="canal activo" data-canal="comedor" type="button"><span>01</span>Comedor</button>
+            <button class="canal" data-canal="domicilio" type="button"><span>02</span>Domicilio</button>
+            <button class="canal" data-canal="sucursales" type="button"><span>03</span>Sucursales</button>
+          </nav>
+          <button class="boton salir-mesero" data-salir-mesero type="button" aria-label="Salir del modo mesero">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></svg>
+            <span>Salir</span>
+          </button>
+        </div>
       {% endif %}
       <div class="leyenda">
         <span><i class="libre"></i>Libre</span>
@@ -53,12 +78,13 @@
     <section id="vista-ticket" class="vista-ticket oculto">
       <div class="ticket-top">
         <button id="volver" class="boton icono" type="button" aria-label="Volver">←</button>
-        <div>
-          <p class="eyebrow" id="ticket-canal">Comedor</p>
-          <h1><span id="ticket-mesa">Mesa</span> <small>· Ticket <b id="ticket-folio">—</b></small></h1>
-        </div>
-        <span id="ticket-estado" class="estado">Abierto</span>
-        <div class="total-cabecera"><span>Total</span><strong id="ticket-total">$0.00</strong></div>
+        <h1><span id="ticket-mesa">Mesa</span> <small>· Ticket <b id="ticket-folio">—</b></small></h1>
+        {% if not modo_tableta %}
+          <button class="boton salir-mesero" data-salir-mesero type="button" aria-label="Salir del modo mesero">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></svg>
+            <span>Salir</span>
+          </button>
+        {% endif %}
       </div>
 
       <div class="flujo-ticket">
@@ -83,22 +109,33 @@
             <div><p class="eyebrow">Comanda en tiempo real</p><strong id="orden-resumen">0 partidas</strong></div>
             <button id="reimprimir" class="boton enlace oculto" type="button">Reimprimir</button>
           </div>
-          <div id="comanda-preview" class="comanda-preview" aria-live="polite"></div>
-
-          <div class="datos-orden">
-            <label>Entrega aproximada<input id="entrega" type="time"></label>
-            <label class="campo-ancho">Comentario general<textarea id="comentario" rows="2" placeholder="Indicaciones para preparación"></textarea></label>
-            <div id="datos-cliente" class="datos-cliente oculto">
-              <label class="campo-ancho">Cliente<input id="cliente-nombre" autocomplete="name"></label>
-              <label>Teléfono<input id="cliente-telefono" inputmode="tel" autocomplete="tel"></label>
-              <label class="campo-ancho">Domicilio<textarea id="cliente-domicilio" rows="2" autocomplete="street-address"></textarea></label>
-              <label class="campo-ancho">Referencia<textarea id="cliente-referencia" rows="2"></textarea></label>
+          <div id="comanda-preview" class="comanda-preview" aria-live="polite">
+            <div id="comanda-papel-preview"></div>
+            <div class="datos-orden">
+              <label>Entrega aproximada<input id="entrega" type="time"></label>
+              <label class="campo-ancho">Comentario general<textarea id="comentario" rows="2" placeholder="Indicaciones para preparación"></textarea></label>
+            <section id="datos-cliente" class="datos-cliente oculto" aria-label="Cliente de domicilio">
+              <div class="cliente-titulo">
+                <div><p class="eyebrow">Entrega a domicilio</p><strong>Cliente y dirección</strong></div>
+                <button id="nuevo-cliente" class="boton enlace" type="button">+ Nuevo cliente</button>
+              </div>
+              <div id="cliente-buscador" class="cliente-buscador">
+                <label class="campo-ancho">Buscar cliente
+                  <input id="buscar-cliente" type="search" autocomplete="off" placeholder="Nombre, teléfono, domicilio, número o clave">
+                </label>
+              </div>
+              <div id="cliente-seleccionado" class="cliente-seleccionado oculto"></div>
+              <div id="resultados-clientes" class="resultados-clientes" aria-live="polite">
+                <p class="cliente-ayuda">Escribe cualquier dato o revisa los clientes recientes.</p>
+              </div>
+            </section>
             </div>
           </div>
 
           <div class="acciones">
-            <button id="procesar" class="boton primario" type="button">Procesar orden</button>
-            <button id="cobrar" class="boton cobro oculto" type="button">Cobrar e imprimir</button>
+            <button id="procesar" class="boton accion-procesar" type="button">Procesar orden</button>
+            <button id="cancelar-orden" class="boton accion-cancelar" type="button">Cancelar orden</button>
+            <button id="cobrar" class="boton cobro oculto" type="button">Cobrar</button>
           </div>
         </aside>
       </div>
@@ -115,20 +152,50 @@
         <label class="opcion-pago"><input type="radio" name="forma_pago" value="efectivo" checked><span>Efectivo</span></label>
         <label class="opcion-pago"><input type="radio" name="forma_pago" value="tarjeta"><span>Tarjeta</span></label>
       </fieldset>
+      <fieldset class="opciones-impresion">
+        <legend>Ticket de cuenta</legend>
+        <label class="opcion-pago"><input type="radio" name="imprimir_ticket" value="si" checked><span>Sí, imprimir</span></label>
+        <label class="opcion-pago"><input type="radio" name="imprimir_ticket" value="no"><span>No imprimir</span></label>
+      </fieldset>
       <label>Importe recibido<input id="importe-recibido" type="number" min="0" step="0.01" inputmode="decimal"></label>
       <button class="boton cobro" type="submit">Confirmar cobro</button>
     </form>
   </dialog>
 
-  <dialog id="dialogo-impresion">
-    <div class="dialogo-contenido impresion-contenido">
-      <button class="cerrar-dialogo" id="cerrar-impresion" aria-label="Cerrar">×</button>
-      <p class="eyebrow">Salida térmica</p>
-      <h2>Impresión generada</h2>
-      <p id="resumen-impresion" class="resumen-impresion"></p>
-      <div id="previsualizaciones" class="previsualizaciones"></div>
-      <button id="terminar-impresion" class="boton primario" type="button">Listo</button>
-    </div>
+  <dialog id="dialogo-cliente" class="dialogo-cliente">
+    <form id="form-cliente" class="dialogo-contenido cliente-formulario">
+      <button class="cerrar-dialogo" id="cancelar-cliente" type="button" aria-label="Cerrar">×</button>
+      <div>
+        <p class="eyebrow">Directorio de clientes</p>
+        <h2 id="titulo-form-cliente">Nuevo cliente</h2>
+      </div>
+      <input id="cliente-form-id" type="hidden">
+      <label>Nombre del cliente<input id="cliente-form-nombre" autocomplete="name" required></label>
+      <label class="casilla-multiples"><input id="cliente-form-multiples" type="checkbox"><span>Solicitar nombre y celular del contacto en cada pedido</span></label>
+
+      <section class="grupo-formulario">
+        <div class="grupo-formulario-titulo">
+          <div><p class="eyebrow">Contacto</p><strong>Teléfonos</strong></div>
+          <button id="agregar-telefono" class="boton enlace" type="button">+ Agregar teléfono</button>
+        </div>
+        <div id="telefonos-form" class="filas-cliente"></div>
+      </section>
+
+      <section class="grupo-formulario">
+        <div class="grupo-formulario-titulo">
+          <div><p class="eyebrow">Entrega</p><strong>Domicilios</strong></div>
+          <button id="agregar-domicilio" class="boton enlace" type="button">+ Agregar domicilio</button>
+        </div>
+        <div id="domicilios-form" class="filas-cliente"></div>
+      </section>
+
+      <label>Notas internas<textarea id="cliente-form-notas" rows="2" placeholder="Preferencias o información útil para próximos pedidos"></textarea></label>
+      <div id="aviso-duplicados" class="aviso-duplicados oculto"></div>
+      <div class="acciones-formulario">
+        <button id="descartar-cliente" class="boton secundario" type="button">Cancelar</button>
+        <button class="boton cobro" id="guardar-cliente" type="submit">Guardar y seleccionar</button>
+      </div>
+    </form>
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

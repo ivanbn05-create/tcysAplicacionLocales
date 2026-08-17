@@ -5,6 +5,7 @@ from django.core.management.base import BaseCommand, CommandError
 from openpyxl import load_workbook
 
 from catalogo.models import Categoria, Producto
+from catalogo.configuracion_menu import configuracion_producto
 from personas.models import Sucursal
 
 
@@ -46,12 +47,14 @@ class Command(BaseCommand):
             while Producto.objects.filter(sucursal=sucursal, codigo=codigo_final).exists():
                 sufijo += 1
                 codigo_final = f"{codigo_base[:25]}-{sufijo}"
+            configuracion = configuracion_producto(codigo_final, nombre, codigo_final[:24])
             Producto.objects.create(
                 sucursal=sucursal,
                 categoria=categoria_revision,
                 codigo=codigo_final,
                 nombre=str(nombre).strip(),
-                nombre_corto=codigo_final[:24],
+                orden=indice,
+                **configuracion,
                 destino_impresion="barra" if str(destino).strip().lower() == "barra" else "cocina",
                 activo=False,
                 origen="legado_incompleto",

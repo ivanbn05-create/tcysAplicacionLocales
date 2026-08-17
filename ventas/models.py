@@ -7,6 +7,8 @@ from django.db import models
 from catalogo.models import Producto
 from personas.models import Sucursal, UsuarioPOS
 
+from .normalizacion import normalizar_texto, normalizar_telefono
+
 
 class Mesa(models.Model):
     class Canal(models.TextChoices):
@@ -33,16 +35,120 @@ class Mesa(models.Model):
 class Cliente(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sucursal = models.ForeignKey(Sucursal, on_delete=models.CASCADE, related_name="clientes")
+    clave_corta = models.CharField(max_length=6)
     nombre = models.CharField(max_length=180)
-    telefono = models.CharField(max_length=30, blank=True)
-    domicilio = models.TextField(blank=True)
-    colonia = models.CharField(max_length=120, blank=True)
-    referencia = models.TextField(blank=True)
+    nombre_normalizado = models.CharField(max_length=180, blank=True, db_index=True)
+    notas = models.TextField(blank=True)
+    comentarios_multiples = models.BooleanField(
+        default=False,
+        help_text="Solicita el nombre y teléfono del contacto en cada pedido.",
+    )
+    activo = models.BooleanField(default=True)
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["nombre", "clave_corta"]
+        constraints = [
+            models.UniqueConstraint(fields=["sucursal", "clave_corta"], name="cliente_clave_sucursal")
+        ]
+
+    def save(self, *args, **kwargs):
+        self.nombre_normalizado = normalizar_texto(self.nombre)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.nombre} · {self.clave_corta}"
+
+
+class ConsecutivoCliente(models.Model):
+    sucursal = models.OneToOneField(
+        Sucursal, primary_key=True, on_delete=models.CASCADE, related_name="consecutivo_clientes"
+    )
+    ultimo = models.PositiveIntegerField(default=100000)
+
+    def __str__(self):
+        return f"{self.sucursal.nombre} · {self.ultimo}"
+
+
+class TelefonoCliente(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(Sucursal, on_delete=models.CASCADE, related_name="telefonos_cliente")
+    cliente = models.ForeignKey(Cliente, on_delete=models.CASCADE, related_name="telefonos")
+    numero = models.CharField(max_length=30)
+    normalizado = models.CharField(max_length=15, db_index=True)
+    etiqueta = models.CharField(max_length=30, default="Principal")
+    principal = models.BooleanField(default=False)
     activo = models.BooleanField(default=True)
     creado_en = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        ordering = ["-principal", "creado_en"]
+        constraints = [
+            models.UniqueConstraint(fields=["cliente", "normalizado"], name="cliente_telefono_unico")
+        ]
+        indexes = [models.Index(fields=["sucursal", "normalizado"], name="ventas_tel_suc_norm_idx")]
+
+    def save(self, *args, **kwargs):
+        self.normalizado = normalizar_telefono(self.numero)
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return self.nombre
+        return f"{self.cliente.nombre} · {self.numero}"
+
+
+class DomicilioCliente(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(Sucursal, on_delete=models.CASCADE, related_name="domicilios_cliente")
+    cliente = models.ForeignKey(Cliente, on_delete=models.CASCADE, related_name="domicilios")
+    etiqueta = models.CharField(max_length=30, default="Principal")
+    calle = models.CharField(max_length=180)
+    numero_exterior = models.CharField(max_length=30, blank=True)
+    numero_interior = models.CharField(max_length=30, blank=True)
+    colonia = models.CharField(max_length=120, blank=True)
+    codigo_postal = models.CharField(max_length=10, blank=True)
+    municipio = models.CharField(max_length=120, blank=True)
+    referencia = models.TextField(blank=True)
+    normalizado = models.TextField(blank=True)
+    principal = models.BooleanField(default=False)
+    activo = models.BooleanField(default=True)
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-principal", "creado_en"]
+        indexes = [models.Index(fields=["sucursal", "numero_exterior"], name="ventas_dom_suc_num_idx")]
+
+    @property
+    def texto_completo(self):
+        numero = f"#{self.numero_exterior}" if self.numero_exterior else ""
+        if self.numero_interior:
+            interior = self.numero_interior.strip()
+            if interior.upper().startswith(("INT ", "INTERIOR ", "DEP ", "DEPTO ", "DEPARTAMENTO ", "CASA ", "LOCAL ")):
+                numero = f"{numero} {interior}".strip()
+            else:
+                numero = f"{numero} Int. {interior}".strip()
+        principal = f"{self.calle} {numero}".strip()
+        ubicacion = ", ".join(parte for parte in [self.colonia, self.municipio, self.codigo_postal] if parte)
+        return ", ".join(parte for parte in [principal, ubicacion] if parte)
+
+    def save(self, *args, **kwargs):
+        self.normalizado = normalizar_texto(
+            " ".join(
+                [
+                    self.calle,
+                    self.numero_exterior,
+                    self.numero_interior,
+                    self.colonia,
+                    self.codigo_postal,
+                    self.municipio,
+                    self.referencia,
+                ]
+            )
+        )
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.cliente.nombre} · {self.texto_completo}"
 
 
 class Ticket(models.Model):
@@ -61,6 +167,18 @@ class Ticket(models.Model):
     sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="tickets")
     mesa = models.ForeignKey(Mesa, on_delete=models.PROTECT, related_name="tickets")
     cliente = models.ForeignKey(Cliente, null=True, blank=True, on_delete=models.PROTECT, related_name="tickets")
+    telefono_cliente = models.ForeignKey(
+        TelefonoCliente, null=True, blank=True, on_delete=models.SET_NULL, related_name="tickets"
+    )
+    domicilio_cliente = models.ForeignKey(
+        DomicilioCliente, null=True, blank=True, on_delete=models.SET_NULL, related_name="tickets"
+    )
+    cliente_nombre = models.CharField(max_length=180, blank=True)
+    cliente_telefono = models.CharField(max_length=30, blank=True)
+    cliente_domicilio = models.TextField(blank=True)
+    cliente_referencia = models.TextField(blank=True)
+    contacto_pedido_nombre = models.CharField(max_length=180, blank=True)
+    contacto_pedido_telefono = models.CharField(max_length=30, blank=True)
     atendio = models.ForeignKey(UsuarioPOS, null=True, blank=True, on_delete=models.PROTECT, related_name="tickets")
     folio = models.PositiveIntegerField()
     canal = models.CharField(max_length=15, choices=Mesa.Canal.choices)
@@ -73,6 +191,7 @@ class Ticket(models.Model):
     actualizado_en = models.DateTimeField(auto_now=True)
     procesado_en = models.DateTimeField(null=True, blank=True)
     pagado_en = models.DateTimeField(null=True, blank=True)
+    cancelado_en = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-creado_en"]
@@ -96,6 +215,7 @@ class Partida(models.Model):
     precio_unitario = models.DecimalField(max_digits=10, decimal_places=2)
     nombre_producto = models.CharField(max_length=180)
     nombre_corto = models.CharField(max_length=24)
+    termino = models.CharField(max_length=8, choices=Producto.Termino.choices, blank=True)
     comentario = models.CharField(max_length=220, blank=True)
     procesada = models.BooleanField(default=False)
     creada_en = models.DateTimeField(auto_now_add=True)

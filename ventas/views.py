@@ -3,6 +3,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
@@ -12,15 +13,25 @@ from impresion.models import TrabajoImpresion
 from impresion.services import encolar_impresiones, estado_impresora
 from personas.models import Sucursal
 
-from .models import Cliente, Mesa, Partida, Ticket
+from .clientes import (
+    ErrorCliente,
+    buscar_clientes,
+    cliente_payload,
+    duplicados_por_nombre,
+    guardar_cliente,
+)
+from .models import Cliente, DomicilioCliente, Mesa, Partida, TelefonoCliente, Ticket
+from .normalizacion import normalizar_telefono
 from .services import (
     ErrorVenta,
     abrir_ticket,
     asegurar_modificador,
+    ajustar_grupo_partidas,
     actualizar_partida,
     agregar_partida,
     alternar_modificador,
     cobrar_ticket,
+    cancelar_ticket,
     procesar_ticket,
     registrar_evento,
 )
@@ -42,7 +53,9 @@ def _json(request):
 
 def _ticket(ticket_id):
     try:
-        return Ticket.objects.select_related("mesa", "cliente", "atendio", "sucursal").get(pk=ticket_id, sucursal=_sucursal())
+        return Ticket.objects.select_related(
+            "mesa", "cliente", "telefono_cliente", "domicilio_cliente", "atendio", "sucursal"
+        ).get(pk=ticket_id, sucursal=_sucursal())
     except Ticket.DoesNotExist as exc:
         raise Http404("Ticket no encontrado") from exc
 
@@ -80,12 +93,27 @@ def _ticket_payload(ticket):
                 "importe": str(partida.importe),
                 "categoria": partida.producto.categoria.nombre,
                 "destino": partida.producto.destino_impresion,
+                "termino": partida.termino,
             }
         )
     modificadores = [
         {"id": str(mod.id), "comensal": mod.comensal, "codigo": mod.codigo, "nombre": mod.nombre}
         for mod in ticket.modificadores.all()
     ]
+    cliente = {
+        "id": str(ticket.cliente_id) if ticket.cliente_id else "",
+        "clave_corta": ticket.cliente.clave_corta if ticket.cliente_id else "",
+        "nombre": ticket.cliente_nombre or (ticket.cliente.nombre if ticket.cliente_id else ""),
+        "telefono": ticket.cliente_telefono,
+        "telefono_id": str(ticket.telefono_cliente_id) if ticket.telefono_cliente_id else "",
+        "domicilio": ticket.cliente_domicilio,
+        "domicilio_id": str(ticket.domicilio_cliente_id) if ticket.domicilio_cliente_id else "",
+        "referencia": ticket.cliente_referencia,
+        "notas": ticket.cliente.notas if ticket.cliente_id else "",
+        "comentarios_multiples": ticket.cliente.comentarios_multiples if ticket.cliente_id else False,
+        "contacto_pedido_nombre": ticket.contacto_pedido_nombre,
+        "contacto_pedido_telefono": ticket.contacto_pedido_telefono,
+    }
     return {
         "id": str(ticket.id),
         "folio": ticket.folio,
@@ -97,12 +125,7 @@ def _ticket_payload(ticket):
         "creado_en": ticket.creado_en.isoformat(),
         "comentario_general": ticket.comentario_general,
         "entrega_aproximada": ticket.entrega_aproximada.strftime("%H:%M") if ticket.entrega_aproximada else "",
-        "cliente": {
-            "nombre": ticket.cliente.nombre if ticket.cliente else "",
-            "telefono": ticket.cliente.telefono if ticket.cliente else "",
-            "domicilio": ticket.cliente.domicilio if ticket.cliente else "",
-            "referencia": ticket.cliente.referencia if ticket.cliente else "",
-        },
+        "cliente": cliente,
         "partidas": partidas,
         "modificadores": modificadores,
     }
@@ -123,6 +146,9 @@ def _inicio(request, modo_tableta=False):
                     "categoria": producto.categoria.nombre,
                     "precio": str(precio.importe),
                     "destino": producto.destino_impresion,
+                    "permite_termino": producto.permite_termino,
+                    "termino_predeterminado": producto.termino_predeterminado,
+                    "abreviaturas_termino": producto.abreviaturas_termino,
                 }
             )
     posiciones = [
@@ -193,21 +219,115 @@ def api_ticket(request, ticket_id):
             if ticket.estado != Ticket.Estado.ABIERTO:
                 raise ErrorVenta("La orden ya fue procesada.")
             ticket.comentario_general = str(datos.get("comentario_general", ticket.comentario_general)).strip()
+            ticket.contacto_pedido_nombre = str(
+                datos.get("contacto_pedido_nombre", ticket.contacto_pedido_nombre)
+            ).strip()[:180]
+            ticket.contacto_pedido_telefono = str(
+                datos.get("contacto_pedido_telefono", ticket.contacto_pedido_telefono)
+            ).strip()[:30]
+            if ticket.contacto_pedido_telefono and len(normalizar_telefono(ticket.contacto_pedido_telefono)) < 7:
+                raise ErrorVenta("El teléfono del contacto debe contener al menos 7 dígitos.")
             entrega = datos.get("entrega_aproximada")
             ticket.entrega_aproximada = datetime.strptime(entrega, "%H:%M").time() if entrega else None
-            if ticket.canal == Mesa.Canal.DOMICILIO and datos.get("cliente_nombre"):
-                if not ticket.cliente:
-                    ticket.cliente = Cliente.objects.create(sucursal=ticket.sucursal, nombre=datos["cliente_nombre"].strip())
-                ticket.cliente.nombre = datos["cliente_nombre"].strip()
-                ticket.cliente.telefono = str(datos.get("cliente_telefono", "")).strip()
-                ticket.cliente.domicilio = str(datos.get("cliente_domicilio", "")).strip()
-                ticket.cliente.referencia = str(datos.get("cliente_referencia", "")).strip()
-                ticket.cliente.save()
             ticket.save()
             registrar_evento(ticket, "ticket.datos_actualizados", {"canal": ticket.canal})
         except (ErrorVenta, ValueError) as exc:
             return JsonResponse({"error": str(exc)}, status=400)
     return JsonResponse({"ticket": _ticket_payload(ticket)})
+
+
+@require_GET
+def api_buscar_clientes(request):
+    try:
+        limite = int(request.GET.get("limite", 10))
+        return JsonResponse({"resultados": buscar_clientes(_sucursal(), request.GET.get("q", ""), limite)})
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "El límite de resultados no es válido."}, status=400)
+
+
+@require_POST
+def api_clientes(request):
+    try:
+        datos = _json(request)
+        duplicados = duplicados_por_nombre(_sucursal(), datos.get("nombre", ""))
+        if duplicados and not datos.get("confirmar_duplicado"):
+            return JsonResponse(
+                {"error": "Ya existe un cliente con ese nombre.", "duplicados": duplicados}, status=409
+            )
+        cliente = guardar_cliente(_sucursal(), datos)
+        return JsonResponse({"cliente": cliente_payload(cliente)}, status=201)
+    except ErrorCliente as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+
+@require_http_methods(["GET", "PATCH"])
+def api_cliente(request, cliente_id):
+    try:
+        cliente = Cliente.objects.get(pk=cliente_id, sucursal=_sucursal(), activo=True)
+        if request.method == "PATCH":
+            datos = _json(request)
+            duplicados = duplicados_por_nombre(_sucursal(), datos.get("nombre", ""), excluir=cliente.id)
+            if duplicados and not datos.get("confirmar_duplicado"):
+                return JsonResponse(
+                    {"error": "Ya existe otro cliente con ese nombre.", "duplicados": duplicados}, status=409
+                )
+            cliente = guardar_cliente(_sucursal(), datos, cliente=cliente)
+        return JsonResponse({"cliente": cliente_payload(cliente)})
+    except Cliente.DoesNotExist:
+        return JsonResponse({"error": "Cliente no encontrado."}, status=404)
+    except ErrorCliente as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+
+@require_http_methods(["POST", "DELETE"])
+def api_ticket_cliente(request, ticket_id):
+    try:
+        ticket = _ticket(ticket_id)
+        if ticket.estado != Ticket.Estado.ABIERTO:
+            raise ErrorVenta("La orden ya fue procesada.")
+        if ticket.canal != Mesa.Canal.DOMICILIO:
+            raise ErrorVenta("Sólo los pedidos a domicilio admiten clientes.")
+        if request.method == "DELETE":
+            ticket.cliente = None
+            ticket.telefono_cliente = None
+            ticket.domicilio_cliente = None
+            ticket.cliente_nombre = ""
+            ticket.cliente_telefono = ""
+            ticket.cliente_domicilio = ""
+            ticket.cliente_referencia = ""
+            ticket.contacto_pedido_nombre = ""
+            ticket.contacto_pedido_telefono = ""
+        else:
+            datos = _json(request)
+            cliente = Cliente.objects.get(pk=datos.get("cliente_id"), sucursal=ticket.sucursal, activo=True)
+            telefono = None
+            if datos.get("telefono_id"):
+                telefono = TelefonoCliente.objects.get(
+                    pk=datos.get("telefono_id"), cliente=cliente, sucursal=ticket.sucursal, activo=True
+                )
+            if not telefono and not cliente.comentarios_multiples:
+                raise ErrorVenta("Selecciona un teléfono para el cliente.")
+            domicilio = DomicilioCliente.objects.get(
+                pk=datos.get("domicilio_id"), cliente=cliente, sucursal=ticket.sucursal, activo=True
+            )
+            ticket.cliente = cliente
+            ticket.telefono_cliente = telefono
+            ticket.domicilio_cliente = domicilio
+            ticket.cliente_nombre = cliente.nombre
+            ticket.cliente_telefono = telefono.numero if telefono else ""
+            ticket.cliente_domicilio = domicilio.texto_completo
+            ticket.cliente_referencia = domicilio.referencia
+        ticket.save()
+        registrar_evento(
+            ticket,
+            "ticket.cliente_asignado",
+            {"cliente_id": str(ticket.cliente_id) if ticket.cliente_id else None},
+        )
+        return JsonResponse({"ticket": _ticket_payload(ticket)})
+    except (Cliente.DoesNotExist, TelefonoCliente.DoesNotExist, DomicilioCliente.DoesNotExist):
+        return JsonResponse({"error": "El cliente, teléfono o domicilio seleccionado ya no está disponible."}, status=400)
+    except ErrorVenta as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
 
 
 @require_POST
@@ -220,7 +340,7 @@ def api_agregar_partida(request, ticket_id):
         cantidad = Decimal(str(datos.get("cantidad", "1")))
         if not 1 <= comensal <= 24 or cantidad <= 0:
             raise ErrorVenta("Comensal o cantidad fuera de rango.")
-        agregar_partida(ticket, producto, comensal, cantidad)
+        agregar_partida(ticket, producto, comensal, cantidad, datos.get("termino"))
         ticket.refresh_from_db()
         return JsonResponse({"ticket": _ticket_payload(ticket)})
     except (Producto.DoesNotExist, ErrorVenta, InvalidOperation, ValueError) as exc:
@@ -232,12 +352,29 @@ def api_partida(request, partida_id):
     try:
         partida = Partida.objects.select_related("ticket").get(pk=partida_id, sucursal=_sucursal())
         ticket = partida.ticket
-        cantidad = Decimal("0") if request.method == "DELETE" else Decimal(str(_json(request).get("cantidad", "1")))
-        actualizar_partida(partida, cantidad)
+        datos = {} if request.method == "DELETE" else _json(request)
+        cantidad = Decimal("0") if request.method == "DELETE" else Decimal(str(datos.get("cantidad", partida.cantidad)))
+        termino = datos.get("termino") if "termino" in datos else None
+        actualizar_partida(partida, cantidad, termino)
         ticket.refresh_from_db()
         return JsonResponse({"ticket": _ticket_payload(ticket)})
     except (Partida.DoesNotExist, ErrorVenta, InvalidOperation) as exc:
         return JsonResponse({"error": str(exc) or "Partida no encontrada."}, status=400)
+
+
+@require_POST
+def api_ajustar_partidas(request, ticket_id):
+    try:
+        ticket = _ticket(ticket_id)
+        datos = _json(request)
+        partida_ids = [str(valor) for valor in datos.get("partida_ids", [])]
+        eliminar = bool(datos.get("eliminar", False))
+        cantidad = Decimal(str(datos.get("cantidad", "1")))
+        ajustar_grupo_partidas(ticket, partida_ids, cantidad, datos.get("termino"), eliminar)
+        ticket.refresh_from_db()
+        return JsonResponse({"ticket": _ticket_payload(ticket)})
+    except (ErrorVenta, InvalidOperation, ValidationError, ValueError) as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
 
 
 @require_POST
@@ -267,7 +404,9 @@ def api_modificador(request, ticket_id):
 def api_procesar(request, ticket_id):
     try:
         ticket = procesar_ticket(_ticket(ticket_id))
-        trabajos = encolar_impresiones(ticket, TrabajoImpresion.Formato.COMANDA)
+        trabajos = list(encolar_impresiones(ticket, TrabajoImpresion.Formato.COMANDA))
+        if ticket.canal == Mesa.Canal.DOMICILIO:
+            trabajos.extend(encolar_impresiones(ticket, TrabajoImpresion.Formato.DOMICILIO))
         return JsonResponse({"ticket": _ticket_payload(ticket), "impresiones": _trabajos_payload(trabajos)})
     except ErrorVenta as exc:
         return JsonResponse({"error": str(exc)}, status=400)
@@ -282,9 +421,22 @@ def api_cobrar(request, ticket_id):
             raise ErrorVenta("Forma de pago inválida.")
         recibido = datos.get("importe_recibido")
         ticket = cobrar_ticket(_ticket(ticket_id), forma, Decimal(str(recibido)) if recibido not in (None, "") else None)
-        trabajos = encolar_impresiones(ticket, TrabajoImpresion.Formato.CUENTA)
+        trabajos = (
+            encolar_impresiones(ticket, TrabajoImpresion.Formato.CUENTA)
+            if bool(datos.get("imprimir_ticket", True))
+            else []
+        )
         return JsonResponse({"ticket": _ticket_payload(ticket), "impresiones": _trabajos_payload(trabajos)})
     except (ErrorVenta, InvalidOperation) as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+
+@require_POST
+def api_cancelar(request, ticket_id):
+    try:
+        ticket = cancelar_ticket(_ticket(ticket_id))
+        return JsonResponse({"ticket": _ticket_payload(ticket)})
+    except ErrorVenta as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
 
@@ -302,12 +454,17 @@ def api_imprimir(request, ticket_id):
 
 
 def manifest(request):
+    modo_tableta = request.GET.get("modo") == "tableta"
+    inicio = "/tabletas/" if modo_tableta else "/"
     return JsonResponse(
         {
-            "name": "Los Tocayos POS",
-            "short_name": "Tocayos POS",
-            "start_url": "/",
+            "name": "Los Tocayos Comedor" if modo_tableta else "Los Tocayos POS",
+            "short_name": "Tocayos Comedor" if modo_tableta else "Tocayos POS",
+            "id": inicio,
+            "start_url": inicio,
+            "scope": "/",
             "display": "standalone",
+            "display_override": ["fullscreen", "standalone"],
             "background_color": "#ffed00",
             "theme_color": "#ffed00",
             "icons": [
@@ -319,8 +476,9 @@ def manifest(request):
 
 
 def service_worker(request):
-    codigo = """const CACHE='tocayos-pos-v2';
+    codigo = """const CACHE='tocayos-pos-v6';
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(['/static/ventas/app.css','/static/ventas/app.js','/static/ventas/brand/logoactual.jpeg','/static/ventas/fonts/Montserrat-Medium.ttf','/static/ventas/fonts/Montserrat-SemiBold.ttf']))));
+self.addEventListener('activate', e => e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))));
 self.addEventListener('fetch', e => { if (e.request.method === 'GET') e.respondWith(fetch(e.request).catch(() => caches.match(e.request))); });
 """
     return HttpResponse(codigo, content_type="application/javascript")

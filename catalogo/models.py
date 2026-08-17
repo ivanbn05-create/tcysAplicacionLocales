@@ -22,6 +22,11 @@ class Categoria(models.Model):
 
 
 class Producto(models.Model):
+    class Termino(models.TextChoices):
+        DORADO = "dorado", "Dorado"
+        MEDIO = "medio", "Medio"
+        BLANDO = "blando", "Blando"
+
     class Destino(models.TextChoices):
         COCINA = "cocina", "Cocina"
         BARRA = "barra", "Barra"
@@ -33,6 +38,10 @@ class Producto(models.Model):
     codigo = models.CharField(max_length=30)
     nombre = models.CharField(max_length=180)
     nombre_corto = models.CharField(max_length=24)
+    orden = models.PositiveSmallIntegerField(default=0)
+    permite_termino = models.BooleanField(default=False)
+    termino_predeterminado = models.CharField(max_length=8, choices=Termino.choices, blank=True)
+    abreviaturas_termino = models.JSONField(default=dict, blank=True)
     destino_impresion = models.CharField(max_length=10, choices=Destino.choices, default=Destino.COCINA)
     activo = models.BooleanField(default=True)
     origen = models.CharField(max_length=30, default="menu_2026")
@@ -40,7 +49,7 @@ class Producto(models.Model):
     actualizado_en = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["categoria__orden", "nombre"]
+        ordering = ["categoria__orden", "orden", "nombre"]
         constraints = [models.UniqueConstraint(fields=["sucursal", "codigo"], name="producto_codigo_sucursal")]
 
     def __str__(self):

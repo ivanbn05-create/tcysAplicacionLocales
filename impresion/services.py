@@ -5,16 +5,16 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import TrabajoImpresion
-from .render import enviar_tcp, guardar_png, render_comanda, render_cuenta
+from .render import enviar_tcp, guardar_png, render_comanda, render_cuenta, render_domicilio
 
 
 def encolar_impresiones(ticket, formato):
     destinos = []
-    if formato == TrabajoImpresion.Formato.CUENTA:
+    if formato in {TrabajoImpresion.Formato.CUENTA, TrabajoImpresion.Formato.DOMICILIO}:
         destinos = [TrabajoImpresion.Destino.CAJA]
     else:
         productos = list(ticket.partidas.select_related("producto__categoria").all())
-        if ticket.canal == "comedor" and productos:
+        if ticket.canal in {"comedor", "domicilio"} and productos:
             destinos.append(TrabajoImpresion.Destino.COCINA)
         else:
             if any(p.producto.destino_impresion == "cocina" for p in productos):
@@ -86,7 +86,12 @@ def procesar_trabajo(trabajo):
             trabajo.intentos = 1
         trabajo.save(update_fields=["estado", "intentos"])
         ticket = trabajo.ticket
-        imagen = render_cuenta(ticket) if trabajo.formato == "cuenta" else render_comanda(ticket, trabajo.destino)
+        if trabajo.formato == TrabajoImpresion.Formato.CUENTA:
+            imagen = render_cuenta(ticket)
+        elif trabajo.formato == TrabajoImpresion.Formato.DOMICILIO:
+            imagen = render_domicilio(ticket)
+        else:
+            imagen = render_comanda(ticket, trabajo.destino)
         relativo, _ = guardar_png(imagen, ticket, trabajo.formato, trabajo.destino)
         trabajo.archivo = relativo
         trabajo.save(update_fields=["archivo"])

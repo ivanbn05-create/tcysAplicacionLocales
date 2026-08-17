@@ -10,6 +10,7 @@ class TrabajoImpresion(models.Model):
     class Formato(models.TextChoices):
         COMANDA = "comanda", "Comanda"
         CUENTA = "cuenta", "Cuenta"
+        DOMICILIO = "domicilio", "Domicilio"
 
     class Destino(models.TextChoices):
         COCINA = "cocina", "Cocina"

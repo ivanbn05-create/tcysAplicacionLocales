@@ -67,6 +67,35 @@ def _cantidad_matriz(valor):
     return format(valor.normalize(), "f")
 
 
+def _segmentos_bebidas(bebidas_agrupadas, fuente_normal, fuente_negrita):
+    grupos = []
+    for indice, (nombre_corto, cantidad_bebida) in enumerate(bebidas_agrupadas.items()):
+        segmentos = []
+        if indice:
+            segmentos.append(("* ", fuente_normal))
+        if cantidad_bebida >= 2:
+            segmentos.append((f"( {_cantidad_matriz(cantidad_bebida)} ) ", fuente_negrita))
+        segmentos.append((nombre_corto.upper(), fuente_normal))
+        if indice < len(bebidas_agrupadas) - 1:
+            segmentos.append((" ", fuente_normal))
+        grupos.append(segmentos)
+    return grupos
+
+
+def _dibujar_segmentos(draw, y, grupos, ancho, alto_linea=34):
+    x = MARGEN
+    limite = MARGEN + ancho
+    for segmentos in grupos:
+        ancho_grupo = sum(_ancho(draw, texto, font) for texto, font in segmentos)
+        if x > MARGEN and x + ancho_grupo > limite:
+            y += alto_linea
+            x = MARGEN
+        for texto, font in segmentos:
+            draw.text((x, y), texto, font=font, fill=0)
+            x += _ancho(draw, texto, font)
+    return y + alto_linea
+
+
 def _logo_actual():
     ruta = Path(settings.BASE_DIR) / "ventas" / "static" / "ventas" / "brand" / "logoactual.jpeg"
     if not ruta.is_file():
@@ -90,7 +119,7 @@ def _partidas_destino(ticket, destino):
             p
             for p in partidas
             if p.producto.categoria.nombre.lower() not in {"extras", "bebidas"}
-            and (ticket.canal == "comedor" or p.producto.destino_impresion == "cocina")
+            and (ticket.canal in {"comedor", "domicilio"} or p.producto.destino_impresion == "cocina")
         ]
     if destino == "barra":
         return [p for p in partidas if p.producto.destino_impresion == "barra"]
@@ -101,7 +130,7 @@ def render_comanda(ticket, destino):
     partidas = _partidas_destino(ticket, destino)
     bebidas = (
         list(ticket.partidas.select_related("producto__categoria").filter(producto__categoria__nombre__iexact="Bebidas"))
-        if destino == "cocina" and ticket.canal == "comedor"
+        if destino == "cocina" and ticket.canal in {"comedor", "domicilio"}
         else []
     )
     modificadores = list(ticket.modificadores.all())
@@ -111,7 +140,16 @@ def render_comanda(ticket, destino):
     bebidas_agrupadas = defaultdict(Decimal)
     for bebida in bebidas:
         bebidas_agrupadas[bebida.nombre_corto] += bebida.cantidad
-    alto = 475 + bloques * (150 + filas * 48) + len(bebidas_agrupadas) * 42 + (150 if ticket.comentario_general else 80)
+    contacto_pedido = " ".join(
+        parte for parte in [ticket.contacto_pedido_nombre, ticket.contacto_pedido_telefono] if parte
+    )
+    alto = (
+        475
+        + bloques * (150 + filas * 48)
+        + len(bebidas_agrupadas) * 42
+        + (90 if contacto_pedido else 0)
+        + (150 if ticket.comentario_general else 80)
+    )
     imagen = Image.new("L", (ANCHO, max(alto, 780)), 255)
     draw = ImageDraw.Draw(imagen)
     f_titulo = fuente(30, cursiva=True)
@@ -193,13 +231,16 @@ def render_comanda(ticket, destino):
         y += 14
         _centrado(draw, y, "BEBIDAS", f_tabla_bold)
         y += 38
-        for nombre_corto, cantidad_bebida in bebidas_agrupadas.items():
-            texto_cantidad = f"( {_cantidad_matriz(cantidad_bebida)} )"
-            draw.text((MARGEN, y), texto_cantidad, font=f_tabla_bold, fill=0)
-            x_nombre = MARGEN + _ancho(draw, texto_cantidad, f_tabla_bold) + 12
-            draw.text((x_nombre, y), nombre_corto.upper(), font=f_tabla, fill=0)
-            y += 38
+        segmentos = _segmentos_bebidas(bebidas_agrupadas, f_tabla, f_tabla_bold)
+        y = _dibujar_segmentos(draw, y, segmentos, ANCHO - MARGEN * 2)
         y += 10
+
+    if contacto_pedido:
+        draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
+        y += 14
+        for linea in _ajustar(draw, f"CONTACTO: {contacto_pedido}".upper(), f_bold, ANCHO - MARGEN * 2):
+            _centrado(draw, y, linea, f_bold)
+            y += 36
 
     if ticket.comentario_general:
         draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
@@ -207,7 +248,111 @@ def render_comanda(ticket, destino):
         for linea in _ajustar(draw, ticket.comentario_general.upper(), f_bold, ANCHO - MARGEN * 2):
             _centrado(draw, y, linea, f_bold)
             y += 36
-    return imagen.crop((0, 0, ANCHO, min(max(y + 35, 680), imagen.height))).convert("1")
+    return imagen.crop((0, 0, ANCHO, min(y + 28, imagen.height))).convert("1")
+
+
+def render_domicilio(ticket):
+    """Ticket para el repartidor con cliente, entrega, conceptos e importe a cobrar."""
+    partidas = list(ticket.partidas.select_related("producto").all())
+    imagen = Image.new("L", (ANCHO, max(3000, 1100 + len(partidas) * 115)), 255)
+    draw = ImageDraw.Draw(imagen)
+    f_logo = fuente(54, negrita=True)
+    f_titulo = fuente(29, negrita=True)
+    f_normal = fuente(23)
+    f_bold = fuente(26, negrita=True)
+    f_total = fuente(38, negrita=True)
+    f_cant = fuente(23, cursiva=True)
+
+    def lineas_centradas(texto, font, separacion=34):
+        nonlocal y
+        for linea in _ajustar(draw, texto, font, ANCHO - MARGEN * 2):
+            _centrado(draw, y, linea, font)
+            y += separacion
+
+    y = 0
+    logo = _logo_actual()
+    if logo:
+        imagen.paste(logo, ((ANCHO - logo.width) // 2, y))
+        y += logo.height + 18
+    else:
+        _centrado(draw, y, "LOS TOCAYOS", f_logo)
+        y += 66
+        _centrado(draw, y, "TACOS DE BARBACOA", f_titulo)
+        y += 52
+    version = Image.new("L", (110, 24), 255)
+    ImageDraw.Draw(version).text((0, 0), "EBF3.2.0", font=fuente(18, negrita=True), fill=0)
+    version = version.rotate(90, expand=True)
+    imagen.paste(version, (2, max(35, y - 105)))
+    for linea in ["BAVJ051126EI9", "Tel: 3631-6834 / 1542-1635"]:
+        _centrado(draw, y, linea, f_normal)
+        y += 30
+
+    y += 14
+    draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
+    y += 16
+    _centrado(draw, y, "VTA. DOMICILIO", f_total)
+    y += 52
+    lineas_centradas((ticket.cliente_nombre or "CLIENTE").upper(), f_bold, 36)
+    lineas_centradas(f"DOM: {ticket.cliente_domicilio}".upper(), f_bold, 34)
+    if ticket.cliente_telefono:
+        lineas_centradas(f"TEL: {ticket.cliente_telefono}", f_normal, 32)
+    contacto = " ".join(
+        parte for parte in [ticket.contacto_pedido_nombre, ticket.contacto_pedido_telefono] if parte
+    )
+    if contacto:
+        lineas_centradas(f"CONTACTO: {contacto}".upper(), f_normal, 32)
+    if ticket.cliente_referencia:
+        lineas_centradas(f"REFERENCIA: {ticket.cliente_referencia}".upper(), f_normal, 32)
+    entrega = ticket.entrega_aproximada.strftime("%I:%M %p").lower() if ticket.entrega_aproximada else "SIN HORA"
+    lineas_centradas(f"ENTREGA APROX: {entrega}", f_normal, 34)
+
+    y += 8
+    draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
+    y += 18
+    _centrado(draw, y, f"COBRAR: ${ticket.total:,.2f}", f_total)
+    y += 58
+    draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
+    y += 16
+    local = timezone.localtime(ticket.creado_en)
+    draw.text((MARGEN, y), f"Ticket: {ticket.folio}", font=f_bold, fill=0)
+    _derecha(draw, y, local.strftime("%d/%m/%Y %I:%M %p").lower(), f_bold)
+    y += 38
+    draw.text((MARGEN, y), ticket.mesa.nombre, font=f_bold, fill=0)
+    _derecha(draw, y, f"Le atendió: {ticket.atendio.nombre if ticket.atendio else ''}", f_normal)
+    y += 62
+    draw.text((MARGEN, y), "Concepto", font=f_titulo, fill=0)
+    draw.text((365, y), "Cant", font=f_titulo, fill=0)
+    _derecha(draw, y, "Importe", f_titulo)
+    y += 38
+    draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
+    y += 18
+
+    mods_por_persona = defaultdict(list)
+    for modificador in ticket.modificadores.all():
+        mods_por_persona[modificador.comensal].append(modificador.nombre.upper())
+    for partida in partidas:
+        lineas = _ajustar(draw, partida.nombre_producto.upper(), f_bold, 325)
+        draw.text((MARGEN, y), lineas[0], font=f_bold, fill=0)
+        draw.text((372, y), _cantidad_matriz(partida.cantidad), font=f_cant, fill=0)
+        _derecha(draw, y, f"${partida.precio_unitario:,.2f}", f_normal)
+        y += 34
+        extras = lineas[1:] + ([" - ".join(mods_por_persona[partida.comensal])] if mods_por_persona[partida.comensal] else [])
+        if extras:
+            draw.text((MARGEN, y), " ".join(extras)[:38], font=f_bold, fill=0)
+        _derecha(draw, y, f"${partida.importe:,.2f}", f_bold)
+        y += 52
+
+    draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
+    y += 18
+    draw.text((210, y), "Total:", font=f_total, fill=0)
+    _derecha(draw, y, f"${ticket.total:,.2f}", f_total)
+    y += 58
+    draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
+    y += 24
+    mensaje_footer = "¡Gracias Por Su Preferencia!"
+    _centrado(draw, y, mensaje_footer, f_titulo)
+    y = draw.textbbox((0, y), mensaje_footer, font=f_titulo)[3] + 58
+    return imagen.crop((0, 0, ANCHO, min(y, imagen.height))).convert("1")
 
 
 def render_cuenta(ticket):
@@ -222,7 +367,7 @@ def render_cuenta(ticket):
     f_total = fuente(39, negrita=True)
     f_cant = fuente(23, cursiva=True)
 
-    y = 10
+    y = 0
     logo = _logo_actual()
     if logo:
         imagen.paste(logo, ((ANCHO - logo.width) // 2, y))
@@ -278,7 +423,7 @@ def render_cuenta(ticket):
     y += 24
     mensaje_footer = "¡Gracias Por Su Preferencia!"
     _centrado(draw, y, mensaje_footer, f_titulo)
-    y = draw.textbbox((0, y), mensaje_footer, font=f_titulo)[3] + 5
+    y = draw.textbbox((0, y), mensaje_footer, font=f_titulo)[3] + 58
     return imagen.crop((0, 0, ANCHO, min(y, imagen.height))).convert("1")
 
 

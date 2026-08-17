@@ -81,6 +81,9 @@ MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 SUCURSAL_CLAVE = os.getenv("SUCURSAL_CLAVE", "ARBOLEDAS")
+# Preparado para el módulo administrativo. La entrada permanece deshabilitada
+# hasta implementar permisos y sesiones; nunca se expone esta clave al navegador.
+POS_ADMIN_PASSWORD = os.getenv("POS_ADMIN_PASSWORD", "admin123")
 PRINT_BACKEND = os.getenv("PRINT_BACKEND", "tcp").lower()
 if PRINT_BACKEND not in {"tcp", "archivo"}:
     raise ValueError("PRINT_BACKEND debe ser 'tcp' o 'archivo'.")

@@ -11,8 +11,8 @@ cobrarla y generar comandas/cuentas térmicas en modo ráster.
 2. Ejecuta `docker compose up --build`.
 3. Abre `http://localhost:8000`.
 
-La base se migra y el menú fotografiado se carga automáticamente. Las impresiones de
-prueba quedan en `media/impresiones/` y se pueden previsualizar desde la aplicación.
+La base se migra y el menú se carga automáticamente. En modo archivo, las impresiones
+de prueba quedan en `media/impresiones/` sin gastar papel.
 
 ## Inicio local sin Docker
 
@@ -61,7 +61,7 @@ El servicio `impresion` consume la cola de trabajos, renderiza PNG monocromátic
 576 píxeles (80 mm) y envía comandos ESC/POS ráster por TCP. Conserva el PNG como
 evidencia incluso cuando imprime por red.
 
-La barra superior muestra `Impresora lista`, `Impresora sin conexión` o `Sólo vista
+La pantalla de acceso muestra `Impresora lista`, `Impresora sin conexión` o `Sólo vista
 previa`. Un trabajo en modo archivo queda como `Vista previa generada`; sólo se marca
 `Impreso` después de completar el envío TCP.
 
@@ -73,8 +73,9 @@ Los recursos están empaquetados localmente para que la PWA no dependa de intern
 
 ## Catálogo
 
-`cargar_datos_iniciales` crea los 23 productos y precios visibles en
-`Referencias/menu.jpeg`. También importa los nombres de `datos/Listado-Productos.xlsx`
+`cargar_datos_iniciales` crea los 39 productos activos confirmados, incluidas las
+bebidas y las variantes de quesadilla/lonche. También importa los nombres de
+`datos/Listado-Productos.xlsx`
 como inactivos para revisión: el traspaso advierte que 189 precios son desconocidos y no
 es seguro habilitarlos para cobro. Para repetir la importación desde otro archivo:
 
@@ -85,12 +86,25 @@ python manage.py importar_catalogo_legado "C:\ruta\Listado-Productos.xlsx"
 Los precios y productos se editan desde `/admin/` después de crear un superusuario con
 `python manage.py createsuperuser`.
 
+## Clientes a domicilio
+
+El directorio permite buscar por nombre, clave corta, teléfono, domicilio, número
+exterior y referencia. Para importar el traspaso legado de forma repetible:
+
+```powershell
+python manage.py importar_clientes_legado "C:\ruta\Clientes-Domicilio-Completo.xlsx"
+```
+
+El importador omite filas sin nombre/domicilio/contacto y agrupa domicilios del mismo
+nombre. Cuando una empresa no tiene teléfono fijo pero la referencia contiene el
+contacto rotativo, se marca para solicitar nombre y celular en cada pedido.
+
 ## Pruebas
 
 ```powershell
 python manage.py test
 ```
 
-Cubren apertura, captura hasta 24 comensales, preparación global, acceso para tabletas,
-matriz por comensal, bebidas acumuladas, outbox, procesamiento, cobro y generación de
-los dos formatos térmicos.
+Cubren apertura y cancelación, captura hasta 24 comensales, preparación global, acceso
+para tabletas, matriz por comensal, bebidas acumuladas, clientes, procesamiento, cobro
+opcional con o sin ticket y generación de los dos formatos térmicos.
