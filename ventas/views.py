@@ -6,6 +6,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import render
+from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from catalogo.models import Producto
@@ -22,6 +23,8 @@ from .clientes import (
 )
 from .models import Cliente, DomicilioCliente, Mesa, Partida, TelefonoCliente, Ticket
 from .normalizacion import normalizar_telefono
+from .orden import ordenar_partidas
+from .promociones import configuracion_promocion, promocion_disponible, promociones_pendientes
 from .services import (
     ErrorVenta,
     abrir_ticket,
@@ -29,12 +32,21 @@ from .services import (
     ajustar_grupo_partidas,
     actualizar_partida,
     agregar_partida,
+    alternar_comentario_general,
     alternar_modificador,
     cobrar_ticket,
     cancelar_ticket,
     procesar_ticket,
     registrar_evento,
 )
+
+
+PREFIJOS_SALSA = {"", "+ Más", "Nada más"}
+OPCIONES_SALSA = {
+    "Con Todo", "Sin Nada", "Sólo Salsas", "Verde", "Roja", "Pepino", "Rábano", "Cebolla",
+    "Limón", "Morada", "Serrano", "Cilantro", "Cacahuate", "Chipotle", "Mexicana",
+    "Verde Tomate", "Habanero", "Roja Taquera",
+}
 
 
 def _sucursal():
@@ -80,11 +92,14 @@ def _trabajos_payload(trabajos):
 
 def _ticket_payload(ticket):
     partidas = []
-    for partida in ticket.partidas.select_related("producto__categoria").all():
+    consulta_partidas = ticket.partidas.select_related("producto__categoria", "promocion_aplicada__producto").all()
+    for partida in ordenar_partidas(consulta_partidas):
+        promocion = configuracion_promocion(partida.producto)
         partidas.append(
             {
                 "id": str(partida.id),
                 "producto_id": str(partida.producto_id),
+                "codigo": partida.producto.codigo,
                 "nombre": partida.nombre_producto,
                 "nombre_corto": partida.nombre_corto,
                 "comensal": partida.comensal,
@@ -94,6 +109,9 @@ def _ticket_payload(ticket):
                 "categoria": partida.producto.categoria.nombre,
                 "destino": partida.producto.destino_impresion,
                 "termino": partida.termino,
+                "orden": partida.producto.orden,
+                "es_promocion": bool(promocion),
+                "promocion_id": str(partida.promocion_aplicada_id) if partida.promocion_aplicada_id else "",
             }
         )
     modificadores = [
@@ -114,6 +132,7 @@ def _ticket_payload(ticket):
         "contacto_pedido_nombre": ticket.contacto_pedido_nombre,
         "contacto_pedido_telefono": ticket.contacto_pedido_telefono,
     }
+    pendientes = promociones_pendientes(ticket)
     return {
         "id": str(ticket.id),
         "folio": ticket.folio,
@@ -124,7 +143,14 @@ def _ticket_payload(ticket):
         "total": str(ticket.total),
         "creado_en": ticket.creado_en.isoformat(),
         "comentario_general": ticket.comentario_general,
+        "comentarios_generales": ticket.comentarios_generales,
+        "salsas_verduras": ticket.salsas_verduras,
+        "tipo_entrega": ticket.tipo_entrega,
         "entrega_aproximada": ticket.entrega_aproximada.strftime("%H:%M") if ticket.entrega_aproximada else "",
+        "terminal": ticket.terminal,
+        "paga_con": str(ticket.paga_con) if ticket.paga_con is not None else "",
+        "promocion_pendiente_id": pendientes[0] if pendientes else "",
+        "promociones_pendientes": pendientes,
         "cliente": cliente,
         "partidas": partidas,
         "modificadores": modificadores,
@@ -137,6 +163,7 @@ def _inicio(request, modo_tableta=False):
     for producto in Producto.objects.select_related("categoria").filter(sucursal=sucursal, activo=True):
         precio = producto.precio_actual()
         if precio:
+            promocion = configuracion_promocion(producto)
             productos.append(
                 {
                     "id": str(producto.id),
@@ -149,6 +176,10 @@ def _inicio(request, modo_tableta=False):
                     "permite_termino": producto.permite_termino,
                     "termino_predeterminado": producto.termino_predeterminado,
                     "abreviaturas_termino": producto.abreviaturas_termino,
+                    "orden": producto.orden,
+                    "es_promocion": bool(promocion),
+                    "promocion_dias": promocion["dias_texto"] if promocion else "",
+                    "disponible_hoy": promocion_disponible(producto, timezone.localdate()) if promocion else True,
                 }
             )
     posiciones = [
@@ -218,20 +249,56 @@ def api_ticket(request, ticket_id):
             datos = _json(request)
             if ticket.estado != Ticket.Estado.ABIERTO:
                 raise ErrorVenta("La orden ya fue procesada.")
-            ticket.comentario_general = str(datos.get("comentario_general", ticket.comentario_general)).strip()
-            ticket.contacto_pedido_nombre = str(
-                datos.get("contacto_pedido_nombre", ticket.contacto_pedido_nombre)
-            ).strip()[:180]
-            ticket.contacto_pedido_telefono = str(
-                datos.get("contacto_pedido_telefono", ticket.contacto_pedido_telefono)
-            ).strip()[:30]
+            if "comentario_general" in datos:
+                ticket.comentario_general = str(datos["comentario_general"]).strip()
+                ticket.comentarios_generales = (
+                    [{"codigo": "LIBRE", "nombre": ticket.comentario_general}]
+                    if ticket.comentario_general else []
+                )
+            if "contacto_pedido_nombre" in datos:
+                ticket.contacto_pedido_nombre = str(datos["contacto_pedido_nombre"]).strip()[:180]
+            if "contacto_pedido_telefono" in datos:
+                ticket.contacto_pedido_telefono = str(datos["contacto_pedido_telefono"]).strip()[:30]
             if ticket.contacto_pedido_telefono and len(normalizar_telefono(ticket.contacto_pedido_telefono)) < 7:
                 raise ErrorVenta("El teléfono del contacto debe contener al menos 7 dígitos.")
-            entrega = datos.get("entrega_aproximada")
-            ticket.entrega_aproximada = datetime.strptime(entrega, "%H:%M").time() if entrega else None
+            if "tipo_entrega" in datos:
+                tipo_entrega = str(datos["tipo_entrega"])
+                if tipo_entrega not in Ticket.TipoEntrega.values:
+                    raise ErrorVenta("El tipo de entrega no es válido.")
+                ticket.tipo_entrega = tipo_entrega
+            if "entrega_aproximada" in datos:
+                entrega = datos.get("entrega_aproximada")
+                ticket.entrega_aproximada = datetime.strptime(entrega, "%H:%M").time() if entrega else None
+            if "terminal" in datos:
+                ticket.terminal = bool(datos["terminal"])
+                if ticket.terminal:
+                    ticket.paga_con = None
+            if "paga_con" in datos:
+                paga_con = datos.get("paga_con")
+                ticket.paga_con = Decimal(str(paga_con)) if paga_con not in (None, "") else None
+                if ticket.paga_con is not None:
+                    if ticket.paga_con != ticket.paga_con.to_integral_value() or ticket.paga_con <= 0:
+                        raise ErrorVenta("Paga con debe ser un número entero natural.")
+                    if ticket.paga_con < ticket.total:
+                        raise ErrorVenta("Paga con no puede ser menor que el total del pedido.")
+                    ticket.terminal = False
+            if "salsas_verduras" in datos:
+                grupos = datos["salsas_verduras"]
+                if not isinstance(grupos, list):
+                    raise ErrorVenta("La selección de salsas y verduras no es válida.")
+                normalizados = []
+                for grupo in grupos:
+                    if not isinstance(grupo, dict):
+                        raise ErrorVenta("La selección de salsas y verduras no es válida.")
+                    prefijo = str(grupo.get("prefijo", ""))
+                    elementos = list(dict.fromkeys(str(item) for item in grupo.get("elementos", [])))
+                    if prefijo not in PREFIJOS_SALSA or not elementos or any(item not in OPCIONES_SALSA for item in elementos):
+                        raise ErrorVenta("La selección de salsas y verduras contiene una opción no válida.")
+                    normalizados.append({"prefijo": prefijo, "elementos": elementos})
+                ticket.salsas_verduras = normalizados
             ticket.save()
             registrar_evento(ticket, "ticket.datos_actualizados", {"canal": ticket.canal})
-        except (ErrorVenta, ValueError) as exc:
+        except (ErrorVenta, InvalidOperation, ValueError) as exc:
             return JsonResponse({"error": str(exc)}, status=400)
     return JsonResponse({"ticket": _ticket_payload(ticket)})
 
@@ -340,10 +407,22 @@ def api_agregar_partida(request, ticket_id):
         cantidad = Decimal(str(datos.get("cantidad", "1")))
         if not 1 <= comensal <= 24 or cantidad <= 0:
             raise ErrorVenta("Comensal o cantidad fuera de rango.")
-        agregar_partida(ticket, producto, comensal, cantidad, datos.get("termino"))
+        promocion_aplicada = None
+        if datos.get("promocion_id"):
+            promocion_aplicada = Partida.objects.select_related("producto").get(
+                pk=datos["promocion_id"], ticket=ticket, promocion_aplicada__isnull=True
+            )
+        agregar_partida(
+            ticket,
+            producto,
+            comensal,
+            cantidad,
+            datos.get("termino"),
+            promocion_aplicada=promocion_aplicada,
+        )
         ticket.refresh_from_db()
         return JsonResponse({"ticket": _ticket_payload(ticket)})
-    except (Producto.DoesNotExist, ErrorVenta, InvalidOperation, ValueError) as exc:
+    except (Producto.DoesNotExist, Partida.DoesNotExist, ErrorVenta, InvalidOperation, ValueError) as exc:
         return JsonResponse({"error": str(exc) or "Producto no encontrado."}, status=400)
 
 
@@ -384,17 +463,22 @@ def api_modificador(request, ticket_id):
         datos = _json(request)
         codigo = str(datos.get("codigo", "")).strip()[:20]
         nombre = str(datos.get("nombre", codigo)).strip()[:60]
-        comensales = datos.get("comensales")
-        if comensales is not None:
-            comensales = sorted({int(valor) for valor in comensales})
-            if not codigo or not comensales or any(not 1 <= comensal <= 24 for comensal in comensales):
-                raise ErrorVenta("Modificador inválido.")
-            asegurar_modificador(ticket, comensales, codigo, nombre)
+        if datos.get("tipo") == "general":
+            if not codigo:
+                raise ErrorVenta("Comentario general inválido.")
+            alternar_comentario_general(ticket, codigo, nombre)
         else:
-            comensal = int(datos.get("comensal", 1))
-            if not codigo or not 1 <= comensal <= 24:
-                raise ErrorVenta("Modificador inválido.")
-            alternar_modificador(ticket, comensal, codigo, nombre)
+            comensales = datos.get("comensales")
+            if comensales is not None:
+                comensales = sorted({int(valor) for valor in comensales})
+                if not codigo or not comensales or any(not 1 <= comensal <= 24 for comensal in comensales):
+                    raise ErrorVenta("Modificador inválido.")
+                asegurar_modificador(ticket, comensales, codigo, nombre)
+            else:
+                comensal = int(datos.get("comensal", 1))
+                if not codigo or not 1 <= comensal <= 24:
+                    raise ErrorVenta("Modificador inválido.")
+                alternar_modificador(ticket, comensal, codigo, nombre)
         return JsonResponse({"ticket": _ticket_payload(ticket)})
     except (ErrorVenta, ValueError) as exc:
         return JsonResponse({"error": str(exc)}, status=400)
@@ -476,7 +560,7 @@ def manifest(request):
 
 
 def service_worker(request):
-    codigo = """const CACHE='tocayos-pos-v6';
+    codigo = """const CACHE='tocayos-pos-v7';
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(['/static/ventas/app.css','/static/ventas/app.js','/static/ventas/brand/logoactual.jpeg','/static/ventas/fonts/Montserrat-Medium.ttf','/static/ventas/fonts/Montserrat-SemiBold.ttf']))));
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))));
 self.addEventListener('fetch', e => { if (e.request.method === 'GET') e.respondWith(fetch(e.request).catch(() => caches.match(e.request))); });

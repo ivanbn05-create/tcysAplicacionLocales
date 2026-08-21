@@ -163,6 +163,10 @@ class Ticket(models.Model):
         EFECTIVO = "efectivo", "Efectivo"
         TARJETA = "tarjeta", "Tarjeta"
 
+    class TipoEntrega(models.TextChoices):
+        APROXIMADA = "aproximada", "Aproximada"
+        PROGRAMADA = "programada", "Programada"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="tickets")
     mesa = models.ForeignKey(Mesa, on_delete=models.PROTECT, related_name="tickets")
@@ -184,7 +188,16 @@ class Ticket(models.Model):
     canal = models.CharField(max_length=15, choices=Mesa.Canal.choices)
     estado = models.CharField(max_length=15, choices=Estado.choices, default=Estado.ABIERTO)
     comentario_general = models.TextField(blank=True)
+    comentarios_generales = models.JSONField(default=list, blank=True)
+    salsas_verduras = models.JSONField(default=list, blank=True)
+    tipo_entrega = models.CharField(
+        max_length=12,
+        choices=TipoEntrega.choices,
+        default=TipoEntrega.APROXIMADA,
+    )
     entrega_aproximada = models.TimeField(null=True, blank=True)
+    terminal = models.BooleanField(default=False)
+    paga_con = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     forma_pago = models.CharField(max_length=12, choices=FormaPago.choices, blank=True)
     importe_recibido = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     creado_en = models.DateTimeField(auto_now_add=True)
@@ -210,6 +223,13 @@ class Partida(models.Model):
     sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="partidas")
     ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="partidas")
     producto = models.ForeignKey(Producto, on_delete=models.PROTECT, related_name="partidas")
+    promocion_aplicada = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="componentes_promocion",
+    )
     comensal = models.PositiveSmallIntegerField(validators=[MinValueValidator(1), MaxValueValidator(24)])
     cantidad = models.DecimalField(max_digits=8, decimal_places=3, default=Decimal("1.000"))
     precio_unitario = models.DecimalField(max_digits=10, decimal_places=2)

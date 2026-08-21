@@ -8,6 +8,12 @@ from catalogo.models import Producto
 from personas.models import Sucursal, UsuarioPOS
 
 from .models import EventoOutbox, Mesa, ModificadorTicket, Partida, Ticket
+from .promociones import (
+    configuracion_promocion,
+    promocion_disponible,
+    validar_cupo_componente,
+    validar_promociones,
+)
 
 
 class ErrorVenta(ValueError):
@@ -65,22 +71,43 @@ def abrir_ticket(mesa):
 
 
 @transaction.atomic
-def agregar_partida(ticket, producto, comensal=1, cantidad=Decimal("1.000"), termino=None):
+def agregar_partida(
+    ticket,
+    producto,
+    comensal=1,
+    cantidad=Decimal("1.000"),
+    termino=None,
+    promocion_aplicada=None,
+):
     if ticket.estado != Ticket.Estado.ABIERTO:
         raise ErrorVenta("La orden ya fue procesada; no admite nuevas partidas.")
+    cantidad = Decimal(str(cantidad))
     if cantidad != cantidad.to_integral_value() or not 1 <= cantidad <= 99:
         raise ErrorVenta("La cantidad debe ser un entero entre 1 y 99.")
     precio = producto.precio_actual()
     if not producto.activo or not precio:
         raise ErrorVenta("El producto no tiene un precio activo.")
+    configuracion = configuracion_promocion(producto)
+    if configuracion and promocion_aplicada:
+        raise ErrorVenta("Una promoción no puede ser componente de otra promoción.")
+    if configuracion and not promocion_disponible(producto, timezone.localdate()):
+        raise ErrorVenta(f"La promoción {producto.codigo} no está disponible el día de hoy.")
+    if promocion_aplicada:
+        if promocion_aplicada.ticket_id != ticket.id or not configuracion_promocion(promocion_aplicada.producto):
+            raise ErrorVenta("La promoción seleccionada no pertenece a esta orden.")
+        try:
+            validar_cupo_componente(promocion_aplicada, producto, cantidad)
+        except ValueError as exc:
+            raise ErrorVenta(str(exc)) from exc
     termino, nombre_producto, nombre_corto = _datos_termino(producto, termino)
     partida = Partida.objects.create(
         sucursal=ticket.sucursal,
         ticket=ticket,
         producto=producto,
+        promocion_aplicada=promocion_aplicada,
         comensal=comensal,
         cantidad=cantidad,
-        precio_unitario=precio.importe,
+        precio_unitario=Decimal("0.00") if promocion_aplicada else precio.importe,
         nombre_producto=nombre_producto,
         nombre_corto=nombre_corto,
         termino=termino,
@@ -90,15 +117,28 @@ def agregar_partida(ticket, producto, comensal=1, cantidad=Decimal("1.000"), ter
 
 
 @transaction.atomic
-def actualizar_partida(partida, cantidad, termino=None):
+def actualizar_partida(partida, cantidad, termino=None, validar_componente=True):
     if partida.ticket.estado != Ticket.Estado.ABIERTO:
         raise ErrorVenta("La orden ya fue procesada.")
+    cantidad = Decimal(str(cantidad))
     if cantidad <= 0:
         ticket = partida.ticket
         partida_id = str(partida.id)
         partida.delete()
         _evento(ticket, "ticket.partida_eliminada", {"partida_id": partida_id})
         return None
+    if cantidad != cantidad.to_integral_value() or cantidad > 99:
+        raise ErrorVenta("La cantidad debe ser un entero entre 1 y 99.")
+    if partida.promocion_aplicada_id and validar_componente:
+        try:
+            validar_cupo_componente(
+                partida.promocion_aplicada,
+                partida.producto,
+                cantidad,
+                excluir_ids=[partida.id],
+            )
+        except ValueError as exc:
+            raise ErrorVenta(str(exc)) from exc
     partida.cantidad = cantidad
     campos = ["cantidad"]
     if termino is not None:
@@ -131,6 +171,7 @@ def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar
         partida.producto_id != principal.producto_id
         or partida.comensal != principal.comensal
         or partida.termino != principal.termino
+        or partida.promocion_aplicada_id != principal.promocion_aplicada_id
         for partida in partidas[1:]
     ):
         raise ErrorVenta("La selección contiene partidas distintas.")
@@ -139,6 +180,7 @@ def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar
         Partida.objects.filter(id__in=[partida.id for partida in partidas]).delete()
         _evento(ticket, "ticket.partidas_eliminadas", {"partida_ids": ids})
         return None
+    cantidad = Decimal(str(cantidad))
     if cantidad != cantidad.to_integral_value() or not 1 <= cantidad <= 99:
         raise ErrorVenta("La cantidad debe ser un entero entre 1 y 99.")
     duplicadas_destino = []
@@ -151,14 +193,25 @@ def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar
                 producto=principal.producto,
                 comensal=principal.comensal,
                 termino=termino_destino,
+                promocion_aplicada=principal.promocion_aplicada,
             )
             .exclude(id__in=[partida.id for partida in partidas])
         )
         cantidad += sum((partida.cantidad for partida in duplicadas_destino), Decimal("0"))
         if cantidad > 99:
             raise ErrorVenta("La cantidad acumulada no puede superar 99.")
-    principal = actualizar_partida(principal, cantidad, termino)
     duplicadas = partidas[1:] + duplicadas_destino
+    if principal.promocion_aplicada_id:
+        try:
+            validar_cupo_componente(
+                principal.promocion_aplicada,
+                principal.producto,
+                cantidad,
+                excluir_ids=[partida.id for partida in partidas + duplicadas_destino],
+            )
+        except ValueError as exc:
+            raise ErrorVenta(str(exc)) from exc
+    principal = actualizar_partida(principal, cantidad, termino, validar_componente=False)
     if duplicadas:
         Partida.objects.filter(id__in=[partida.id for partida in duplicadas]).delete()
     return principal
@@ -173,6 +226,11 @@ def alternar_modificador(ticket, comensal, codigo, nombre):
         existente.delete()
         activo = False
     else:
+        ticket.modificadores.filter(comensal=comensal).delete()
+        if ticket.comentarios_generales:
+            ticket.comentarios_generales = []
+            ticket.comentario_general = ""
+            ticket.save(update_fields=["comentarios_generales", "comentario_general", "actualizado_en"])
         ModificadorTicket.objects.create(
             sucursal=ticket.sucursal,
             ticket=ticket,
@@ -186,6 +244,26 @@ def alternar_modificador(ticket, comensal, codigo, nombre):
 
 
 @transaction.atomic
+def alternar_comentario_general(ticket, codigo, nombre):
+    if ticket.estado != Ticket.Estado.ABIERTO:
+        raise ErrorVenta("La orden ya fue procesada.")
+    comentarios = list(ticket.comentarios_generales or [])
+    indice = next((i for i, item in enumerate(comentarios) if item.get("codigo") == codigo), None)
+    if indice is None:
+        comentarios.append({"codigo": codigo, "nombre": nombre})
+        activo = True
+        ticket.modificadores.all().delete()
+    else:
+        comentarios.pop(indice)
+        activo = False
+    ticket.comentarios_generales = comentarios
+    ticket.comentario_general = " · ".join(item["nombre"] for item in comentarios)
+    ticket.save(update_fields=["comentarios_generales", "comentario_general", "actualizado_en"])
+    _evento(ticket, "ticket.comentario_general", {"codigo": codigo, "activo": activo})
+    return activo
+
+
+@transaction.atomic
 def asegurar_modificador(ticket, comensales, codigo, nombre):
     if ticket.estado != Ticket.Estado.ABIERTO:
         raise ErrorVenta("La orden ya fue procesada.")
@@ -195,9 +273,14 @@ def asegurar_modificador(ticket, comensales, codigo, nombre):
         .values_list("comensal", flat=True)
     )
     aplicados = []
+    if comensales_con_producto and ticket.comentarios_generales:
+        ticket.comentarios_generales = []
+        ticket.comentario_general = ""
+        ticket.save(update_fields=["comentarios_generales", "comentario_general", "actualizado_en"])
     for comensal in comensales:
         if comensal not in comensales_con_producto:
             continue
+        ModificadorTicket.objects.filter(ticket=ticket, comensal=comensal).exclude(codigo=codigo).delete()
         _, creado = ModificadorTicket.objects.get_or_create(
             sucursal=ticket.sucursal,
             ticket=ticket,
@@ -218,6 +301,10 @@ def procesar_ticket(ticket):
         raise ErrorVenta("La orden no está abierta.")
     if not ticket.partidas.exists():
         raise ErrorVenta("Agrega al menos un producto.")
+    try:
+        validar_promociones(ticket)
+    except ValueError as exc:
+        raise ErrorVenta(str(exc)) from exc
     if ticket.canal == Mesa.Canal.DOMICILIO:
         if not all([ticket.cliente_id, ticket.cliente_nombre, ticket.cliente_domicilio]):
             raise ErrorVenta("Selecciona un cliente con domicilio antes de procesar la orden.")
@@ -265,7 +352,12 @@ def cancelar_ticket(ticket):
     ticket.contacto_pedido_nombre = ""
     ticket.contacto_pedido_telefono = ""
     ticket.comentario_general = ""
+    ticket.comentarios_generales = []
+    ticket.salsas_verduras = []
+    ticket.tipo_entrega = Ticket.TipoEntrega.APROXIMADA
     ticket.entrega_aproximada = None
+    ticket.terminal = False
+    ticket.paga_con = None
     ticket.estado = Ticket.Estado.CANCELADO
     ticket.cancelado_en = timezone.now()
     ticket.save(
@@ -280,7 +372,12 @@ def cancelar_ticket(ticket):
             "contacto_pedido_nombre",
             "contacto_pedido_telefono",
             "comentario_general",
+            "comentarios_generales",
+            "salsas_verduras",
+            "tipo_entrega",
             "entrega_aproximada",
+            "terminal",
+            "paga_con",
             "estado",
             "cancelado_en",
             "actualizado_en",

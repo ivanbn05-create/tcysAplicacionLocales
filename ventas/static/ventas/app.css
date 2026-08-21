@@ -448,3 +448,65 @@ body.en-operacion main, .modo-tableta main { width: 100%; padding: max(6px, env(
   .datos-orden { grid-template-columns: 1fr; }
   .datos-orden > label:first-child, .datos-orden > .campo-ancho { grid-column: 1; }
 }
+
+/* Captura segmentada, entrega y promociones */
+.productos:not(.modo-calculadora) { grid-template-columns: 1fr; grid-auto-rows: auto; }
+.segmento-menu { min-width: 0; display: grid; gap: 6px; }
+.segmento-menu h3 { margin: 3px 0 1px; display: flex; align-items: center; gap: 9px; color: var(--carbon); font-size: .7rem; letter-spacing: .1em; }
+.segmento-menu h3::before, .segmento-menu h3::after { content: ""; height: 2px; flex: 1; background: var(--carbon); }
+.segmento-menu h3 span { flex: 0 0 auto; }
+.segmento-productos { min-width: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(122px, 1fr)); gap: 6px; }
+.segmento-productos .producto { min-height: 78px; }
+.promocion-menu { border: 2px solid var(--rojo); background: var(--rojo-claro); }
+.promocion-menu:disabled { border-color: #b9b4aa; }
+.aviso-promocion-activa { padding: 8px 10px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; border: 2px solid var(--rojo); border-radius: 10px; color: var(--carbon); background: var(--rojo-claro); font-size: .65rem; }
+.aviso-promocion-activa button { min-height: 32px; padding: 5px 8px; border: 0; border-radius: 7px; color: #fff; background: var(--carbon); font-size: .62rem; font-weight: 900; }
+
+.opcion-preparacion { border-color: var(--borde); background: #fff; transition: .14s ease; }
+.opcion-preparacion:hover, .opcion-preparacion.seleccionada { border-color: var(--carbon); background: #fff; box-shadow: inset 0 0 0 3px var(--amarillo); transform: translateY(-1px); }
+
+.selector-entrega-panel, .selector-salsas { min-height: 100%; display: grid; align-content: start; gap: 8px; }
+.selector-entrega-tipos, .prefijos-salsas { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.prefijos-salsas { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.selector-entrega-tipos button, .prefijos-salsas button, .opciones-salsas button, .tiempos-aproximados button, .teclado-hora-programada button { min-height: 44px; padding: 6px; border: 1px solid #bdb7ad; border-radius: 8px; color: var(--carbon); background: #fff; font-weight: 900; }
+.selector-entrega-tipos button.activo, .prefijos-salsas button.activo, .opciones-salsas button.activo { color: #fff; border-color: var(--carbon); background: var(--carbon); box-shadow: 0 0 0 3px rgba(255,237,0,.55); }
+.tiempos-aproximados { min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: minmax(48px, 1fr); gap: 7px; }
+.tiempos-aproximados button { font-size: 1rem; }
+.pantalla-hora-programada { min-height: 65px; padding: 7px 12px; display: grid; place-items: center end; border: 3px solid var(--carbon); border-radius: 9px; background: #eff7e8; font-family: ui-monospace, Consolas, monospace; font-size: 2.3rem; font-weight: 900; }
+.teclado-hora-programada { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.teclado-hora-programada button { min-height: 58px; font-size: 1.35rem; }
+.teclado-hora-programada .borrar { color: #fff; background: var(--carbon-suave); }
+.teclado-hora-programada .confirmar { color: #fff; background: var(--verde-oscuro); }
+.opciones-salsas { display: grid; grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)); gap: 6px; }
+
+.comanda-matriz { border-top-width: 3px; border-left-width: 2px; }
+.comanda-matriz > * { border-right-width: 2px; border-bottom-width: 2px; }
+.comanda-global.seleccionado { color: #fff !important; background: var(--carbon) !important; text-align: center; }
+.promocion-etiqueta { color: var(--rojo); font-weight: 900; }
+.promocion-celda { font-size: .9rem; font-weight: 900; }
+.promocion-celda.seleccionada { box-shadow: inset 0 0 0 3px var(--rojo); background: var(--rojo-claro); }
+.comanda-salsas { width: 100%; min-height: 38px; margin-top: 5px; padding: 6px 8px; display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 5px 9px; border: 1px dashed #777; color: #111; background: #fff; text-align: left; }
+.comanda-salsas > strong { text-transform: uppercase; }
+
+.campo-entrega { min-width: 0; }
+.selector-entrega { width: 100%; min-height: 38px; padding: 6px 8px; border: 1px solid #cfc9bd; border-radius: 9px; color: var(--carbon); background: #fff; font-size: .7rem; font-weight: 800; text-align: left; }
+.pago-domicilio { display: grid; grid-template-columns: minmax(105px, .8fr) minmax(110px, 1fr); align-items: end; gap: 7px; }
+.interruptor-terminal { align-self: end; }
+.interruptor-terminal input { position: absolute; opacity: 0; pointer-events: none; }
+.interruptor-terminal span { min-height: 38px; padding: 7px; display: grid; place-items: center; border: 2px solid var(--carbon); border-radius: 9px; color: var(--carbon); background: #fff; font-weight: 900; letter-spacing: .08em; }
+.interruptor-terminal input:checked + span { color: #fff; background: var(--carbon); box-shadow: 0 0 0 3px rgba(255,237,0,.65); }
+.pago-domicilio input { min-height: 38px; padding: 6px 8px; }
+
+.controles-tableta { position: fixed; top: max(7px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); z-index: 14; display: flex; gap: 5px; }
+.controles-tableta .control-operacion { position: static; }
+.controles-tableta .salir-tableta { width: auto; grid-template-columns: auto auto; gap: 5px; }
+.controles-tableta .salir-tableta span { font-size: .62rem; font-weight: 900; }
+body.modo-tableta { position: fixed; inset: 0; overscroll-behavior: none; }
+.modo-tableta .productos, .modo-tableta .personas, .modo-tableta .comanda-preview, .modo-tableta .datos-orden { overscroll-behavior: none; }
+
+@media (max-width: 700px) {
+  .segmento-productos { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .aviso-promocion-activa { grid-template-columns: 1fr auto; }
+  .aviso-promocion-activa span { grid-column: 1 / -1; grid-row: 2; }
+  .pago-domicilio { grid-template-columns: 1fr 1fr; }
+}

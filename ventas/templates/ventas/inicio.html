@@ -49,9 +49,14 @@
 
   <main{% if not modo_tableta %} class="oculto"{% endif %}>
     {% if modo_tableta %}
-      <button id="pantalla-completa" class="control-operacion pantalla-completa" type="button" aria-label="Abrir pantalla completa" title="Pantalla completa">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
-      </button>
+      <div class="controles-tableta">
+        <button id="pantalla-completa" class="control-operacion pantalla-completa" type="button" aria-label="Abrir pantalla completa" title="Pantalla completa">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+        </button>
+        <button id="salir-tableta" class="control-operacion salir-tableta" type="button" aria-label="Salir de pantalla completa" title="Salir">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></svg><span>Salir</span>
+        </button>
+      </div>
     {% endif %}
     <section id="vista-posiciones" class="vista-posiciones">
       {% if not modo_tableta %}
@@ -112,8 +117,17 @@
           <div id="comanda-preview" class="comanda-preview" aria-live="polite">
             <div id="comanda-papel-preview"></div>
             <div class="datos-orden">
-              <label>Entrega aproximada<input id="entrega" type="time"></label>
-              <label class="campo-ancho">Comentario general<textarea id="comentario" rows="2" placeholder="Indicaciones para preparación"></textarea></label>
+              <label class="campo-entrega">Entrega
+                <button id="entrega" class="selector-entrega" type="button">Seleccionar hora</button>
+              </label>
+              <div id="pago-domicilio" class="pago-domicilio oculto">
+                <label class="interruptor-terminal">
+                  <input id="terminal" type="checkbox"><span>TERMINAL</span>
+                </label>
+                <label>Paga con
+                  <input id="paga-con" type="number" min="1" step="1" inputmode="numeric" placeholder="$">
+                </label>
+              </div>
             <section id="datos-cliente" class="datos-cliente oculto" aria-label="Cliente de domicilio">
               <div class="cliente-titulo">
                 <div><p class="eyebrow">Entrega a domicilio</p><strong>Cliente y dirección</strong></div>

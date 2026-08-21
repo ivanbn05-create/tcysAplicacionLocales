@@ -1,6 +1,7 @@
 import json
 import tempfile
 from collections import OrderedDict
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
@@ -11,12 +12,29 @@ from django.test import TestCase, override_settings
 from catalogo.models import Producto
 from impresion.models import TrabajoImpresion
 from catalogo.configuracion_menu import configuracion_producto
-from impresion.render import _segmentos_bebidas, escpos_raster, render_comanda, render_cuenta, render_domicilio
+from impresion.render import (
+    _segmentos_bebidas,
+    _texto_entrega,
+    _texto_salsas,
+    escpos_raster,
+    render_comanda,
+    render_cuenta,
+    render_domicilio,
+)
 from impresion.services import encolar_impresiones
 from personas.models import Sucursal
 
 from .models import Cliente, EventoOutbox, Mesa, ModificadorTicket, Ticket
-from .services import abrir_ticket, agregar_partida, alternar_modificador, cobrar_ticket, procesar_ticket
+from .orden import ordenar_partidas
+from .services import (
+    ErrorVenta,
+    abrir_ticket,
+    agregar_partida,
+    alternar_comentario_general,
+    alternar_modificador,
+    cobrar_ticket,
+    procesar_ticket,
+)
 
 
 class FlujoPOSTests(TestCase):
@@ -55,7 +73,7 @@ class FlujoPOSTests(TestCase):
         }
 
     def test_catalogo_confirmado_del_menu(self):
-        self.assertEqual(Producto.objects.filter(sucursal=self.sucursal, activo=True).count(), 39)
+        self.assertEqual(Producto.objects.filter(sucursal=self.sucursal, activo=True).count(), 47)
         self.assertEqual(self.producto.precio_actual().importe, Decimal("25.00"))
         self.assertEqual(Mesa.objects.filter(sucursal=self.sucursal, canal="comedor").count(), 24)
 
@@ -74,6 +92,11 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(precios["HR05"], Decimal("30.00"))
         self.assertEqual(precios["HR1"], Decimal("50.00"))
         self.assertEqual(precios["CC"], Decimal("30.00"))
+        self.assertEqual(Producto.objects.get(sucursal=self.sucursal, codigo="PB").precio_actual().importe, Decimal("95.00"))
+        self.assertEqual(
+            Producto.objects.filter(sucursal=self.sucursal, categoria__nombre="Postre", activo=True).count(),
+            5,
+        )
 
     def test_terminos_predeterminados_y_abreviaturas_del_menu(self):
         bistec = Producto.objects.get(sucursal=self.sucursal, codigo="TBI")
@@ -348,6 +371,7 @@ class FlujoPOSTests(TestCase):
         self.assertContains(respuesta, 'data-modo-tableta="true"')
         self.assertNotContains(respuesta, 'class="tableta-identidad"')
         self.assertContains(respuesta, 'id="pantalla-completa"')
+        self.assertContains(respuesta, 'id="salir-tableta"')
         self.assertContains(respuesta, "manifest.webmanifest?modo=tableta")
         self.assertNotContains(respuesta, 'class="topbar"')
         self.assertNotContains(respuesta, 'data-canal="domicilio"')
@@ -387,10 +411,109 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(ModificadorTicket.objects.filter(ticket=ticket, codigo="C/T").count(), 1)
         self.assertEqual(ModificadorTicket.objects.get(ticket=ticket, codigo="C/T").comensal, 24)
         imagen = render_comanda(ticket, "cocina")
-        self.assertGreater(imagen.height, 900)
+        self.assertGreater(imagen.height, 650)
+        self.assertLess(imagen.height, 850)
         trabajos = encolar_impresiones(ticket, TrabajoImpresion.Formato.COMANDA)
         self.assertEqual(len(trabajos), 1)
         self.assertEqual(trabajos[0].destino, TrabajoImpresion.Destino.COCINA)
+
+    def test_promocion_cobra_una_vez_y_exige_sus_componentes(self):
+        mesa = Mesa.objects.get(sucursal=self.sucursal, clave="MESA-10")
+        promocion = Producto.objects.get(sucursal=self.sucursal, codigo="PK")
+        bistec = Producto.objects.get(sucursal=self.sucursal, codigo="TBI")
+        ticket, _ = abrir_ticket(mesa)
+        with patch("ventas.services.timezone.localdate", return_value=date(2026, 8, 17)):
+            partida_promocion = agregar_partida(ticket, promocion)
+        componente = agregar_partida(
+            ticket,
+            bistec,
+            comensal=4,
+            cantidad=Decimal("3"),
+            promocion_aplicada=partida_promocion,
+        )
+        ticket.refresh_from_db()
+        self.assertEqual(componente.precio_unitario, Decimal("0.00"))
+        self.assertEqual(ticket.total, Decimal("90.00"))
+        procesar_ticket(ticket)
+
+        incompleto, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="MESA-11"))
+        with patch("ventas.services.timezone.localdate", return_value=date(2026, 8, 17)):
+            agregar_partida(incompleto, promocion)
+        with self.assertRaisesMessage(ErrorVenta, "Completa la promoción PK"):
+            procesar_ticket(incompleto)
+
+    def test_promocion_rechaza_componentes_ajenos(self):
+        ticket, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="MESA-12"))
+        promocion = Producto.objects.get(sucursal=self.sucursal, codigo="PK")
+        consome = Producto.objects.get(sucursal=self.sucursal, codigo="CO8")
+        with patch("ventas.services.timezone.localdate", return_value=date(2026, 8, 17)):
+            partida_promocion = agregar_partida(ticket, promocion)
+        with self.assertRaisesMessage(ErrorVenta, "no forma parte"):
+            agregar_partida(ticket, consome, promocion_aplicada=partida_promocion)
+
+    def test_comentarios_generales_e_individuales_son_excluyentes(self):
+        ticket, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="MESA-13"))
+        agregar_partida(ticket, self.producto, comensal=1)
+        alternar_modificador(ticket, 1, "CEB", "CEBOLLA")
+        alternar_comentario_general(ticket, "TODO_PLATO", "TODO POR PLATO")
+        alternar_comentario_general(ticket, "MAS_CEB", "MÁS CEBOLLA")
+        ticket.refresh_from_db()
+        self.assertFalse(ticket.modificadores.exists())
+        self.assertEqual([item["codigo"] for item in ticket.comentarios_generales], ["TODO_PLATO", "MAS_CEB"])
+
+        alternar_modificador(ticket, 1, "CH V", "CHILE VERDE")
+        alternar_modificador(ticket, 1, "CEB", "CEBOLLA")
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.comentarios_generales, [])
+        self.assertEqual(list(ticket.modificadores.values_list("codigo", flat=True)), ["CEB"])
+
+    def test_orden_de_comanda_respeta_menu_y_deja_litros_y_consomes_al_final(self):
+        ticket, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="MESA-14"))
+        for codigo in ["CO1", "CO8", "BBQ05", "TB", "CO05", "LB"]:
+            agregar_partida(ticket, Producto.objects.get(sucursal=self.sucursal, codigo=codigo))
+        codigos = [partida.producto.codigo for partida in ordenar_partidas(ticket.partidas.select_related("producto"))]
+        self.assertEqual(codigos, ["TB", "LB", "BBQ05", "CO8", "CO05", "CO1"])
+
+    def test_entrega_programada_terminal_paga_con_y_salsas_se_persisten(self):
+        mesa = Mesa.objects.get(sucursal=self.sucursal, clave="DOM-4")
+        ticket, _ = abrir_ticket(mesa)
+        agregar_partida(ticket, self.producto)
+        respuesta = self.client.patch(
+            f"/api/tickets/{ticket.id}/",
+            data=json.dumps(
+                {
+                    "tipo_entrega": "programada",
+                    "entrega_aproximada": "13:30",
+                    "terminal": True,
+                    "salsas_verduras": [
+                        {"prefijo": "+ Más", "elementos": ["Verde", "Roja", "Pepino"]},
+                        {"prefijo": "Nada más", "elementos": ["Chipotle", "Mexicana"]},
+                    ],
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        ticket.refresh_from_db()
+        self.assertTrue(ticket.terminal)
+        self.assertIn("Programado: 1:30 pm", _texto_entrega(ticket))
+        self.assertEqual(_texto_salsas(ticket), "+ Más Verde, Roja, Pepino * Nada más Chipotle, Mexicana")
+
+        respuesta = self.client.patch(
+            f"/api/tickets/{ticket.id}/",
+            data=json.dumps({"paga_con": 20}),
+            content_type="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 400)
+        respuesta = self.client.patch(
+            f"/api/tickets/{ticket.id}/",
+            data=json.dumps({"paga_con": 100}),
+            content_type="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        ticket.refresh_from_db()
+        self.assertFalse(ticket.terminal)
+        self.assertEqual(ticket.paga_con, Decimal("100.00"))
 
     def test_render_termico_es_raster_escpos(self):
         mesa = Mesa.objects.get(sucursal=self.sucursal, clave="MESA-3")
@@ -401,7 +524,7 @@ class FlujoPOSTests(TestCase):
         cuenta = render_cuenta(ticket)
         self.assertEqual(comanda.width, 576)
         self.assertEqual(cuenta.width, 576)
-        self.assertGreater(comanda.height, 400)
+        self.assertGreater(comanda.height, 300)
         self.assertLess(comanda.height, 650)
         self.assertGreater(cuenta.height, 600)
         self.assertLess(cuenta.height, 800)

@@ -12,19 +12,23 @@ from ventas.models import Mesa, Partida
 
 
 MENU = [
-    ("TB", "Taco de barbacoa", "Tacos", "TB", "25.00", "cocina"),
-    ("TBQ", "Taco de barbacoa c/queso", "Tacos", "TBQ", "31.00", "cocina"),
-    ("TPLB", "Taco de barbacoa planchado", "Tacos", "TPLB", "30.00", "cocina"),
-    ("TPLBQ", "Taco de barbacoa planchado c/queso", "Tacos", "TPLBQ", "36.00", "cocina"),
-    ("TBI", "Taco de bistek", "Tacos", "TBI", "32.00", "cocina"),
-    ("TBIQ", "Taco de bistek c/queso", "Tacos", "TBIQ", "38.00", "cocina"),
-    ("TC", "Taco de chorizo", "Tacos", "TC", "32.00", "cocina"),
-    ("TCQ", "Taco de chorizo c/queso", "Tacos", "TCQ", "38.00", "cocina"),
-    ("BBQ05", "Barbacoa 1/2 litro", "Barbacoa Litros", "1/2BBQ", "200.00", "cocina"),
-    ("BBQ1", "Barbacoa 1 litro", "Barbacoa Litros", "1LBBQ", "400.00", "cocina"),
-    ("CO8", "Consomé vaso 8 oz", "Consomés", "CO8", "14.00", "cocina"),
-    ("CO05", "Consomé 1/2 litro", "Consomés", "CO1/2", "22.00", "cocina"),
-    ("CO1", "Consomé 1 litro", "Consomés", "CO1L", "35.00", "cocina"),
+    ("TB", "Taco de barbacoa", "Taco", "TB", "25.00", "cocina"),
+    ("TBQ", "Taco de barbacoa c/queso", "Taco", "TBQ", "31.00", "cocina"),
+    ("TPLB", "Taco de barbacoa planchado", "Taco", "TPLB", "30.00", "cocina"),
+    ("TPLBQ", "Taco de barbacoa planchado c/queso", "Taco", "TPLBQ", "36.00", "cocina"),
+    ("TBI", "Taco de bistek", "Taco", "TBI", "32.00", "cocina"),
+    ("TBIQ", "Taco de bistek c/queso", "Taco", "TBIQ", "38.00", "cocina"),
+    ("TC", "Taco de chorizo", "Taco", "TC", "32.00", "cocina"),
+    ("TCQ", "Taco de chorizo c/queso", "Taco", "TCQ", "38.00", "cocina"),
+    ("PB", "Taco y bebida", "Promoción", "PB", "95.00", "cocina"),
+    ("PL", "Lonche y taco", "Promoción", "PL", "90.00", "cocina"),
+    ("P4", "Cuatro tacos", "Promoción", "P4", "90.00", "cocina"),
+    ("PK", "Bistec", "Promoción", "PK", "90.00", "cocina"),
+    ("BBQ05", "Barbacoa 1/2 litro", "Consomé y Barbacoa", "1/2BBQ", "200.00", "cocina"),
+    ("BBQ1", "Barbacoa 1 litro", "Consomé y Barbacoa", "1LBBQ", "400.00", "cocina"),
+    ("CO8", "Consomé vaso 8 oz", "Consomé y Barbacoa", "CO8", "14.00", "cocina"),
+    ("CO05", "Consomé 1/2 litro", "Consomé y Barbacoa", "CO1/2", "22.00", "cocina"),
+    ("CO1", "Consomé 1 litro", "Consomé y Barbacoa", "CO1L", "35.00", "cocina"),
     ("LB", "Lonche de barbacoa sin queso", "Lonches", "LB", "75.00", "cocina"),
     ("LOBQ", "Lonche de barbacoa con queso", "Lonches", "LOBQ", "75.00", "cocina"),
     ("LOKSQ", "Lonche de bistek sin queso", "Lonches", "LOK/SQ", "85.00", "cocina"),
@@ -50,10 +54,14 @@ MENU = [
     ("SPRITESA", "Sprite sin azúcar", "Bebidas", "SPRT/SA", "30.00", "barra"),
     ("SIDRAL", "Sidral", "Bebidas", "SDRL", "30.00", "barra"),
     ("AM", "Agua mineral", "Bebidas", "AM", "30.00", "barra"),
-    ("POSTRE", "Postre", "Postres", "POSTRE", "40.00", "barra"),
+    ("FLCAJ", "Flan de cajeta", "Postre", "FL CAJ", "40.00", "barra"),
+    ("FLCAR", "Flan de caramelo", "Postre", "FL CAR", "40.00", "barra"),
+    ("JERICALLA", "Jericalla", "Postre", "JER", "40.00", "barra"),
+    ("ARROZL", "Arroz con leche", "Postre", "ARROZ", "40.00", "barra"),
+    ("GELATINA", "Gelatina", "Postre", "GEL", "40.00", "barra"),
 ]
 
-CATEGORIAS = ["Tacos", "Barbacoa Litros", "Consomés", "Lonches", "Gringas y Quesadillas", "Bebidas", "Postres"]
+CATEGORIAS = ["Taco", "Promoción", "Consomé y Barbacoa", "Lonches", "Gringas y Quesadillas", "Bebidas", "Postre"]
 SUCURSALES_DESTINO = [
     "Centro Médico",
     "RAKEBELA",
@@ -88,7 +96,9 @@ class Command(BaseCommand):
             )
             categorias[nombre] = categoria
 
-        Producto.objects.filter(sucursal=sucursal, codigo__in=["REF05", "AF1"]).update(activo=False)
+        Categoria.objects.filter(sucursal=sucursal).exclude(nombre__in=CATEGORIAS).update(activa=False)
+
+        Producto.objects.filter(sucursal=sucursal, codigo__in=["REF05", "AF1", "POSTRE"]).update(activo=False)
 
         for orden_producto, (codigo, nombre, categoria, corto, importe, destino) in enumerate(MENU, 1):
             configuracion = configuracion_producto(codigo, nombre, corto)

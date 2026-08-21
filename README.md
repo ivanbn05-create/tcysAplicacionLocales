@@ -35,7 +35,35 @@ Abre `http://localhost:8000/tabletas/` para mostrar únicamente las 24 mesas de 
 con controles táctiles ampliados. La captura distribuye la pantalla entre la tira de
 24 comensales, el menú completo con scroll y una comanda interactiva en tiempo real.
 Cada bloque agrupa seis comensales; las bebidas se acumulan debajo de la matriz y el
-comentario general se imprime al final.
+comentario general sustituye la fila de preparación individual. La interfaz bloquea el
+scroll encadenado y el gesto de recarga de Android, inicia en modo `fullscreen` cuando
+se abre como PWA y ofrece un botón **Salir** para abandonar la pantalla completa.
+
+### Instalación en tabletas Android
+
+La opción recomendada para operación diaria es publicar `/tabletas/` por HTTPS dentro
+de la red local y usar **Instalar aplicación** desde Chrome. El manifiesto ya define el
+inicio de tableta y solicita `fullscreen`; HTTPS es importante para que el navegador
+mantenga habilitados el service worker y la instalación de la PWA. Consulta los
+[requisitos de instalación de Chrome](https://developer.chrome.com/docs/lighthouse/pwa/installable-manifest).
+
+Para una prueba temporal por USB-C se puede usar ADB, con depuración USB habilitada:
+
+```powershell
+adb reverse tcp:8000 tcp:8000
+```
+
+Después se abre `http://localhost:8000/tabletas/` en la tableta. Android documenta este
+[reenvío inverso por USB](https://developer.android.com/develop/ui/views/layout/webapps/access-local-server?hl=es-419),
+pero depende de conservar la sesión ADB y no sustituye el acceso de red para producción.
+Una conexión física puerto-a-puerto por sí sola no instala ni mantiene comunicada la
+PWA. Si no se puede servir HTTPS en la red local, las alternativas estables son envolver
+la interfaz en una aplicación Android (WebView/TWA) o conservar el acceso por Escritorio
+Remoto.
+
+Por restricciones de Android, una página web no puede cerrar por fuerza la aplicación
+instalada. **Salir** abandona el Fullscreen API, vuelve al selector de mesas y permite al
+operador cambiar o cerrar la aplicación desde el sistema.
 
 ## Impresora térmica
 
@@ -73,8 +101,8 @@ Los recursos están empaquetados localmente para que la PWA no dependa de intern
 
 ## Catálogo
 
-`cargar_datos_iniciales` crea los 39 productos activos confirmados, incluidas las
-bebidas y las variantes de quesadilla/lonche. También importa los nombres de
+`cargar_datos_iniciales` crea los 47 productos activos confirmados, incluidas las
+promociones por día, cinco postres, bebidas y variantes de quesadilla/lonche. También importa los nombres de
 `datos/Listado-Productos.xlsx`
 como inactivos para revisión: el traspaso advierte que 189 precios son desconocidos y no
 es seguro habilitarlos para cobro. Para repetir la importación desde otro archivo:
@@ -105,6 +133,7 @@ contacto rotativo, se marca para solicitar nombre y celular en cada pedido.
 python manage.py test
 ```
 
-Cubren apertura y cancelación, captura hasta 24 comensales, preparación global, acceso
-para tabletas, matriz por comensal, bebidas acumuladas, clientes, procesamiento, cobro
-opcional con o sin ticket y generación de los dos formatos térmicos.
+Cubren apertura y cancelación, captura hasta 24 comensales, promociones y sus
+componentes, preparación global/individual excluyente, entrega programada, salsas,
+terminal, orden de impresión, acceso para tabletas, bebidas acumuladas, clientes,
+procesamiento, cobro opcional y generación de los formatos térmicos.
