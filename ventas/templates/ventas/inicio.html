@@ -8,7 +8,7 @@
   <title>Los Tocayos · {% if modo_tableta %}Tabletas{% else %}Punto de venta{% endif %}</title>
   <link rel="icon" href="{% static 'ventas/brand/logoactual.jpeg' %}" type="image/jpeg">
   <link rel="manifest" href="{% url 'ventas:manifest' %}{% if modo_tableta %}?modo=tableta{% endif %}">
-  <link rel="stylesheet" href="{% static 'ventas/app.css' %}">
+  <link rel="stylesheet" href="{% static 'ventas/app.css' %}?v={{ asset_version }}">
 </head>
 <body class="{% if modo_tableta %}modo-tableta{% endif %}" data-modo-tableta="{{ modo_tableta|yesno:'true,false' }}">
   <form class="csrf-holder">{% csrf_token %}</form>
@@ -48,16 +48,16 @@
   {% endif %}
 
   <main{% if not modo_tableta %} class="oculto"{% endif %}>
-    {% if modo_tableta %}
-      <div class="controles-tableta">
-        <button id="pantalla-completa" class="control-operacion pantalla-completa" type="button" aria-label="Abrir pantalla completa" title="Pantalla completa">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
-        </button>
+    <div class="controles-tableta{% if not modo_tableta %} controles-escritorio{% endif %}">
+      <button id="pantalla-completa" class="control-operacion pantalla-completa" type="button" aria-label="Abrir pantalla completa" title="Pantalla completa">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+      </button>
+      {% if modo_tableta %}
         <button id="salir-tableta" class="control-operacion salir-tableta" type="button" aria-label="Salir de pantalla completa" title="Salir">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></svg><span>Salir</span>
         </button>
-      </div>
-    {% endif %}
+      {% endif %}
+    </div>
     <section id="vista-posiciones" class="vista-posiciones">
       {% if not modo_tableta %}
         <div class="canales-fila">
@@ -84,6 +84,18 @@
       <div class="ticket-top">
         <button id="volver" class="boton icono" type="button" aria-label="Volver">←</button>
         <h1><span id="ticket-mesa">Mesa</span> <small>· Ticket <b id="ticket-folio">—</b></small></h1>
+        <div id="ticket-switches" class="ticket-switches oculto" aria-label="Opciones de la orden">
+          <label class="switch-operacion" title="Cambiar entre mesa/llevar o domicilio/recoger">
+            <small id="tipo-pedido-etiqueta">Tipo</small>
+            <input id="switch-tipo-pedido" type="checkbox">
+            <span aria-hidden="true"><i></i></span>
+          </label>
+          <label class="switch-operacion" title="Cambiar entre captura normal y captura por nombres">
+            <small id="modo-nombres-etiqueta">Normal</small>
+            <input id="switch-modo-nombres" type="checkbox">
+            <span aria-hidden="true"><i></i></span>
+          </label>
+        </div>
         {% if not modo_tableta %}
           <button class="boton salir-mesero" data-salir-mesero type="button" aria-label="Salir del modo mesero">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></svg>
@@ -95,6 +107,10 @@
       <div class="flujo-ticket">
         <aside class="panel-personas">
           <p class="eyebrow">Comensal</p>
+          <label id="nombre-persona-panel" class="nombre-persona-panel oculto">
+            <span>Nombre <b id="nombre-persona-numero">1</b></span>
+            <input id="nombre-persona" maxlength="60" autocomplete="off" placeholder="Escribe y presiona Enter">
+          </label>
           <div id="personas" class="personas"></div>
         </aside>
 
@@ -128,6 +144,18 @@
                   <input id="paga-con" type="number" min="1" step="1" inputmode="numeric" placeholder="$">
                 </label>
               </div>
+              <label class="campo-ancho campo-comentario-especial">Comentarios especiales
+                <textarea id="comentario" rows="2" maxlength="500" placeholder="Indicaciones especiales para preparación"></textarea>
+              </label>
+            <section id="datos-servicio-directo" class="datos-servicio-directo oculto" aria-label="Datos del cliente">
+              <div><p class="eyebrow" id="servicio-directo-eyebrow">Pedido</p><strong id="servicio-directo-titulo">Datos del cliente</strong></div>
+              <label>Nombre
+                <input id="cliente-directo-nombre" maxlength="180" autocomplete="name" placeholder="Nombre para la comanda">
+              </label>
+              <label id="cliente-directo-telefono-label">Celular
+                <input id="cliente-directo-telefono" maxlength="30" inputmode="tel" autocomplete="tel" placeholder="Celular">
+              </label>
+            </section>
             <section id="datos-cliente" class="datos-cliente oculto" aria-label="Cliente de domicilio">
               <div class="cliente-titulo">
                 <div><p class="eyebrow">Entrega a domicilio</p><strong>Cliente y dirección</strong></div>
@@ -166,7 +194,7 @@
         <label class="opcion-pago"><input type="radio" name="forma_pago" value="efectivo" checked><span>Efectivo</span></label>
         <label class="opcion-pago"><input type="radio" name="forma_pago" value="tarjeta"><span>Tarjeta</span></label>
       </fieldset>
-      <fieldset class="opciones-impresion">
+      <fieldset id="opciones-impresion" class="opciones-impresion">
         <legend>Ticket de cuenta</legend>
         <label class="opcion-pago"><input type="radio" name="imprimir_ticket" value="si" checked><span>Sí, imprimir</span></label>
         <label class="opcion-pago"><input type="radio" name="imprimir_ticket" value="no"><span>No imprimir</span></label>
@@ -215,6 +243,6 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   {{ productos|json_script:"datos-productos" }}
   {{ posiciones|json_script:"datos-posiciones" }}
-  <script src="{% static 'ventas/app.js' %}" defer></script>
+  <script src="{% static 'ventas/app.js' %}?v={{ asset_version }}" defer></script>
 </body>
 </html>

@@ -36,8 +36,10 @@ from .services import (
     alternar_modificador,
     cobrar_ticket,
     cancelar_ticket,
+    convertir_tipo_ticket,
     procesar_ticket,
     registrar_evento,
+    validar_limite_productos_por_nombre,
 )
 
 
@@ -47,6 +49,10 @@ OPCIONES_SALSA = {
     "Limón", "Morada", "Serrano", "Cilantro", "Cacahuate", "Chipotle", "Mexicana",
     "Verde Tomate", "Habanero", "Roja Taquera",
 }
+
+# Cambiar este valor obliga a las terminales y tabletas instaladas a descargar
+# los recursos de interfaz de esta entrega, incluso si conservan una caché PWA.
+ASSET_VERSION = "20260823-1"
 
 
 def _sucursal():
@@ -140,6 +146,7 @@ def _ticket_payload(ticket):
         "canal": ticket.canal,
         "mesa_id": str(ticket.mesa_id),
         "mesa": ticket.mesa.nombre,
+        "posicion_numero": ticket.mesa.orden,
         "total": str(ticket.total),
         "creado_en": ticket.creado_en.isoformat(),
         "comentario_general": ticket.comentario_general,
@@ -149,6 +156,8 @@ def _ticket_payload(ticket):
         "entrega_aproximada": ticket.entrega_aproximada.strftime("%H:%M") if ticket.entrega_aproximada else "",
         "terminal": ticket.terminal,
         "paga_con": str(ticket.paga_con) if ticket.paga_con is not None else "",
+        "captura_por_nombres": ticket.captura_por_nombres,
+        "nombres_comensales": ticket.nombres_comensales,
         "promocion_pendiente_id": pendientes[0] if pendientes else "",
         "promociones_pendientes": pendientes,
         "cliente": cliente,
@@ -194,6 +203,7 @@ def _inicio(request, modo_tableta=False):
             "productos": productos,
             "posiciones": posiciones,
             "modo_tableta": modo_tableta,
+            "asset_version": ASSET_VERSION,
         },
     )
 
@@ -251,14 +261,43 @@ def api_ticket(request, ticket_id):
                 raise ErrorVenta("La orden ya fue procesada.")
             if "comentario_general" in datos:
                 ticket.comentario_general = str(datos["comentario_general"]).strip()
-                ticket.comentarios_generales = (
-                    [{"codigo": "LIBRE", "nombre": ticket.comentario_general}]
-                    if ticket.comentario_general else []
-                )
+            if "captura_por_nombres" in datos:
+                if ticket.canal not in {
+                    Mesa.Canal.COMEDOR,
+                    Mesa.Canal.LLEVAR,
+                    Mesa.Canal.DOMICILIO,
+                    Mesa.Canal.RECOGER,
+                }:
+                    raise ErrorVenta("Este tipo de orden no admite captura por nombres.")
+                ticket.captura_por_nombres = bool(datos["captura_por_nombres"])
+                validar_limite_productos_por_nombre(ticket)
+            if "nombres_comensales" in datos:
+                nombres = datos["nombres_comensales"]
+                if not isinstance(nombres, dict):
+                    raise ErrorVenta("La lista de nombres no es válida.")
+                nombres_limpios = {}
+                for clave, valor in nombres.items():
+                    numero = int(clave)
+                    nombre = str(valor).strip()[:60]
+                    if not 1 <= numero <= 24:
+                        raise ErrorVenta("El número de persona está fuera de rango.")
+                    if nombre:
+                        nombres_limpios[str(numero)] = nombre
+                ticket.nombres_comensales = nombres_limpios
+            if "cliente_nombre" in datos or "cliente_telefono" in datos:
+                if ticket.canal not in {Mesa.Canal.RECOGER, Mesa.Canal.LLEVAR}:
+                    raise ErrorVenta("Los datos directos de cliente sólo aplican a recoger o llevar.")
+                if "cliente_nombre" in datos:
+                    ticket.cliente_nombre = str(datos["cliente_nombre"]).strip()[:180]
+                if "cliente_telefono" in datos:
+                    ticket.cliente_telefono = str(datos["cliente_telefono"]).strip()[:30]
             if "contacto_pedido_nombre" in datos:
                 ticket.contacto_pedido_nombre = str(datos["contacto_pedido_nombre"]).strip()[:180]
             if "contacto_pedido_telefono" in datos:
                 ticket.contacto_pedido_telefono = str(datos["contacto_pedido_telefono"]).strip()[:30]
+            if not ticket.cliente_id or not ticket.cliente.comentarios_multiples:
+                ticket.contacto_pedido_nombre = ""
+                ticket.contacto_pedido_telefono = ""
             if ticket.contacto_pedido_telefono and len(normalizar_telefono(ticket.contacto_pedido_telefono)) < 7:
                 raise ErrorVenta("El teléfono del contacto debe contener al menos 7 dígitos.")
             if "tipo_entrega" in datos:
@@ -384,6 +423,10 @@ def api_ticket_cliente(request, ticket_id):
             ticket.cliente_telefono = telefono.numero if telefono else ""
             ticket.cliente_domicilio = domicilio.texto_completo
             ticket.cliente_referencia = domicilio.referencia
+            # El contacto pertenece exclusivamente al pedido actual. Nunca debe
+            # sobrevivir al cambio o a la nueva selección de una empresa.
+            ticket.contacto_pedido_nombre = ""
+            ticket.contacto_pedido_telefono = ""
         ticket.save()
         registrar_evento(
             ticket,
@@ -393,6 +436,17 @@ def api_ticket_cliente(request, ticket_id):
         return JsonResponse({"ticket": _ticket_payload(ticket)})
     except (Cliente.DoesNotExist, TelefonoCliente.DoesNotExist, DomicilioCliente.DoesNotExist):
         return JsonResponse({"error": "El cliente, teléfono o domicilio seleccionado ya no está disponible."}, status=400)
+    except ErrorVenta as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+
+@require_POST
+def api_convertir_ticket(request, ticket_id):
+    try:
+        ticket = _ticket(ticket_id)
+        canal_destino = str(_json(request).get("canal", ""))
+        ticket = convertir_tipo_ticket(ticket, canal_destino)
+        return JsonResponse({"ticket": _ticket_payload(ticket)})
     except ErrorVenta as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
@@ -505,11 +559,8 @@ def api_cobrar(request, ticket_id):
             raise ErrorVenta("Forma de pago inválida.")
         recibido = datos.get("importe_recibido")
         ticket = cobrar_ticket(_ticket(ticket_id), forma, Decimal(str(recibido)) if recibido not in (None, "") else None)
-        trabajos = (
-            encolar_impresiones(ticket, TrabajoImpresion.Formato.CUENTA)
-            if bool(datos.get("imprimir_ticket", True))
-            else []
-        )
+        imprimir_ticket = bool(datos.get("imprimir_ticket", True)) and ticket.canal != Mesa.Canal.RECOGER
+        trabajos = encolar_impresiones(ticket, TrabajoImpresion.Formato.CUENTA) if imprimir_ticket else []
         return JsonResponse({"ticket": _ticket_payload(ticket), "impresiones": _trabajos_payload(trabajos)})
     except (ErrorVenta, InvalidOperation) as exc:
         return JsonResponse({"error": str(exc)}, status=400)
@@ -531,6 +582,8 @@ def api_imprimir(request, ticket_id):
         formato = _json(request).get("formato", "cuenta")
         if formato not in TrabajoImpresion.Formato.values:
             raise ErrorVenta("Formato de impresión inválido.")
+        if ticket.canal == Mesa.Canal.RECOGER and formato != TrabajoImpresion.Formato.COMANDA:
+            raise ErrorVenta("Los pedidos para recoger sólo imprimen comanda.")
         trabajos = encolar_impresiones(ticket, formato)
         return JsonResponse({"impresiones": _trabajos_payload(trabajos)})
     except ErrorVenta as exc:
@@ -560,9 +613,9 @@ def manifest(request):
 
 
 def service_worker(request):
-    codigo = """const CACHE='tocayos-pos-v7';
-self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(['/static/ventas/app.css','/static/ventas/app.js','/static/ventas/brand/logoactual.jpeg','/static/ventas/fonts/Montserrat-Medium.ttf','/static/ventas/fonts/Montserrat-SemiBold.ttf']))));
+    codigo = """const CACHE='tocayos-pos-v9';
+self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(['/static/ventas/app.css?v=20260823-1','/static/ventas/app.js?v=20260823-1','/static/ventas/brand/logoactual.jpeg','/static/ventas/fonts/Montserrat-Medium.ttf','/static/ventas/fonts/Montserrat-SemiBold.ttf']))));
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))));
 self.addEventListener('fetch', e => { if (e.request.method === 'GET') e.respondWith(fetch(e.request).catch(() => caches.match(e.request))); });
 """
-    return HttpResponse(codigo, content_type="application/javascript")
+    return HttpResponse(codigo, content_type="application/javascript", headers={"Cache-Control": "no-cache"})

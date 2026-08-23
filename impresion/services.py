@@ -14,7 +14,7 @@ def encolar_impresiones(ticket, formato):
         destinos = [TrabajoImpresion.Destino.CAJA]
     else:
         productos = list(ticket.partidas.select_related("producto__categoria").all())
-        if ticket.canal in {"comedor", "domicilio"} and productos:
+        if ticket.canal in {"comedor", "llevar", "domicilio", "recoger"} and productos:
             destinos.append(TrabajoImpresion.Destino.COCINA)
         else:
             if any(p.producto.destino_impresion == "cocina" for p in productos):

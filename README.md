@@ -29,6 +29,23 @@ py -m venv .venv
 
 La configuración local usa SQLite para facilitar la prueba. Docker usa PostgreSQL 16.
 
+## Aplicación de escritorio para Windows
+
+La carpeta `desktop/` contiene un ejecutable ligero que abre el punto de venta como una
+aplicación independiente, sin pestañas ni barra de direcciones. Reutiliza el frontend y
+el servidor local existentes; no requiere Docker ni conexión a un VPS.
+
+```powershell
+.\desktop\build.ps1
+.\desktop\dist\TocayosPOS.exe
+```
+
+El modo táctil se abre con `TocayosPOS.exe --tableta`. Consulta
+`desktop/README.md` para configurar un servidor de red o iniciar sólo el servicio.
+
+El diagnóstico técnico de la fase local y los riesgos pendientes antes de un piloto
+multiusuario están en `diagnostico_calidad_pos_local.md`.
+
 ## Captura en tabletas
 
 Abre `http://localhost:8000/tabletas/` para mostrar únicamente las 24 mesas de comedor

@@ -17,6 +17,7 @@ urlpatterns = [
     path("api/tickets/abrir/", views.api_abrir_ticket, name="api_abrir_ticket"),
     path("api/tickets/<uuid:ticket_id>/", views.api_ticket, name="api_ticket"),
     path("api/tickets/<uuid:ticket_id>/cliente/", views.api_ticket_cliente, name="api_ticket_cliente"),
+    path("api/tickets/<uuid:ticket_id>/convertir/", views.api_convertir_ticket, name="api_convertir_ticket"),
     path("api/tickets/<uuid:ticket_id>/partidas/", views.api_agregar_partida, name="api_agregar_partida"),
     path("api/tickets/<uuid:ticket_id>/partidas/ajustar/", views.api_ajustar_partidas, name="api_ajustar_partidas"),
     path("api/partidas/<uuid:partida_id>/", views.api_partida, name="api_partida"),

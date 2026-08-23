@@ -6,3 +6,7 @@ __pycache__/
 media/impresiones/
 staticfiles/
 .pytest_cache/
+desktop/logs/
+desktop/build/
+desktop/dist/
+desktop/release/

@@ -136,6 +136,17 @@ class Command(BaseCommand):
                 clave=f"DOM-{numero}",
                 defaults={"nombre": f"Dom. # {numero}", "orden": numero},
             )
+        for canal, prefijo, etiqueta in (
+            (Mesa.Canal.RECOGER, "REC", "Recoger"),
+            (Mesa.Canal.LLEVAR, "LLEV", "Llevar"),
+        ):
+            for numero in range(1, 13):
+                Mesa.objects.get_or_create(
+                    sucursal=sucursal,
+                    canal=canal,
+                    clave=f"{prefijo}-{numero}",
+                    defaults={"nombre": f"{etiqueta} {numero}", "orden": numero},
+                )
         for orden, nombre in enumerate(SUCURSALES_DESTINO, 1):
             Mesa.objects.get_or_create(
                 sucursal=sucursal,
@@ -178,4 +189,7 @@ class Command(BaseCommand):
             )
 
         activos = Producto.objects.filter(sucursal=sucursal, activo=True).count()
-        self.stdout.write(self.style.SUCCESS(f"Datos iniciales listos: {activos} productos activos y 45 posiciones."))
+        posiciones = Mesa.objects.filter(sucursal=sucursal, activa=True).count()
+        self.stdout.write(
+            self.style.SUCCESS(f"Datos iniciales listos: {activos} productos activos y {posiciones} posiciones.")
+        )

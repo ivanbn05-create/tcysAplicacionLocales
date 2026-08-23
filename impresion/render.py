@@ -9,7 +9,7 @@ from django.conf import settings
 from django.utils import timezone
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
-from ventas.orden import ordenar_partidas
+from ventas.orden import PRODUCTOS_SIEMPRE_AL_FINAL, ordenar_partidas
 from ventas.promociones import configuracion_promocion
 
 
@@ -122,7 +122,10 @@ def _partidas_destino(ticket, destino):
             p
             for p in partidas
             if p.producto.categoria.nombre.lower() not in {"extras", "bebidas"}
-            and (ticket.canal in {"comedor", "domicilio"} or p.producto.destino_impresion == "cocina")
+            and (
+                ticket.canal in {"comedor", "llevar", "domicilio", "recoger"}
+                or p.producto.destino_impresion == "cocina"
+            )
         ]
     if destino == "barra":
         return [p for p in partidas if p.producto.destino_impresion == "barra"]
@@ -155,29 +158,202 @@ def _texto_salsas(ticket):
     return " * ".join(grupos)
 
 
+def _identificador_ticket(ticket):
+    if ticket.canal == "domicilio":
+        return f"Ticket: {ticket.folio}, {ticket.mesa.orden}"
+    if ticket.canal == "recoger":
+        return f"Ticket: {ticket.folio}, R{ticket.mesa.orden}"
+    return f"Ticket: {ticket.folio}"
+
+
+def _contacto_pedido(ticket):
+    if (
+        ticket.canal != "domicilio"
+        or not ticket.cliente_id
+        or not ticket.cliente.comentarios_multiples
+    ):
+        return "", ""
+    return ticket.contacto_pedido_nombre, ticket.contacto_pedido_telefono
+
+
+def _agrupar_partidas_total(ticket):
+    """Agrupa conceptos idénticos para los tickets de cuenta y domicilio."""
+    partidas = [
+        partida
+        for partida in ordenar_partidas(ticket.partidas.select_related("producto__categoria").all())
+        if not partida.promocion_aplicada_id
+    ]
+    agrupadas = {}
+    for partida in partidas:
+        clave = (partida.producto_id, partida.termino, partida.nombre_producto)
+        if clave not in agrupadas:
+            agrupadas[clave] = {
+                "nombre": partida.nombre_producto,
+                "cantidad": Decimal("0"),
+                "precio_unitario": Decimal("0"),
+                "importe": Decimal("0"),
+                "comensales": set(),
+            }
+        fila = agrupadas[clave]
+        fila["cantidad"] += partida.cantidad
+        fila["importe"] += partida.importe
+        fila["comensales"].add(partida.comensal)
+    for fila in agrupadas.values():
+        # Si el mismo concepto conserva precios históricos distintos, el ticket
+        # sigue mostrando una sola cantidad y un solo importe. La columna de
+        # precio unitario refleja el promedio efectivo de ese renglón.
+        if fila["cantidad"]:
+            fila["precio_unitario"] = fila["importe"] / fila["cantidad"]
+    return list(agrupadas.values())
+
+
+def _datos_comanda_por_nombres(ticket):
+    partidas = [
+        partida
+        for partida in ordenar_partidas(ticket.partidas.select_related("producto__categoria").all())
+        if not configuracion_promocion(partida.producto)
+    ]
+    principales, complementos = [], []
+    for partida in partidas:
+        if (
+            partida.producto.codigo.upper() in PRODUCTOS_SIEMPRE_AL_FINAL
+            or partida.producto.categoria.nombre.lower() == "bebidas"
+        ):
+            complementos.append(partida)
+        else:
+            principales.append(partida)
+
+    columnas = []
+    for partida in principales:
+        clave = (partida.producto_id, partida.termino)
+        if not any(columna and columna["clave"] == clave for columna in columnas):
+            columnas.append({"clave": clave, "nombre": partida.nombre_corto})
+    columnas = columnas[:4]
+    while len(columnas) < 4:
+        columnas.append(None)
+
+    cantidades = defaultdict(lambda: defaultdict(Decimal))
+    for partida in principales:
+        cantidades[partida.comensal][(partida.producto_id, partida.termino)] += partida.cantidad
+    modificaciones = defaultdict(list)
+    for modificador in ticket.modificadores.all():
+        modificaciones[modificador.comensal].append(modificador.codigo)
+
+    nombres = ticket.nombres_comensales or {}
+    personas = sorted({partida.comensal for partida in partidas} | {int(clave) for clave in nombres if str(clave).isdigit()})
+    filas = [
+        {
+            "persona": persona,
+            "nombre": str(nombres.get(str(persona), "")).strip() or f"PERSONA {persona}",
+            "modificadores": " ".join(modificaciones.get(persona, [])),
+            "cantidades": [cantidades[persona].get(columna["clave"]) if columna else None for columna in columnas],
+        }
+        for persona in personas
+    ]
+
+    extras_por_persona = defaultdict(lambda: defaultdict(Decimal))
+    for partida in complementos:
+        extras_por_persona[partida.comensal][partida.nombre_corto] += partida.cantidad
+    extras = [
+        {
+            "persona": persona,
+            "nombre": str(nombres.get(str(persona), "")).strip() or f"PERSONA {persona}",
+            "conceptos": conceptos,
+        }
+        for persona, conceptos in sorted(extras_por_persona.items())
+    ]
+    return {"columnas": columnas, "filas": filas, "extras": extras}
+
+
+def _dibujar_comanda_por_nombres(draw, y, ticket):
+    datos = _datos_comanda_por_nombres(ticket)
+    f_encabezado = fuente(18, negrita=True)
+    f_nombre = fuente(21, negrita=True)
+    f_modificador = fuente(15)
+    f_cantidad = fuente(28, negrita=True)
+    f_extras = fuente(23, negrita=True)
+    ancho_nombre = 190
+    ancho_producto = (ANCHO - MARGEN * 2 - ancho_nombre) / 4
+
+    alto_encabezado = 62
+    draw.rectangle((MARGEN, y, ANCHO - MARGEN, y + alto_encabezado), outline=0, width=2)
+    draw.text((MARGEN + 7, y + 19), "NOMBRE", font=f_encabezado, fill=0)
+    for indice, columna in enumerate(datos["columnas"]):
+        x = MARGEN + ancho_nombre + ancho_producto * indice
+        draw.line((x, y, x, y + alto_encabezado), fill=0, width=2)
+        texto = columna["nombre"] if columna else ""
+        lineas = _ajustar(draw, texto, f_encabezado, ancho_producto - 8)[:2]
+        linea_y = y + max(5, (alto_encabezado - len(lineas) * 22) // 2)
+        for linea in lineas:
+            draw.text((x + (ancho_producto - _ancho(draw, linea, f_encabezado)) / 2, linea_y), linea, font=f_encabezado, fill=0)
+            linea_y += 22
+    y += alto_encabezado
+
+    generales = " · ".join(item.get("nombre", "") for item in ticket.comentarios_generales or []).upper()
+    if generales:
+        lineas = _ajustar(draw, generales, f_encabezado, ANCHO - MARGEN * 2 - 14)
+        alto = max(44, len(lineas) * 22 + 12)
+        draw.rectangle((MARGEN, y, ANCHO - MARGEN, y + alto), outline=0, width=2)
+        linea_y = y + 6
+        for linea in lineas:
+            _centrado(draw, linea_y, linea, f_encabezado)
+            linea_y += 22
+        y += alto
+
+    for fila in datos["filas"]:
+        alto_fila = 60
+        draw.rectangle((MARGEN, y, ANCHO - MARGEN, y + alto_fila), outline=0, width=1)
+        draw.text((MARGEN + 6, y + 6), fila["nombre"].upper()[:18], font=f_nombre, fill=0)
+        if fila["modificadores"]:
+            draw.text((MARGEN + 7, y + 35), fila["modificadores"][:24], font=f_modificador, fill=0)
+        for indice, valor in enumerate(fila["cantidades"]):
+            x = MARGEN + ancho_nombre + ancho_producto * indice
+            draw.line((x, y, x, y + alto_fila), fill=0, width=1)
+            if valor:
+                texto = _cantidad_matriz(valor)
+                draw.text((x + (ancho_producto - _ancho(draw, texto, f_cantidad)) / 2, y + 13), texto, font=f_cantidad, fill=0)
+        y += alto_fila
+
+    if datos["extras"]:
+        draw.rectangle((MARGEN, y, ANCHO - MARGEN, y + 38), outline=0, width=2)
+        _centrado(draw, y + 7, "CONSOMÉS Y BEBIDAS", f_encabezado)
+        y += 38
+        for extra in datos["extras"]:
+            segmentos = " * ".join(
+                f"{_cantidad_matriz(cantidad)} {nombre.upper()}"
+                for nombre, cantidad in extra["conceptos"].items()
+            )
+            lineas = _ajustar(draw, segmentos, f_extras, ANCHO - MARGEN * 2 - ancho_nombre - 14)
+            alto = max(52, len(lineas) * 28 + 12)
+            draw.rectangle((MARGEN, y, ANCHO - MARGEN, y + alto), outline=0, width=1)
+            draw.line((MARGEN + ancho_nombre, y, MARGEN + ancho_nombre, y + alto), fill=0, width=1)
+            draw.text((MARGEN + 6, y + 12), extra["nombre"].upper()[:18], font=f_nombre, fill=0)
+            linea_y = y + 6
+            for linea in lineas:
+                draw.text((MARGEN + ancho_nombre + 7, linea_y), linea, font=f_extras, fill=0)
+                linea_y += 28
+            y += alto
+    return y + 24
+
+
 def render_comanda(ticket, destino):
     partidas_destino = ordenar_partidas(_partidas_destino(ticket, destino))
-    promociones = [
-        partida for partida in partidas_destino
-        if configuracion_promocion(partida.producto) and not partida.promocion_aplicada_id
-    ]
+    # La fila de promociones sólo es una ayuda de captura en la comanda virtual.
+    # En cocina se imprimen exclusivamente los productos que la componen.
     partidas = [partida for partida in partidas_destino if not configuracion_promocion(partida.producto)]
     bebidas = (
         list(ticket.partidas.select_related("producto__categoria").filter(producto__categoria__nombre__iexact="Bebidas"))
-        if destino == "cocina" and ticket.canal in {"comedor", "domicilio"}
+        if destino == "cocina" and ticket.canal in {"comedor", "llevar", "domicilio", "recoger"}
         else []
     )
     modificadores = list(ticket.modificadores.all())
-    ultimo_comensal = max(
-        [p.comensal for p in partidas + promociones] + [m.comensal for m in modificadores] + [1]
-    )
+    ultimo_comensal = max([p.comensal for p in partidas] + [m.comensal for m in modificadores] + [1])
     bloques = max(1, min(4, (ultimo_comensal + 5) // 6))
     bebidas_agrupadas = defaultdict(Decimal)
     for bebida in ordenar_partidas(bebidas):
         bebidas_agrupadas[bebida.nombre_corto] += bebida.cantidad
-    contacto_pedido = " ".join(
-        parte for parte in [ticket.contacto_pedido_nombre, ticket.contacto_pedido_telefono] if parte
-    )
+    contacto_nombre, contacto_telefono = _contacto_pedido(ticket)
+    contacto_pedido = " ".join(parte for parte in [contacto_nombre, contacto_telefono] if parte)
     imagen = Image.new("L", (ANCHO, 6000), 255)
     draw = ImageDraw.Draw(imagen)
     f_titulo = fuente(30, cursiva=True)
@@ -186,6 +362,7 @@ def render_comanda(ticket, destino):
     f_total = f_bold
     f_tabla = fuente(25)
     f_tabla_bold = fuente(25, negrita=True)
+    f_matriz_numero = fuente(30, negrita=True)
     f_chico = fuente(21)
     f_bebidas = fuente(29, negrita=True)
 
@@ -197,21 +374,31 @@ def render_comanda(ticket, destino):
     draw.line(((ANCHO - ancho_titulo) / 2, y, (ANCHO + ancho_titulo) / 2, y), fill=0, width=2)
     local = timezone.localtime(ticket.creado_en)
     y += 12
-    if ticket.canal == "domicilio":
+    if ticket.canal in {"domicilio", "recoger"}:
         draw.text((MARGEN, y), local.strftime("%d/%m/%Y"), font=f_normal, fill=0)
-        _derecha(draw, y, f"Ticket: {ticket.folio}", f_bold)
+        _derecha(draw, y, _identificador_ticket(ticket), f_bold)
         y += 35
         draw.text((MARGEN, y), _texto_entrega(ticket), font=f_normal, fill=0)
         _derecha(draw, y, f"${ticket.total:,.2f}", f_total)
         y += 43
-    elif ticket.canal == "comedor":
+        if ticket.canal == "recoger":
+            contacto = " · ".join(parte for parte in [ticket.cliente_nombre, ticket.cliente_telefono] if parte)
+            for linea in _ajustar(draw, f"RECOGER: {contacto}".upper(), f_bold, ANCHO - MARGEN * 2):
+                _centrado(draw, y, linea, f_bold)
+                y += 34
+            y += 5
+    elif ticket.canal in {"comedor", "llevar"}:
         draw.text((MARGEN, y), f"{local.strftime('%d/%m/%Y')} {_hora_corta(local)}", font=f_normal, fill=0)
-        y += 34
-        draw.text((MARGEN, y), f"Ticket: {ticket.folio}", font=f_bold, fill=0)
         _derecha(draw, y, ticket.mesa.nombre, f_bold)
-        y += 36
+        y += 38
+        draw.text((MARGEN, y), _identificador_ticket(ticket), font=f_bold, fill=0)
         _derecha(draw, y, f"${ticket.total:,.2f}", f_total)
-        y += 42
+        y += 46
+        if ticket.canal == "llevar":
+            for linea in _ajustar(draw, f"LLEVAR: {ticket.cliente_nombre}".upper(), f_bold, ANCHO - MARGEN * 2):
+                _centrado(draw, y, linea, f_bold)
+                y += 34
+            y += 5
     else:
         draw.text((MARGEN, y), f"{local.strftime('%d/%m/%Y')} {_hora_corta(local)}", font=f_normal, fill=0)
         _derecha(draw, y, f"Ticket: {ticket.folio}", f_bold)
@@ -222,81 +409,72 @@ def render_comanda(ticket, destino):
         _centrado(draw, y, destino.upper(), f_chico)
         y += 32
 
-    agrupadas = {}
-    for partida in partidas:
-        clave = (partida.producto_id, partida.termino)
-        if clave not in agrupadas:
-            agrupadas[clave] = {"nombre": partida.nombre_corto, "cantidades": defaultdict(Decimal), "promocion": False}
-        agrupadas[clave]["cantidades"][partida.comensal] += partida.cantidad
-    promociones_agrupadas = {}
-    for promocion in promociones:
-        if promocion.producto_id not in promociones_agrupadas:
-            promociones_agrupadas[promocion.producto_id] = {
-                "nombre": promocion.producto.codigo,
-                "cantidades": defaultdict(Decimal),
-                "promocion": True,
-            }
-        promociones_agrupadas[promocion.producto_id]["cantidades"][promocion.comensal] += promocion.cantidad
-    mods_por_persona = defaultdict(list)
-    for modificador in modificadores:
-        mods_por_persona[modificador.comensal].append(modificador.codigo)
+    if ticket.captura_por_nombres:
+        y = _dibujar_comanda_por_nombres(draw, y, ticket)
+    else:
+        agrupadas = {}
+        for partida in partidas:
+            clave = (partida.producto_id, partida.termino)
+            if clave not in agrupadas:
+                agrupadas[clave] = {"nombre": partida.nombre_corto, "cantidades": defaultdict(Decimal)}
+            agrupadas[clave]["cantidades"][partida.comensal] += partida.cantidad
+        mods_por_persona = defaultdict(list)
+        for modificador in modificadores:
+            mods_por_persona[modificador.comensal].append(modificador.codigo)
 
-    for bloque in range(bloques):
-        inicio = bloque * 6 + 1
-        personas = list(range(inicio, inicio + 6))
-        etiqueta = 132
-        celda = (ANCHO - MARGEN * 2 - etiqueta) / 6
-        arriba = y
-        draw.line((MARGEN, arriba, ANCHO - MARGEN, arriba), fill=0, width=4)
-        x0 = MARGEN + etiqueta
-        for indice, persona in enumerate(personas):
-            x = x0 + celda * indice
-            draw.rectangle((x, arriba, x + celda, arriba + 44), outline=0, width=3)
-            texto = str(persona)
-            draw.text((x + (celda - _ancho(draw, texto, f_tabla_bold)) / 2, arriba + 8), texto, font=f_tabla_bold, fill=0)
-        y = arriba + 44
-        comentarios_generales = ticket.comentarios_generales or []
-        if comentarios_generales:
-            texto_general = " · ".join(item.get("nombre", "") for item in comentarios_generales).upper()
-            lineas_general = _ajustar(draw, texto_general, f_tabla_bold, ANCHO - MARGEN * 2 - 12)
-            alto_comentario = max(42, len(lineas_general) * 30 + 8)
-            draw.rectangle((MARGEN, y, ANCHO - MARGEN, y + alto_comentario), outline=0, width=3)
-            linea_y = y + 6
-            for linea in lineas_general:
-                _centrado(draw, linea_y, linea, f_tabla_bold)
-                linea_y += 30
-            y += alto_comentario
-        else:
-            hay_comentarios = any(mods_por_persona.get(persona) for persona in personas)
-            if hay_comentarios:
-                alto_comentario = 34
-                draw.line((MARGEN, y + alto_comentario, ANCHO - MARGEN, y + alto_comentario), fill=0, width=3)
-                for indice, persona in enumerate(personas):
-                    x = x0 + celda * indice
-                    draw.line((x, y, x, y + alto_comentario), fill=0, width=3)
-                    mods = " ".join(mods_por_persona.get(persona, []))
-                    for linea in _ajustar(draw, mods, f_chico, celda - 8)[:1]:
-                        draw.text((x + 4, y + 4), linea, font=f_chico, fill=0)
-                draw.line((ANCHO - MARGEN, y, ANCHO - MARGEN, y + alto_comentario), fill=0, width=3)
-                y += alto_comentario
-            else:
-                draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
-
-        for fila in [*promociones_agrupadas.values(), *agrupadas.values()]:
-            draw.text((MARGEN, y + 6), fila["nombre"], font=f_tabla, fill=0)
+        for bloque in range(bloques):
+            inicio = bloque * 6 + 1
+            personas = list(range(inicio, inicio + 6))
+            etiqueta = 132
+            celda = (ANCHO - MARGEN * 2 - etiqueta) / 6
+            arriba = y
+            draw.line((MARGEN, arriba, ANCHO - MARGEN, arriba), fill=0, width=3)
+            x0 = MARGEN + etiqueta
             for indice, persona in enumerate(personas):
                 x = x0 + celda * indice
-                draw.line((x, y, x, y + 42), fill=0, width=3)
-                valor = fila["cantidades"].get(persona)
-                if valor:
-                    texto = "P" if fila["promocion"] and valor == 1 else (
-                        f"{_cantidad_matriz(valor)}P" if fila["promocion"] else _cantidad_matriz(valor)
-                    )
-                    draw.text((x + (celda - _ancho(draw, texto, f_tabla_bold)) / 2, y + 6), texto, font=f_tabla_bold, fill=0)
-            draw.line((ANCHO - MARGEN, y, ANCHO - MARGEN, y + 42), fill=0, width=3)
-            draw.line((MARGEN, y + 42, ANCHO - MARGEN, y + 42), fill=0, width=3)
-            y += 42
-        y += 16
+                draw.rectangle((x, arriba, x + celda, arriba + 48), outline=0, width=2)
+                texto = str(persona)
+                draw.text((x + (celda - _ancho(draw, texto, f_matriz_numero)) / 2, arriba + 6), texto, font=f_matriz_numero, fill=0)
+            y = arriba + 48
+            comentarios_generales = ticket.comentarios_generales or []
+            if comentarios_generales:
+                texto_general = " · ".join(item.get("nombre", "") for item in comentarios_generales).upper()
+                lineas_general = _ajustar(draw, texto_general, f_tabla_bold, ANCHO - MARGEN * 2 - 12)
+                alto_comentario = max(78, len(lineas_general) * 30 + 14)
+                draw.rectangle((MARGEN, y, ANCHO - MARGEN, y + alto_comentario), outline=0, width=2)
+                linea_y = y + max(7, (alto_comentario - len(lineas_general) * 30) // 2)
+                for linea in lineas_general:
+                    _centrado(draw, linea_y, linea, f_tabla_bold)
+                    linea_y += 30
+                y += alto_comentario
+            else:
+                alto_comentario = 78
+                draw.line((MARGEN, y + alto_comentario, ANCHO - MARGEN, y + alto_comentario), fill=0, width=2)
+                for indice, persona in enumerate(personas):
+                    x = x0 + celda * indice
+                    draw.line((x, y, x, y + alto_comentario), fill=0, width=1)
+                    mods = " ".join(mods_por_persona.get(persona, []))
+                    lineas = _ajustar(draw, mods, f_chico, celda - 8)[:2]
+                    linea_y = y + 9
+                    for linea in lineas:
+                        draw.text((x + 4, linea_y), linea, font=f_chico, fill=0)
+                        linea_y += 28
+                draw.line((ANCHO - MARGEN, y, ANCHO - MARGEN, y + alto_comentario), fill=0, width=1)
+                y += alto_comentario
+
+            for fila in agrupadas.values():
+                draw.text((MARGEN, y + 6), fila["nombre"], font=f_tabla, fill=0)
+                for indice, persona in enumerate(personas):
+                    x = x0 + celda * indice
+                    draw.line((x, y, x, y + 46), fill=0, width=1)
+                    valor = fila["cantidades"].get(persona)
+                    if valor:
+                        texto = _cantidad_matriz(valor)
+                        draw.text((x + (celda - _ancho(draw, texto, f_matriz_numero)) / 2, y + 5), texto, font=f_matriz_numero, fill=0)
+                draw.line((ANCHO - MARGEN, y, ANCHO - MARGEN, y + 46), fill=0, width=1)
+                draw.line((MARGEN, y + 46, ANCHO - MARGEN, y + 46), fill=145, width=1)
+                y += 48
+            y += 26
 
     if contacto_pedido:
         draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
@@ -305,14 +483,14 @@ def render_comanda(ticket, destino):
             _centrado(draw, y, linea, f_bold)
             y += 36
 
-    if ticket.comentario_general and not ticket.comentarios_generales:
+    if ticket.comentario_general:
         draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
         y += 16
         for linea in _ajustar(draw, ticket.comentario_general.upper(), f_bold, ANCHO - MARGEN * 2):
             _centrado(draw, y, linea, f_bold)
             y += 36
 
-    if bebidas_agrupadas:
+    if bebidas_agrupadas and not ticket.captura_por_nombres:
         draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
         y += 12
         segmentos = _segmentos_bebidas(bebidas_agrupadas, f_bebidas, f_bebidas)
@@ -326,16 +504,17 @@ def render_comanda(ticket, destino):
         for linea in _ajustar(draw, salsas.upper(), f_bold, ANCHO - MARGEN * 2):
             _centrado(draw, y, linea, f_bold)
             y += 36
+    if ticket.terminal and ticket.canal in {"domicilio", "recoger"}:
+        draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
+        y += 14
+        _centrado(draw, y, "PAGO: T E R M I N A L", f_bold)
+        y += 42
     return imagen.crop((0, 0, ANCHO, min(y + 38, imagen.height))).convert("1")
 
 
 def render_domicilio(ticket):
     """Ticket para el repartidor con cliente, entrega, conceptos e importe a cobrar."""
-    partidas = [
-        partida
-        for partida in ordenar_partidas(ticket.partidas.select_related("producto__categoria").all())
-        if not partida.promocion_aplicada_id
-    ]
+    partidas = _agrupar_partidas_total(ticket)
     imagen = Image.new("L", (ANCHO, max(3000, 1100 + len(partidas) * 115)), 255)
     draw = ImageDraw.Draw(imagen)
     f_logo = fuente(54, negrita=True)
@@ -377,14 +556,12 @@ def render_domicilio(ticket):
     lineas_centradas(f"DOM: {ticket.cliente_domicilio}".upper(), f_bold, 34)
     if ticket.cliente_referencia:
         lineas_centradas(f"REFERENCIA: {ticket.cliente_referencia}".upper(), f_normal, 32)
-    contacto = " ".join(
-        parte for parte in [ticket.contacto_pedido_nombre, ticket.contacto_pedido_telefono] if parte
-    )
-    telefono = ticket.contacto_pedido_telefono or ticket.cliente_telefono
+    contacto_nombre, contacto_telefono = _contacto_pedido(ticket)
+    telefono = contacto_telefono or ticket.cliente_telefono
     if telefono:
         lineas_centradas(f"TEL: {telefono}", f_normal, 32)
-    if ticket.contacto_pedido_nombre:
-        lineas_centradas(f"CONTACTO: {ticket.contacto_pedido_nombre}".upper(), f_normal, 32)
+    if contacto_nombre:
+        lineas_centradas(f"CONTACTO: {contacto_nombre}".upper(), f_normal, 32)
     y += 16
     lineas_centradas(_texto_entrega(ticket, incluir_toma=False).upper(), f_bold, 36)
 
@@ -392,7 +569,7 @@ def render_domicilio(ticket):
     draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
     y += 16
     local = timezone.localtime(ticket.creado_en)
-    draw.text((MARGEN, y), f"Ticket: {ticket.folio}", font=f_bold, fill=0)
+    draw.text((MARGEN, y), _identificador_ticket(ticket), font=f_bold, fill=0)
     _derecha(draw, y, local.strftime("%d/%m/%Y %I:%M %p").lower(), f_bold)
     y += 54
     draw.text((MARGEN, y), "Concepto", font=f_titulo, fill=0)
@@ -403,14 +580,14 @@ def render_domicilio(ticket):
     y += 18
 
     for partida in partidas:
-        lineas = _ajustar(draw, partida.nombre_producto.upper(), f_bold, 325)
+        lineas = _ajustar(draw, partida["nombre"].upper(), f_bold, 325)
         draw.text((MARGEN, y), lineas[0], font=f_bold, fill=0)
-        draw.text((372, y), _cantidad_matriz(partida.cantidad), font=f_cant, fill=0)
-        _derecha(draw, y, f"${partida.precio_unitario:,.2f}", f_normal)
+        draw.text((372, y), _cantidad_matriz(partida["cantidad"]), font=f_cant, fill=0)
+        _derecha(draw, y, f"${partida['precio_unitario']:,.2f}", f_normal)
         y += 34
         if lineas[1:]:
             draw.text((MARGEN, y), " ".join(lineas[1:])[:38], font=f_bold, fill=0)
-        _derecha(draw, y, f"${partida.importe:,.2f}", f_bold)
+        _derecha(draw, y, f"${partida['importe']:,.2f}", f_bold)
         y += 52
 
     draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
@@ -434,11 +611,7 @@ def render_domicilio(ticket):
 
 
 def render_cuenta(ticket):
-    partidas = [
-        partida
-        for partida in ordenar_partidas(ticket.partidas.select_related("producto__categoria").all())
-        if not partida.promocion_aplicada_id
-    ]
+    partidas = _agrupar_partidas_total(ticket)
     alto = 650 + len(partidas) * 96
     imagen = Image.new("L", (ANCHO, max(alto, 1050)), 255)
     draw = ImageDraw.Draw(imagen)
@@ -470,10 +643,18 @@ def render_cuenta(ticket):
     draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
     y += 14
     local = timezone.localtime(ticket.creado_en)
-    draw.text((MARGEN, y), f"Ticket: {ticket.folio}", font=f_bold, fill=0)
+    draw.text((MARGEN, y), _identificador_ticket(ticket), font=f_bold, fill=0)
     _derecha(draw, y, local.strftime("%d/%m/%Y %I:%M %p").lower(), f_bold)
     y += 38
-    draw.text((MARGEN, y), f"Mesa: {ticket.mesa.nombre}", font=f_bold, fill=0)
+    if ticket.canal == "domicilio":
+        posicion = f"Domicilio: {ticket.mesa.orden}"
+    elif ticket.canal == "llevar":
+        posicion = f"Llevar: {ticket.mesa.orden} · {ticket.cliente_nombre}"
+    elif ticket.canal == "recoger":
+        posicion = f"Recoger: {ticket.mesa.orden} · {ticket.cliente_nombre}"
+    else:
+        posicion = f"Mesa: {ticket.mesa.nombre}"
+    draw.text((MARGEN, y), posicion, font=f_bold, fill=0)
     _derecha(draw, y, f"Le atendió: {ticket.atendio.nombre if ticket.atendio else ''}", f_normal)
     y += 70
     draw.text((MARGEN, y), "Concepto", font=f_titulo, fill=0)
@@ -486,15 +667,18 @@ def render_cuenta(ticket):
     for modificador in ticket.modificadores.all():
         mods_por_persona[modificador.comensal].append(modificador.nombre.upper())
     for partida in partidas:
-        lineas = _ajustar(draw, partida.nombre_producto.upper(), f_bold, 325)
+        lineas = _ajustar(draw, partida["nombre"].upper(), f_bold, 325)
         draw.text((MARGEN, y), lineas[0], font=f_bold, fill=0)
-        draw.text((372, y), f"{partida.cantidad:.3f}", font=f_cant, fill=0)
-        _derecha(draw, y, f"${partida.precio_unitario:,.2f}", f_normal)
+        draw.text((372, y), _cantidad_matriz(partida["cantidad"]), font=f_cant, fill=0)
+        _derecha(draw, y, f"${partida['precio_unitario']:,.2f}", f_normal)
         y += 34
-        extras = lineas[1:] + ([" - ".join(mods_por_persona[partida.comensal])] if mods_por_persona[partida.comensal] else [])
+        modificadores_fila = []
+        for comensal in sorted(partida["comensales"]):
+            modificadores_fila.extend(mods_por_persona[comensal])
+        extras = lineas[1:] + ([" - ".join(dict.fromkeys(modificadores_fila))] if modificadores_fila else [])
         if extras:
             draw.text((MARGEN, y), " ".join(extras)[:38], font=f_bold, fill=0)
-        _derecha(draw, y, f"${partida.importe:,.2f}", f_bold)
+        _derecha(draw, y, f"${partida['importe']:,.2f}", f_bold)
         y += 52
     draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
     y += 18

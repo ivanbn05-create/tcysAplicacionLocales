@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.db.models import Q
 
 from catalogo.models import Producto
 from personas.models import Sucursal, UsuarioPOS
@@ -13,7 +14,9 @@ from .normalizacion import normalizar_texto, normalizar_telefono
 class Mesa(models.Model):
     class Canal(models.TextChoices):
         COMEDOR = "comedor", "Comedor"
+        LLEVAR = "llevar", "Llevar"
         DOMICILIO = "domicilio", "Domicilio"
+        RECOGER = "recoger", "Recoger"
         SUCURSALES = "sucursales", "Sucursales"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -198,6 +201,8 @@ class Ticket(models.Model):
     entrega_aproximada = models.TimeField(null=True, blank=True)
     terminal = models.BooleanField(default=False)
     paga_con = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    captura_por_nombres = models.BooleanField(default=False)
+    nombres_comensales = models.JSONField(default=dict, blank=True)
     forma_pago = models.CharField(max_length=12, choices=FormaPago.choices, blank=True)
     importe_recibido = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     creado_en = models.DateTimeField(auto_now_add=True)
@@ -208,7 +213,14 @@ class Ticket(models.Model):
 
     class Meta:
         ordering = ["-creado_en"]
-        constraints = [models.UniqueConstraint(fields=["sucursal", "folio"], name="ticket_folio_sucursal")]
+        constraints = [
+            models.UniqueConstraint(fields=["sucursal", "folio"], name="ticket_folio_sucursal"),
+            models.UniqueConstraint(
+                fields=["mesa"],
+                condition=Q(estado__in=["abierto", "procesado", "cobrar"]),
+                name="ticket_activo_unico_mesa",
+            ),
+        ]
 
     def __str__(self):
         return f"Ticket {self.folio} - {self.mesa.nombre}"
@@ -227,7 +239,7 @@ class Partida(models.Model):
         "self",
         null=True,
         blank=True,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name="componentes_promocion",
     )
     comensal = models.PositiveSmallIntegerField(validators=[MinValueValidator(1), MaxValueValidator(24)])
