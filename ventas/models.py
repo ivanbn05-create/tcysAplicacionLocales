@@ -4,11 +4,86 @@ from decimal import Decimal
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 
 from catalogo.models import Producto
 from personas.models import Sucursal, UsuarioPOS
 
 from .normalizacion import normalizar_texto, normalizar_telefono
+
+
+class SucursalPedido(models.Model):
+    """Sucursal o cliente mayorista que envía pedidos a este local."""
+
+    class Tipo(models.TextChoices):
+        SUCURSAL = "sucursal", "Sucursal"
+        CLIENTE_MAYORISTA = "cliente_mayorista", "Cliente mayorista"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(Sucursal, on_delete=models.CASCADE, related_name="clientes_sucursales")
+    origen_id = models.PositiveIntegerField()
+    nombre = models.CharField(max_length=120)
+    tipo = models.CharField(max_length=24, choices=Tipo.choices)
+    activa = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["tipo", "nombre"]
+        constraints = [
+            models.UniqueConstraint(fields=["sucursal", "origen_id"], name="sucursal_pedido_origen_unico")
+        ]
+
+    def __str__(self):
+        return self.nombre
+
+
+class ProductoSucursal(models.Model):
+    """Catálogo mayorista separado del menú de comedor."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(Sucursal, on_delete=models.CASCADE, related_name="productos_sucursales")
+    origen_id = models.PositiveIntegerField()
+    nombre = models.CharField(max_length=120)
+    nombre_ticket = models.CharField(max_length=40)
+    unidad = models.CharField(max_length=8, default="PZA")
+    cantidad_por_precio = models.DecimalField(max_digits=8, decimal_places=3, default=Decimal("1.000"))
+    orden = models.PositiveSmallIntegerField(default=0)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["orden", "nombre"]
+        constraints = [
+            models.UniqueConstraint(fields=["sucursal", "origen_id"], name="producto_sucursal_origen_unico")
+        ]
+
+    def __str__(self):
+        return self.nombre
+
+    def precio_actual(self, cliente_sucursal, fecha=None):
+        fecha = fecha or timezone.localdate()
+        return (
+            self.precios.filter(cliente_sucursal=cliente_sucursal, vigente_desde__lte=fecha)
+            .order_by("-vigente_desde")
+            .first()
+        )
+
+
+class PrecioProductoSucursal(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(Sucursal, on_delete=models.CASCADE, related_name="precios_productos_sucursales")
+    cliente_sucursal = models.ForeignKey(SucursalPedido, on_delete=models.CASCADE, related_name="precios")
+    producto = models.ForeignKey(ProductoSucursal, on_delete=models.CASCADE, related_name="precios")
+    importe = models.DecimalField(max_digits=10, decimal_places=2)
+    nombre_ticket = models.CharField(max_length=40)
+    vigente_desde = models.DateField()
+
+    class Meta:
+        ordering = ["producto__orden", "-vigente_desde"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["cliente_sucursal", "producto", "vigente_desde"],
+                name="precio_producto_sucursal_fecha_unico",
+            )
+        ]
 
 
 class Mesa(models.Model):
@@ -25,6 +100,13 @@ class Mesa(models.Model):
     clave = models.CharField(max_length=40)
     nombre = models.CharField(max_length=80)
     orden = models.PositiveSmallIntegerField(default=0)
+    cliente_sucursal = models.ForeignKey(
+        SucursalPedido,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="posiciones",
+    )
     activa = models.BooleanField(default=True)
 
     class Meta:
@@ -234,7 +316,14 @@ class Partida(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="partidas")
     ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="partidas")
-    producto = models.ForeignKey(Producto, on_delete=models.PROTECT, related_name="partidas")
+    producto = models.ForeignKey(Producto, null=True, blank=True, on_delete=models.PROTECT, related_name="partidas")
+    producto_sucursal = models.ForeignKey(
+        ProductoSucursal,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="partidas",
+    )
     promocion_aplicada = models.ForeignKey(
         "self",
         null=True,
@@ -245,6 +334,8 @@ class Partida(models.Model):
     comensal = models.PositiveSmallIntegerField(validators=[MinValueValidator(1), MaxValueValidator(24)])
     cantidad = models.DecimalField(max_digits=8, decimal_places=3, default=Decimal("1.000"))
     precio_unitario = models.DecimalField(max_digits=10, decimal_places=2)
+    cantidad_por_precio = models.DecimalField(max_digits=8, decimal_places=3, default=Decimal("1.000"))
+    unidad = models.CharField(max_length=8, blank=True)
     nombre_producto = models.CharField(max_length=180)
     nombre_corto = models.CharField(max_length=24)
     termino = models.CharField(max_length=8, choices=Producto.Termino.choices, blank=True)
@@ -254,10 +345,18 @@ class Partida(models.Model):
 
     class Meta:
         ordering = ["creada_en"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(Q(producto__isnull=False, producto_sucursal__isnull=True)
+                           | Q(producto__isnull=True, producto_sucursal__isnull=False)),
+                name="partida_un_solo_catalogo",
+            )
+        ]
 
     @property
     def importe(self):
-        return self.cantidad * self.precio_unitario
+        divisor = self.cantidad_por_precio or Decimal("1.000")
+        return ((self.cantidad / divisor) * self.precio_unitario).quantize(Decimal("0.01"))
 
 
 class ModificadorTicket(models.Model):
@@ -292,3 +391,24 @@ class EventoOutbox(models.Model):
 
     def __str__(self):
         return f"{self.tipo} · {self.agregado_id}"
+
+
+class PedidoSucursalImportado(models.Model):
+    """Marca idempotente para pedidos confirmados en el sistema web."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(Sucursal, on_delete=models.CASCADE, related_name="pedidos_sucursal_importados")
+    ticket = models.OneToOneField(Ticket, on_delete=models.CASCADE, related_name="importacion_sucursal")
+    origen = models.CharField(max_length=40, default="pedidos_sucursales_sqlite")
+    origen_id = models.PositiveIntegerField()
+    codigo_publico = models.CharField(max_length=40, blank=True)
+    estado_origen = models.CharField(max_length=16, blank=True)
+    importado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["sucursal", "origen", "origen_id"], name="pedido_sucursal_importado_unico")
+        ]
+
+    def __str__(self):
+        return f"{self.origen} #{self.origen_id} → {self.ticket.folio}"

@@ -10,7 +10,7 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("Aplicación local de escritorio para Los Tocayos")]
 [assembly: AssemblyCompany("Los Tocayos")]
 [assembly: AssemblyProduct("Los Tocayos POS")]
-[assembly: AssemblyVersion("0.2.0.0")]
+[assembly: AssemblyVersion("0.3.0.0")]
 
 namespace LosTocayos.Desktop
 {

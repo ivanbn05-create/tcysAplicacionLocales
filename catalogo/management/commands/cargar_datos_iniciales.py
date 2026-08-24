@@ -8,7 +8,18 @@ from django.core.management.base import BaseCommand
 from catalogo.configuracion_menu import configuracion_producto
 from catalogo.models import Categoria, Precio, Producto
 from personas.models import Rol, Sucursal, UsuarioPOS
-from ventas.models import Mesa, Partida
+from ventas.catalogo_sucursales import (
+    PRODUCTOS_SUCURSALES,
+    SUCURSALES_PEDIDO,
+    configuracion_precio,
+)
+from ventas.models import (
+    Mesa,
+    Partida,
+    PrecioProductoSucursal,
+    ProductoSucursal,
+    SucursalPedido,
+)
 
 
 MENU = [
@@ -62,19 +73,6 @@ MENU = [
 ]
 
 CATEGORIAS = ["Taco", "Promoción", "Consomé y Barbacoa", "Lonches", "Gringas y Quesadillas", "Bebidas", "Postre"]
-SUCURSALES_DESTINO = [
-    "Centro Médico",
-    "RAKEBELA",
-    "Las Águilas",
-    "La Estancia",
-    "Fortín",
-    "Plaza del Sol",
-    "Santa Anita",
-    "Edgar",
-    "Brot",
-]
-
-
 class Command(BaseCommand):
     help = "Crea la sucursal, posiciones y productos confirmados por el menú fotografiado."
 
@@ -129,7 +127,7 @@ class Command(BaseCommand):
                 clave=f"MESA-{numero}",
                 defaults={"nombre": f"Mesa {numero}", "orden": numero},
             )
-        for numero in range(1, 13):
+        for numero in range(1, 101):
             Mesa.objects.get_or_create(
                 sucursal=sucursal,
                 canal=Mesa.Canal.DOMICILIO,
@@ -147,13 +145,75 @@ class Command(BaseCommand):
                     clave=f"{prefijo}-{numero}",
                     defaults={"nombre": f"{etiqueta} {numero}", "orden": numero},
                 )
-        for orden, nombre in enumerate(SUCURSALES_DESTINO, 1):
-            Mesa.objects.get_or_create(
+        # El catálogo de sucursales conserva los ids del sistema web externo.
+        # Cada cliente dispone de once folios visibles, como en el sistema legado.
+        clientes_sucursal = {}
+        for origen_id, nombre, tipo in SUCURSALES_PEDIDO:
+            cliente_sucursal, _ = SucursalPedido.objects.update_or_create(
                 sucursal=sucursal,
-                canal=Mesa.Canal.SUCURSALES,
-                clave=f"SUC-{orden}",
-                defaults={"nombre": nombre, "orden": orden},
+                origen_id=origen_id,
+                defaults={"nombre": nombre, "tipo": tipo, "activa": True},
             )
+            clientes_sucursal[origen_id] = cliente_sucursal
+
+        SucursalPedido.objects.filter(sucursal=sucursal).exclude(
+            origen_id__in=clientes_sucursal
+        ).update(activa=False)
+        Mesa.objects.filter(
+            sucursal=sucursal,
+            canal=Mesa.Canal.SUCURSALES,
+            cliente_sucursal__isnull=True,
+        ).update(activa=False)
+        for origen_id, cliente_sucursal in clientes_sucursal.items():
+            for numero in range(1, 12):
+                Mesa.objects.update_or_create(
+                    sucursal=sucursal,
+                    clave=f"SUC-{origen_id}-{numero}",
+                    defaults={
+                        "canal": Mesa.Canal.SUCURSALES,
+                        "nombre": f"{cliente_sucursal.nombre} {numero}",
+                        "orden": numero,
+                        "cliente_sucursal": cliente_sucursal,
+                        "activa": True,
+                    },
+                )
+
+        productos_sucursal = {}
+        for orden, (origen_id, nombre, nombre_ticket, unidad, divisor) in enumerate(PRODUCTOS_SUCURSALES, 1):
+            producto_sucursal, _ = ProductoSucursal.objects.update_or_create(
+                sucursal=sucursal,
+                origen_id=origen_id,
+                defaults={
+                    "nombre": nombre,
+                    "nombre_ticket": nombre_ticket,
+                    "unidad": unidad,
+                    "cantidad_por_precio": Decimal(divisor),
+                    "orden": orden,
+                    "activo": True,
+                },
+            )
+            productos_sucursal[origen_id] = producto_sucursal
+
+        ProductoSucursal.objects.filter(sucursal=sucursal).exclude(
+            origen_id__in=productos_sucursal
+        ).update(activo=False)
+        for origen_sucursal, cliente_sucursal in clientes_sucursal.items():
+            for origen_producto, producto_sucursal in productos_sucursal.items():
+                configuracion = configuracion_precio(
+                    cliente_sucursal.tipo,
+                    origen_producto,
+                    producto_sucursal.nombre_ticket,
+                )
+                if configuracion is None:
+                    continue
+                importe, nombre_ticket = configuracion
+                PrecioProductoSucursal.objects.update_or_create(
+                    sucursal=sucursal,
+                    cliente_sucursal=cliente_sucursal,
+                    producto=producto_sucursal,
+                    vigente_desde="2026-08-15",
+                    defaults={"importe": importe, "nombre_ticket": nombre_ticket},
+                )
 
         legado = Path(settings.BASE_DIR) / "datos" / "Listado-Productos.xlsx"
         if legado.is_file():

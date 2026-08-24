@@ -584,11 +584,11 @@ def render_domicilio(ticket):
         draw.text((MARGEN, y), lineas[0], font=f_bold, fill=0)
         draw.text((372, y), _cantidad_matriz(partida["cantidad"]), font=f_cant, fill=0)
         _derecha(draw, y, f"${partida['precio_unitario']:,.2f}", f_normal)
-        y += 34
+        y += 31
         if lineas[1:]:
             draw.text((MARGEN, y), " ".join(lineas[1:])[:38], font=f_bold, fill=0)
         _derecha(draw, y, f"${partida['importe']:,.2f}", f_bold)
-        y += 52
+        y += 36
 
     draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
     y += 18
@@ -671,7 +671,7 @@ def render_cuenta(ticket):
         draw.text((MARGEN, y), lineas[0], font=f_bold, fill=0)
         draw.text((372, y), _cantidad_matriz(partida["cantidad"]), font=f_cant, fill=0)
         _derecha(draw, y, f"${partida['precio_unitario']:,.2f}", f_normal)
-        y += 34
+        y += 31
         modificadores_fila = []
         for comensal in sorted(partida["comensales"]):
             modificadores_fila.extend(mods_por_persona[comensal])
@@ -679,7 +679,7 @@ def render_cuenta(ticket):
         if extras:
             draw.text((MARGEN, y), " ".join(extras)[:38], font=f_bold, fill=0)
         _derecha(draw, y, f"${partida['importe']:,.2f}", f_bold)
-        y += 52
+        y += 36
     draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
     y += 18
     draw.text((210, y), "Total:", font=f_total, fill=0)
@@ -690,6 +690,86 @@ def render_cuenta(ticket):
     mensaje_footer = "¡Gracias Por Su Preferencia!"
     _centrado(draw, y, mensaje_footer, f_titulo)
     y = draw.textbbox((0, y), mensaje_footer, font=f_titulo)[3] + 58
+    return imagen.crop((0, 0, ANCHO, min(y, imagen.height))).convert("1")
+
+
+def render_sucursal(ticket):
+    """Ticket total mayorista, sin la cuadrícula de comensales."""
+    partidas = list(
+        ticket.partidas.select_related("producto_sucursal")
+        .filter(producto_sucursal__isnull=False)
+        .order_by("producto_sucursal__orden", "creada_en")
+    )
+    alto = 610 + len(partidas) * 82
+    imagen = Image.new("L", (ANCHO, max(alto, 1050)), 255)
+    draw = ImageDraw.Draw(imagen)
+    f_logo = fuente(54, negrita=True)
+    f_titulo = fuente(28, negrita=True)
+    f_normal = fuente(23)
+    f_bold = fuente(25, negrita=True)
+    f_total = fuente(38, negrita=True)
+    f_cantidad = fuente(23, cursiva=True)
+
+    y = 0
+    logo = _logo_actual()
+    if logo:
+        imagen.paste(logo, ((ANCHO - logo.width) // 2, y))
+        y += logo.height + 18
+    else:
+        _centrado(draw, y, "LOS TOCAYOS", f_logo)
+        y += 66
+        _centrado(draw, y, "TACOS DE BARBACOA", f_titulo)
+        y += 52
+    version = Image.new("L", (110, 24), 255)
+    ImageDraw.Draw(version).text((0, 0), "EBF3.2.0", font=fuente(18, negrita=True), fill=0)
+    version = version.rotate(90, expand=True)
+    imagen.paste(version, (2, max(35, y - 105)))
+    for linea in ["BAVJ051126EI9", "Tel: 3631-6834 / 1542-1635"]:
+        _centrado(draw, y, linea, f_normal)
+        y += 30
+
+    y += 14
+    draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
+    y += 14
+    local = timezone.localtime(ticket.creado_en)
+    draw.text((MARGEN, y), f"Ticket {ticket.folio}", font=f_bold, fill=0)
+    _derecha(draw, y, local.strftime("%d/%m/%Y %I:%M %p").lower(), f_normal)
+    y += 43
+    cliente_sucursal = getattr(ticket.mesa, "cliente_sucursal", None)
+    nombre_sucursal = cliente_sucursal.nombre if cliente_sucursal else ticket.mesa.nombre
+    draw.text((MARGEN, y), f"Sucursal: {nombre_sucursal}", font=f_bold, fill=0)
+    y += 66
+
+    draw.text((MARGEN, y), "Concepto", font=f_titulo, fill=0)
+    draw.text((340, y), "Cant", font=f_titulo, fill=0)
+    _derecha(draw, y, "Importe", f_titulo)
+    y += 38
+    draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
+    y += 18
+
+    for partida in partidas:
+        concepto = partida.nombre_producto.upper()
+        if partida.unidad and partida.unidad != "PZA":
+            concepto = f"{concepto} ({partida.unidad})"
+        lineas = _ajustar(draw, concepto, f_bold, 305)
+        draw.text((MARGEN, y), lineas[0], font=f_bold, fill=0)
+        draw.text((340, y), f"{partida.cantidad:.3f}", font=f_cantidad, fill=0)
+        _derecha(draw, y, f"${partida.precio_unitario:,.2f}", f_normal)
+        y += 32
+        if lineas[1:]:
+            draw.text((MARGEN, y), " ".join(lineas[1:]), font=f_bold, fill=0)
+        _derecha(draw, y, f"${partida.importe:,.2f}", f_bold)
+        y += 39
+
+    draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
+    y += 17
+    draw.text((210, y), "Total:", font=f_total, fill=0)
+    _derecha(draw, y, f"${ticket.total:,.2f}", f_total)
+    y += 58
+    draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
+    y += 22
+    _centrado(draw, y, "¡Gracias Por Su Preferencia!", f_titulo)
+    y += 62
     return imagen.crop((0, 0, ANCHO, min(y, imagen.height))).convert("1")
 
 

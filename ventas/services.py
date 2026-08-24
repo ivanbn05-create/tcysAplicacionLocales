@@ -7,7 +7,7 @@ from django.utils import timezone
 from catalogo.models import Producto
 from personas.models import Sucursal, UsuarioPOS
 
-from .models import EventoOutbox, Mesa, ModificadorTicket, Partida, Ticket
+from .models import EventoOutbox, Mesa, ModificadorTicket, Partida, ProductoSucursal, Ticket
 from .normalizacion import normalizar_telefono
 from .orden import PRODUCTOS_SIEMPRE_AL_FINAL
 from .promociones import (
@@ -324,6 +324,71 @@ def agregar_partida(
 
 
 @transaction.atomic
+def agregar_partida_sucursal(ticket, producto, cantidad=Decimal("1.000")):
+    """Agrega un concepto mayorista conservando precio, unidad y divisor."""
+    ticket = Ticket.objects.select_for_update().select_related("mesa__cliente_sucursal").get(pk=ticket.pk)
+    if ticket.canal != Mesa.Canal.SUCURSALES or not ticket.mesa.cliente_sucursal_id:
+        raise ErrorVenta("La orden no pertenece al módulo de sucursales.")
+    if ticket.estado != Ticket.Estado.ABIERTO:
+        raise ErrorVenta("La orden ya fue procesada; no admite nuevas partidas.")
+    if not producto.activo or producto.sucursal_id != ticket.sucursal_id:
+        raise ErrorVenta("El producto de sucursal no está disponible.")
+    existente = Partida.objects.filter(ticket=ticket, producto_sucursal=producto).first()
+    if existente:
+        return existente
+    cantidad = Decimal(str(cantidad))
+    if cantidad < Decimal("0.001") or cantidad > Decimal("999.999") or cantidad != cantidad.quantize(Decimal("0.001")):
+        raise ErrorVenta("La cantidad debe estar entre 0.001 y 999.999, con máximo tres decimales.")
+    precio = producto.precio_actual(ticket.mesa.cliente_sucursal)
+    if not precio:
+        raise ErrorVenta(f"{producto.nombre} no tiene precio vigente para esta sucursal.")
+    partida = Partida.objects.create(
+        sucursal=ticket.sucursal,
+        ticket=ticket,
+        producto_sucursal=producto,
+        comensal=1,
+        cantidad=cantidad,
+        precio_unitario=precio.importe,
+        cantidad_por_precio=producto.cantidad_por_precio,
+        unidad=producto.unidad,
+        nombre_producto=precio.nombre_ticket or producto.nombre_ticket or producto.nombre,
+        nombre_corto=(precio.nombre_ticket or producto.nombre_ticket or producto.nombre)[:24],
+    )
+    _evento(
+        ticket,
+        "ticket.partida_sucursal_agregada",
+        {"partida_id": str(partida.id), "producto_origen_id": producto.origen_id},
+    )
+    return partida
+
+
+@transaction.atomic
+def actualizar_partida_sucursal(partida, cantidad):
+    partida = Partida.objects.select_for_update().select_related("ticket").get(pk=partida.pk)
+    if not partida.producto_sucursal_id:
+        raise ErrorVenta("La partida no pertenece al catálogo de sucursales.")
+    if partida.ticket.estado != Ticket.Estado.ABIERTO:
+        raise ErrorVenta("La orden ya fue procesada.")
+    cantidad = Decimal(str(cantidad))
+    if cantidad <= 0:
+        ticket = partida.ticket
+        partida_id = str(partida.id)
+        partida.delete()
+        _evento(ticket, "ticket.partida_sucursal_eliminada", {"partida_id": partida_id})
+        return None
+    if cantidad > Decimal("999.999") or cantidad != cantidad.quantize(Decimal("0.001")):
+        raise ErrorVenta("La cantidad debe tener máximo tres decimales y no superar 999.999.")
+    partida.cantidad = cantidad
+    partida.save(update_fields=["cantidad"])
+    _evento(
+        partida.ticket,
+        "ticket.partida_sucursal_actualizada",
+        {"partida_id": str(partida.id), "cantidad": str(cantidad)},
+    )
+    return partida
+
+
+@transaction.atomic
 def actualizar_partida(partida, cantidad, termino=None, validar_componente=True):
     if partida.ticket.estado != Ticket.Estado.ABIERTO:
         raise ErrorVenta("La orden ya fue procesada.")
@@ -495,10 +560,11 @@ def procesar_ticket(ticket):
         raise ErrorVenta("La orden no está abierta.")
     if not ticket.partidas.exists():
         raise ErrorVenta("Agrega al menos un producto.")
-    try:
-        validar_promociones(ticket)
-    except ValueError as exc:
-        raise ErrorVenta(str(exc)) from exc
+    if ticket.canal != Mesa.Canal.SUCURSALES:
+        try:
+            validar_promociones(ticket)
+        except ValueError as exc:
+            raise ErrorVenta(str(exc)) from exc
     if ticket.canal == Mesa.Canal.DOMICILIO:
         if not all([ticket.cliente_id, ticket.cliente_nombre, ticket.cliente_domicilio]):
             raise ErrorVenta("Selecciona un cliente con domicilio antes de procesar la orden.")
@@ -514,7 +580,8 @@ def procesar_ticket(ticket):
             raise ErrorVenta("Captura un celular válido para el pedido a recoger.")
     elif ticket.canal == Mesa.Canal.LLEVAR and not ticket.cliente_nombre.strip():
         raise ErrorVenta("Captura el nombre del cliente para llevar.")
-    validar_captura_por_nombres(ticket)
+    if ticket.canal != Mesa.Canal.SUCURSALES:
+        validar_captura_por_nombres(ticket)
     ticket.estado = Ticket.Estado.PROCESADO
     ticket.procesado_en = timezone.now()
     ticket.save(update_fields=["estado", "procesado_en", "actualizado_en"])
@@ -534,6 +601,20 @@ def cobrar_ticket(ticket, forma_pago, importe_recibido=None):
     ticket.pagado_en = timezone.now()
     ticket.save(update_fields=["estado", "forma_pago", "importe_recibido", "pagado_en", "actualizado_en"])
     _evento(ticket, "ticket.pagado", {"total": str(ticket.total), "forma_pago": forma_pago})
+    return ticket
+
+
+@transaction.atomic
+def completar_ticket_sucursal(ticket):
+    ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    if ticket.canal != Mesa.Canal.SUCURSALES:
+        raise ErrorVenta("La orden no pertenece al módulo de sucursales.")
+    if ticket.estado not in [Ticket.Estado.PROCESADO, Ticket.Estado.COBRAR]:
+        raise ErrorVenta("Primero procesa e imprime el pedido de sucursal.")
+    ticket.estado = Ticket.Estado.PAGADO
+    ticket.pagado_en = timezone.now()
+    ticket.save(update_fields=["estado", "pagado_en", "actualizado_en"])
+    _evento(ticket, "ticket.sucursal_completado", {"total": str(ticket.total)})
     return ticket
 
 

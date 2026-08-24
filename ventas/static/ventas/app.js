@@ -58,6 +58,7 @@
     resultadosClientes: [],
     temporizadorCliente: null,
     temporizadorNombre: null,
+    temporizadorSucursales: null,
     tokenBusquedaCliente: 0,
     clienteEditando: null,
     ultimoTerminoPorProducto: new Map(),
@@ -113,10 +114,11 @@
     }
   }
 
-  async function cargarEstado() {
+  async function cargarEstado(sincronizarSucursales = false) {
     const conexion = $("#conexion");
     try {
-      const datos = await api("/api/estado/");
+      const sufijo = sincronizarSucursales ? "?sincronizar_sucursales=1" : "";
+      const datos = await api(`/api/estado/${sufijo}`);
       estado.tickets = datos.tickets;
       conexion?.classList.remove("error");
       renderPosiciones();
@@ -162,6 +164,33 @@
       const detalle = ticket ? `Ticket ${ticket.folio} · ${dinero(ticket.total)}` : "Disponible";
       return `<button class="posicion ${clase}" data-id="${posicion.id}" type="button"><strong>${posicion.nombre}</strong><small>${detalle}</small></button>`;
       }).join("");
+    if (estado.canal === "sucursales") {
+      const grupos = new Map();
+      for (const posicion of posiciones
+        .filter(item => item.canal === "sucursales" && item.cliente_sucursal_id)
+        .sort((a, b) => a.cliente_sucursal_orden - b.cliente_sucursal_orden || a.orden - b.orden)) {
+        if (!grupos.has(posicion.cliente_sucursal_id)) {
+          grupos.set(posicion.cliente_sucursal_id, {
+            nombre: posicion.cliente_sucursal_nombre,
+            orden: posicion.cliente_sucursal_orden,
+            posiciones: [],
+          });
+        }
+        grupos.get(posicion.cliente_sucursal_id).posiciones.push(posicion);
+      }
+      contenedor.className = "rejilla-posiciones rejilla-sucursales";
+      contenedor.innerHTML = [...grupos.values()].map(grupo => `
+        <section class="columna-sucursal">
+          <header title="${escapar(grupo.nombre)}">${escapar(grupo.nombre)}</header>
+          <div>${grupo.posiciones.map(posicion => {
+            const ticket = estado.tickets[posicion.id];
+            const clase = ticket ? (ticket.estado === "abierto" ? "ocupada" : "procesada") : "";
+            const detalle = ticket ? `Ticket ${ticket.folio} · ${dinero(ticket.total)}` : "Disponible";
+            return `<button class="posicion ${clase}" data-id="${posicion.id}" type="button"><strong>${escapar(posicion.nombre)}</strong><small>${detalle}</small></button>`;
+          }).join("")}</div>
+        </section>`).join("") || '<p class="vacio">No hay sucursales configuradas.</p>';
+      return;
+    }
     const secundario = estado.canal === "comedor" ? "llevar" : (estado.canal === "domicilio" ? "recoger" : "");
     const principales = renderTarjetas(estado.canal);
     if (!secundario) {
@@ -182,10 +211,20 @@
       </section>`;
   }
 
-  function cambiarCanal(canal) {
+  function programarSincronizacionSucursales() {
+    clearInterval(estado.temporizadorSucursales);
+    estado.temporizadorSucursales = null;
+    if (estado.canal === "sucursales") {
+      estado.temporizadorSucursales = setInterval(() => cargarEstado(true), 300000);
+    }
+  }
+
+  async function cambiarCanal(canal) {
     estado.canal = canal;
     $$(".canal").forEach(b => b.classList.toggle("activo", b.dataset.canal === canal));
     renderPosiciones();
+    programarSincronizacionSucursales();
+    if (canal === "sucursales") await cargarEstado(true);
   }
 
   async function abrirPosicion(mesaId) {
@@ -204,8 +243,10 @@
 
   function mostrarTicket() {
     const ticket = estado.ticket;
+    const esSucursal = ticket.canal === "sucursales";
     $("#vista-posiciones").classList.add("oculto");
     $("#vista-ticket").classList.remove("oculto");
+    $("#vista-ticket").classList.toggle("ticket-sucursal", esSucursal);
     $("#ticket-mesa").textContent = ticket.mesa;
     $("#ticket-folio").textContent = ticket.folio;
     estado.modoEntrega = ticket.tipo_entrega || "aproximada";
@@ -229,7 +270,7 @@
     $("#servicio-directo-titulo").textContent = esRecoger ? "Nombre y celular" : "Nombre del cliente";
     $("#cliente-directo-nombre").value = esDirecto ? (ticket.cliente?.nombre || "") : "";
     $("#cliente-directo-telefono").value = esRecoger ? (ticket.cliente?.telefono || "") : "";
-    const admiteSwitches = Object.hasOwn(canalesPareja, ticket.canal);
+    const admiteSwitches = !esSucursal && Object.hasOwn(canalesPareja, ticket.canal);
     $("#ticket-switches").classList.toggle("oculto", !admiteSwitches);
     $("#switch-tipo-pedido").checked = esRecoger || esLlevar;
     $("#switch-modo-nombres").checked = Boolean(ticket.captura_por_nombres);
@@ -237,8 +278,10 @@
     $("#switch-modo-nombres").disabled = ticket.estado !== "abierto";
     $("#tipo-pedido-etiqueta").textContent = esEntrega ? (esRecoger ? "Recoger" : "Domicilio") : (esLlevar ? "Llevar" : "Mesa");
     $("#modo-nombres-etiqueta").textContent = ticket.captura_por_nombres ? "Por nombres" : "Normal";
-    $("#nombre-persona-panel").classList.toggle("oculto", !ticket.captura_por_nombres);
-    $(".datos-orden").classList.remove("oculto");
+    $("#nombre-persona-panel").classList.toggle("oculto", esSucursal || !ticket.captura_por_nombres);
+    $(".panel-personas").classList.toggle("oculto", esSucursal);
+    $(".datos-orden").classList.toggle("oculto", esSucursal);
+    $(".orden-encabezado .eyebrow").textContent = esSucursal ? "Pedido mayorista en tiempo real" : "Comanda en tiempo real";
     if (esDomicilio) {
       $("#buscar-cliente").value = "";
       renderClienteDomicilio();
@@ -257,6 +300,10 @@
   }
 
   function renderPersonas() {
+    if (estado.ticket?.canal === "sucursales") {
+      $("#personas").innerHTML = "";
+      return;
+    }
     const nombres = estado.ticket?.nombres_comensales || {};
     const porNombres = Boolean(estado.ticket?.captura_por_nombres);
     $("#personas").classList.toggle("con-nombres", porNombres);
@@ -354,10 +401,46 @@
 
   function renderMenu() {
     const abierto = estado.ticket?.estado === "abierto";
-    $(".panel-productos")?.classList.toggle("modo-calculadora", estado.modoMenu === "calculadora");
-    $("#productos")?.classList.toggle("modo-calculadora", estado.modoMenu === "calculadora");
+    const esSucursal = estado.ticket?.canal === "sucursales";
+    const modoCalculadora = ["calculadora", "calculadora-sucursal"].includes(estado.modoMenu);
+    $(".panel-productos")?.classList.toggle("modo-calculadora", modoCalculadora);
+    $("#productos")?.classList.toggle("modo-calculadora", modoCalculadora);
     const volverProductos = $("#menu-productos");
-    volverProductos.classList.toggle("oculto", ["productos", "calculadora"].includes(estado.modoMenu));
+    volverProductos.classList.toggle("oculto", ["productos", "calculadora", "calculadora-sucursal"].includes(estado.modoMenu));
+    if (esSucursal) {
+      if (estado.modoMenu === "calculadora-sucursal" && estado.edicion) {
+        const producto = (estado.ticket.catalogo_sucursal || []).find(item => item.id === estado.edicion.productoId);
+        if (!producto) return;
+        $("#menu-contexto").textContent = "Cantidad del producto";
+        $("#menu-indicacion").textContent = `${producto.unidad} · ${dinero(producto.precio)}${Number(producto.cantidad_por_precio) !== 1 ? ` cada ${cantidad(producto.cantidad_por_precio)} ${producto.unidad}` : ""}`;
+        $("#productos").innerHTML = `
+          <section class="calculadora-cantidad calculadora-sucursal">
+            <div class="calculadora-producto"><strong>${escapar(producto.nombre)}</strong><span>${escapar(producto.unidad)}</span></div>
+            <output class="pantalla-cantidad" aria-label="Cantidad">${escapar(estado.edicion.cantidadPantalla)}</output>
+            <div class="teclado-cantidad teclado-cantidad-sucursal">
+              ${[7, 8, 9, 4, 5, 6, 1, 2, 3].map(numero => `<button data-tecla-sucursal="${numero}" type="button">${numero}</button>`).join("")}
+              <button data-tecla-sucursal="." type="button">.</button>
+              <button data-tecla-sucursal="0" type="button">0</button>
+              <button class="borrar" data-tecla-sucursal="borrar" type="button" aria-label="Borrar un dígito">←</button>
+              <button class="eliminar" data-tecla-sucursal="eliminar" type="button">Eliminar producto</button>
+            </div>
+            <button class="confirmar-edicion" data-confirmar-sucursal type="button" aria-label="Guardar cantidad" title="Guardar cantidad">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
+            </button>
+          </section>`;
+        return;
+      }
+      $("#menu-contexto").textContent = "Productos de sucursal";
+      $("#menu-indicacion").textContent = "Selecciona un producto y captura su cantidad";
+      const capturados = new Set(estado.ticket.partidas.map(partida => partida.producto_sucursal_id));
+      $("#productos").innerHTML = `<section class="catalogo-sucursal">${(estado.ticket.catalogo_sucursal || []).map(producto => `
+        <button class="producto producto-sucursal ${capturados.has(producto.id) ? "en-pedido" : ""}" data-sucursal-producto="${producto.id}" type="button" ${!abierto ? "disabled" : ""}>
+          <small>${escapar(producto.nombre_ticket)} · ${escapar(producto.unidad)}</small>
+          <strong>${escapar(producto.nombre)}</strong>
+          <b>${dinero(producto.precio)}</b>
+        </button>`).join("")}</section>`;
+      return;
+    }
     if (estado.modoMenu === "calculadora" && estado.edicion) {
       const producto = productos.find(item => item.id === estado.edicion.productoId);
       if (!producto) return;
@@ -571,10 +654,37 @@
       </section>`;
   }
 
+  function renderPedidoSucursal(ticket, contenedor) {
+    const abierto = ticket.estado === "abierto";
+    const filas = [...ticket.partidas].sort((a, b) => a.orden - b.orden).map(partida => `
+      <button class="fila-partida-sucursal ${estado.edicion?.partidaId === partida.id ? "seleccionada" : ""}" data-partida-sucursal="${partida.id}" data-producto-sucursal="${partida.producto_sucursal_id}" type="button" ${!abierto ? "disabled" : ""}>
+        <span class="concepto"><strong>${escapar(partida.nombre_catalogo || partida.nombre)}</strong><small>${escapar(partida.nombre)}</small></span>
+        <span><b>${cantidad(partida.cantidad)}</b><small>${escapar(partida.unidad)}</small></span>
+        <span><small>Precio</small>${dinero(partida.precio)}</span>
+        <span><small>Importe</small><b>${dinero(partida.importe)}</b></span>
+      </button>`).join("");
+    $("#orden-resumen").textContent = `${ticket.partidas.length} ${ticket.partidas.length === 1 ? "producto" : "productos"} · ${dinero(ticket.total)}`;
+    contenedor.innerHTML = `
+      <section class="pedido-sucursal-lista">
+        <header>
+          <div><small>Sucursal / cliente</small><strong>${escapar(ticket.cliente_sucursal.nombre)}</strong></div>
+          <div><small>Pedido</small><strong>${escapar(ticket.mesa)}</strong></div>
+          <div><small>Ticket</small><strong>${ticket.folio}</strong></div>
+        </header>
+        <div class="encabezado-lista-sucursal"><span>Concepto</span><span>Cantidad</span><span>Precio</span><span>Importe</span></div>
+        <div class="partidas-sucursal">${filas || '<p class="vacio">Selecciona productos para comenzar el pedido.</p>'}</div>
+        <footer><span>Total del pedido</span><strong>${dinero(ticket.total)}</strong></footer>
+      </section>`;
+  }
+
   function renderComanda() {
     const ticket = estado.ticket;
     const contenedor = $("#comanda-papel-preview");
     if (!ticket || !contenedor) return;
+    if (ticket.canal === "sucursales") {
+      renderPedidoSucursal(ticket, contenedor);
+      return;
+    }
     if (ticket.captura_por_nombres) {
       renderComandaPorNombres(ticket, contenedor);
       return;
@@ -866,11 +976,14 @@
   function renderAcciones() {
     const abierto = estado.ticket.estado === "abierto";
     const cobrable = ["procesado", "cobrar"].includes(estado.ticket.estado);
+    const esSucursal = estado.ticket.canal === "sucursales";
+    $("#procesar").textContent = esSucursal ? "Procesar e imprimir" : "Procesar orden";
+    $("#cobrar").textContent = esSucursal ? "Completar pedido" : "Cobrar";
     $("#procesar").classList.toggle("oculto", !abierto);
     $("#cancelar-orden").classList.toggle("oculto", !abierto);
     $("#cobrar").classList.toggle("oculto", !cobrable);
     $("#reimprimir").classList.toggle("oculto", abierto);
-    $$(".persona, .opcion-preparacion, .comanda-papel button, .producto").forEach(b => b.disabled = !abierto);
+    $$(".persona, .opcion-preparacion, .comanda-papel button, .producto, .fila-partida-sucursal").forEach(b => b.disabled = !abierto);
     $$("#datos-cliente button, #datos-cliente input, #datos-cliente textarea").forEach(control => control.disabled = !abierto);
     $$("#datos-servicio-directo input, #ticket-switches input, #nombre-persona").forEach(control => control.disabled = !abierto);
     $$("#entrega, #pago-domicilio input").forEach(control => control.disabled = !abierto);
@@ -924,6 +1037,100 @@
     };
     recordarTermino(producto.id, estado.persona, termino);
     estado.modoMenu = "calculadora";
+    renderMenu();
+    renderComanda();
+  }
+
+  function abrirCalculadoraSucursal(producto, partida) {
+    estado.edicion = {
+      productoId: producto.id,
+      partidaId: partida.id,
+      cantidadPantalla: String(Number(partida.cantidad)),
+      reemplazar: true,
+    };
+    estado.modoMenu = "calculadora-sucursal";
+    renderMenu();
+    renderComanda();
+  }
+
+  async function seleccionarProductoSucursal(productoId) {
+    if (!(await finalizarEdicion())) return;
+    const producto = (estado.ticket.catalogo_sucursal || []).find(item => item.id === productoId);
+    if (!producto) return;
+    let partida = estado.ticket.partidas.find(item => item.producto_sucursal_id === productoId);
+    if (!partida) {
+      try {
+        const datos = await api(`/api/tickets/${estado.ticket.id}/partidas/`, {
+          method: "POST",
+          body: JSON.stringify({ producto_sucursal_id: productoId, cantidad: "1" }),
+        });
+        estado.ticket = datos.ticket;
+        partida = estado.ticket.partidas.find(item => item.producto_sucursal_id === productoId);
+      } catch (error) {
+        toast(error.message, true);
+        return;
+      }
+    }
+    abrirCalculadoraSucursal(producto, partida);
+  }
+
+  async function editarPartidaSucursal(partidaId) {
+    if (!(await finalizarEdicion())) return;
+    const partida = estado.ticket.partidas.find(item => item.id === partidaId);
+    const producto = (estado.ticket.catalogo_sucursal || []).find(item => item.id === partida?.producto_sucursal_id);
+    if (partida && producto) abrirCalculadoraSucursal(producto, partida);
+  }
+
+  async function guardarEdicionSucursal(eliminar = false) {
+    if (!estado.edicion || estado.ticket?.canal !== "sucursales") return true;
+    const edicion = { ...estado.edicion };
+    let datos;
+    try {
+      if (eliminar) {
+        datos = await api(`/api/partidas/${edicion.partidaId}/`, { method: "DELETE" });
+      } else {
+        const valor = Number(edicion.cantidadPantalla);
+        if (!Number.isFinite(valor) || valor < 0.001 || valor > 999.999) {
+          toast("Captura una cantidad entre 0.001 y 999.999.", true);
+          return false;
+        }
+        datos = await api(`/api/partidas/${edicion.partidaId}/`, {
+          method: "PATCH",
+          body: JSON.stringify({ cantidad: edicion.cantidadPantalla }),
+        });
+      }
+      estado.ticket = datos.ticket;
+      estado.edicion = null;
+      estado.modoMenu = "productos";
+      renderMenu();
+      renderComanda();
+      return true;
+    } catch (error) {
+      toast(error.message, true);
+      return false;
+    }
+  }
+
+  async function manejarTeclaCantidadSucursal(tecla) {
+    if (!estado.edicion) return;
+    if (tecla === "eliminar") {
+      await guardarEdicionSucursal(true);
+      return;
+    }
+    let texto = String(estado.edicion.cantidadPantalla || "0");
+    if (tecla === "borrar") {
+      texto = texto.slice(0, -1) || "0";
+      estado.edicion.reemplazar = false;
+    } else if (tecla === ".") {
+      if (!texto.includes(".")) texto = estado.edicion.reemplazar ? "0." : `${texto}.`;
+      estado.edicion.reemplazar = false;
+    } else {
+      texto = estado.edicion.reemplazar || texto === "0" ? String(tecla) : `${texto}${tecla}`;
+      const [enteros, decimales = ""] = texto.split(".");
+      texto = `${enteros.slice(0, 3)}${texto.includes(".") ? `.${decimales.slice(0, 3)}` : ""}`;
+      estado.edicion.reemplazar = false;
+    }
+    if (Number(texto) <= 999.999) estado.edicion.cantidadPantalla = texto;
     renderMenu();
     renderComanda();
   }
@@ -1015,6 +1222,7 @@
 
   async function finalizarEdicion() {
     if (!estado.edicion) return true;
+    if (estado.ticket?.canal === "sucursales") return guardarEdicionSucursal();
     const edicion = estado.edicion;
     await estado.colaEdicion;
     if (estado.errorEdicion) return false;
@@ -1215,6 +1423,7 @@
   }
 
   async function guardarDatos() {
+    if (estado.ticket?.canal === "sucursales") return;
     clearTimeout(estado.temporizadorNombre);
     const nombres = { ...(estado.ticket.nombres_comensales || {}) };
     if (estado.ticket.captura_por_nombres) {
@@ -1269,8 +1478,20 @@
     finally { bloquear(false); }
   }
 
+  async function completarSucursal() {
+    bloquear(true);
+    try {
+      await api(`/api/tickets/${estado.ticket.id}/completar-sucursal/`, { method: "POST", body: "{}" });
+      toast("Pedido de sucursal completado; la posición quedó disponible.");
+      await volver(true);
+    } catch (error) { toast(error.message, true); }
+    finally { bloquear(false); }
+  }
+
   async function reimprimir() {
-    const formato = estado.ticket.canal === "recoger" ? "comanda" : (estado.ticket.estado === "pagado" ? "cuenta" : "comanda");
+    const formato = estado.ticket.canal === "sucursales"
+      ? "sucursal"
+      : (estado.ticket.canal === "recoger" ? "comanda" : (estado.ticket.estado === "pagado" ? "cuenta" : "comanda"));
     try {
       const datos = await api(`/api/tickets/${estado.ticket.id}/imprimir/`, { method: "POST", body: JSON.stringify({ formato }) });
       resumirImpresiones(datos.impresiones, "Reimpresión solicitada.");
@@ -1328,6 +1549,8 @@
     $("main").classList.add("oculto");
     $("#pantalla-acceso")?.classList.remove("oculto");
     document.body.classList.remove("en-operacion");
+    clearInterval(estado.temporizadorSucursales);
+    estado.temporizadorSucursales = null;
   }
 
   async function salirModoTableta() {
@@ -1364,7 +1587,8 @@
     $("#pantalla-acceso").classList.add("oculto");
     $("main").classList.remove("oculto");
     document.body.classList.add("en-operacion");
-    cargarEstado();
+    cargarEstado(estado.canal === "sucursales");
+    programarSincronizacionSucursales();
   });
   $("#impresora-estado")?.addEventListener("click", cargarEstadoImpresion);
   $$('[data-salir-mesero]').forEach(boton => boton.addEventListener("click", salirModoMesero));
@@ -1380,6 +1604,20 @@
     if (boton) await seleccionarPersona(Number(boton.dataset.persona));
   });
   $("#productos").addEventListener("click", async evento => {
+    const productoSucursal = evento.target.closest("[data-sucursal-producto]");
+    if (productoSucursal) {
+      await seleccionarProductoSucursal(productoSucursal.dataset.sucursalProducto);
+      return;
+    }
+    const teclaSucursal = evento.target.closest("[data-tecla-sucursal]");
+    if (teclaSucursal) {
+      await manejarTeclaCantidadSucursal(teclaSucursal.dataset.teclaSucursal);
+      return;
+    }
+    if (evento.target.closest("[data-confirmar-sucursal]")) {
+      await guardarEdicionSucursal();
+      return;
+    }
     const modoEntrega = evento.target.closest("[data-modo-entrega]");
     if (modoEntrega) {
       estado.modoEntrega = modoEntrega.dataset.modoEntrega;
@@ -1437,6 +1675,11 @@
   });
   $("#menu-productos").addEventListener("click", async () => cambiarModoMenu("productos"));
   $("#comanda-preview").addEventListener("click", async evento => {
+    const partidaSucursal = evento.target.closest("[data-partida-sucursal]");
+    if (partidaSucursal) {
+      await editarPartidaSucursal(partidaSucursal.dataset.partidaSucursal);
+      return;
+    }
     const persona = evento.target.closest("[data-seleccionar-persona]");
     if (persona) {
       await seleccionarPersona(Number(persona.dataset.seleccionarPersona));
@@ -1560,6 +1803,10 @@
   $("#procesar").addEventListener("click", procesar);
   $("#cancelar-orden").addEventListener("click", cancelarOrden);
   $("#cobrar").addEventListener("click", () => {
+    if (estado.ticket?.canal === "sucursales") {
+      completarSucursal();
+      return;
+    }
     $("#cobro-total").textContent = dinero(estado.ticket.total);
     $("#importe-recibido").value = estado.ticket.total;
     const soloComanda = estado.ticket.canal === "recoger";
@@ -1579,7 +1826,7 @@
   });
   $("#reimprimir").addEventListener("click", reimprimir);
 
-  window.addEventListener("online", cargarEstado);
+  window.addEventListener("online", () => cargarEstado(estado.canal === "sucursales"));
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/service-worker.js").catch(() => {});
   renderPersonas();
   renderMenu();

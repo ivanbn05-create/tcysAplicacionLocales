@@ -24,6 +24,11 @@ urlpatterns = [
     path("api/tickets/<uuid:ticket_id>/modificadores/", views.api_modificador, name="api_modificador"),
     path("api/tickets/<uuid:ticket_id>/procesar/", views.api_procesar, name="api_procesar"),
     path("api/tickets/<uuid:ticket_id>/cobrar/", views.api_cobrar, name="api_cobrar"),
+    path(
+        "api/tickets/<uuid:ticket_id>/completar-sucursal/",
+        views.api_completar_sucursal,
+        name="api_completar_sucursal",
+    ),
     path("api/tickets/<uuid:ticket_id>/cancelar/", views.api_cancelar, name="api_cancelar"),
     path("api/tickets/<uuid:ticket_id>/imprimir/", views.api_imprimir, name="api_imprimir"),
 ]

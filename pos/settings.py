@@ -5,6 +5,28 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def cargar_entorno_local():
+    """Carga ``.env`` sin sobrescribir variables definidas por Windows o Docker."""
+
+    ruta = BASE_DIR / ".env"
+    if not ruta.is_file():
+        return
+    for linea in ruta.read_text(encoding="utf-8-sig").splitlines():
+        linea = linea.strip()
+        if not linea or linea.startswith("#") or "=" not in linea:
+            continue
+        nombre, valor = linea.split("=", 1)
+        nombre = nombre.strip()
+        valor = valor.strip()
+        if len(valor) >= 2 and valor[0] == valor[-1] and valor[0] in {'"', "'"}:
+            valor = valor[1:-1]
+        if nombre:
+            os.environ.setdefault(nombre, valor)
+
+
+cargar_entorno_local()
+
+
 def env_bool(name, default=False):
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "si", "sí", "yes"}
 
@@ -95,3 +117,24 @@ PRINTER_HOSTS = {
     "cocina": os.getenv("PRINTER_COCINA_HOST", "192.168.0.33"),
     "barra": os.getenv("PRINTER_BARRA_HOST", "192.168.0.33"),
 }
+
+# Puente de sólo lectura con la base de pedidos. Supabase tiene prioridad y la
+# SQLite hermana queda como respaldo para desarrollo sin conexión.
+PEDIDOS_SUCURSALES_DATABASE_URL = os.getenv("PEDIDOS_SUCURSALES_DATABASE_URL", "").strip()
+PEDIDOS_SUCURSALES_POSTGRES = {
+    "host": os.getenv("PEDIDOS_SUCURSALES_DB_HOST", "aws-1-us-east-2.pooler.supabase.com"),
+    "port": int(os.getenv("PEDIDOS_SUCURSALES_DB_PORT", "5432")),
+    "dbname": os.getenv("PEDIDOS_SUCURSALES_DB_NAME", "postgres"),
+    "user": os.getenv("PEDIDOS_SUCURSALES_DB_USER", "postgres.uxcuejhzueagtscdxwlo"),
+    "password": os.getenv("PEDIDOS_SUCURSALES_DB_PASSWORD", os.getenv("SB_PASSWORD", "")),
+    "sslmode": os.getenv("PEDIDOS_SUCURSALES_DB_SSLMODE", "require"),
+    "connect_timeout": int(os.getenv("PEDIDOS_SUCURSALES_DB_TIMEOUT", "8")),
+}
+PEDIDOS_SUCURSALES_DB = Path(
+    os.getenv("PEDIDOS_SUCURSALES_DB", str(BASE_DIR.parent / "tcysPedidosSucursales" / "db.sqlite3"))
+)
+PEDIDOS_SUCURSALES_AUTO_SYNC = env_bool("PEDIDOS_SUCURSALES_AUTO_SYNC", True)
+PEDIDOS_SUCURSALES_SYNC_SECONDS = int(os.getenv("PEDIDOS_SUCURSALES_SYNC_SECONDS", "300"))
+PEDIDOS_SUCURSALES_HORA_INICIO = os.getenv("PEDIDOS_SUCURSALES_HORA_INICIO", "06:00")
+# Cinco minutos de gracia garantizan una lectura posterior al último pedido de las 17:30.
+PEDIDOS_SUCURSALES_HORA_FIN = os.getenv("PEDIDOS_SUCURSALES_HORA_FIN", "17:35")

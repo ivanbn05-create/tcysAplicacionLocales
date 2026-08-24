@@ -159,7 +159,7 @@ New-Shortcut `
 $registro = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LosTocayosPOS"
 New-Item -Path $registro -Force | Out-Null
 Set-ItemProperty -Path $registro -Name DisplayName -Value $nombre
-Set-ItemProperty -Path $registro -Name DisplayVersion -Value "0.2.0"
+Set-ItemProperty -Path $registro -Name DisplayVersion -Value "0.3.0"
 Set-ItemProperty -Path $registro -Name Publisher -Value "Los Tocayos"
 Set-ItemProperty -Path $registro -Name InstallLocation -Value $instalacion
 Set-ItemProperty -Path $registro -Name DisplayIcon -Value $ejecutableDestino

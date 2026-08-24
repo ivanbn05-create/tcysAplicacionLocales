@@ -1,13 +1,15 @@
 import json
+import sqlite3
 import tempfile
 from collections import OrderedDict
-from datetime import date
+from datetime import date, datetime, time
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
 from django.core.management import call_command
 from django.test import TestCase, override_settings
+from django.utils import timezone
 
 from catalogo.models import Producto
 from impresion.models import TrabajoImpresion
@@ -23,11 +25,24 @@ from impresion.render import (
     render_comanda,
     render_cuenta,
     render_domicilio,
+    render_sucursal,
 )
 from impresion.services import encolar_impresiones
 from personas.models import Sucursal
 
-from .models import Cliente, EventoOutbox, Mesa, ModificadorTicket, Partida, Ticket
+from .integracion_sucursales import sincronizar_pedidos_confirmados
+from .models import (
+    Cliente,
+    EventoOutbox,
+    Mesa,
+    ModificadorTicket,
+    Partida,
+    PedidoSucursalImportado,
+    PrecioProductoSucursal,
+    ProductoSucursal,
+    SucursalPedido,
+    Ticket,
+)
 from .orden import ordenar_partidas
 from .services import (
     ErrorVenta,
@@ -48,7 +63,12 @@ class FlujoPOSTests(TestCase):
 
     def setUp(self):
         self.temporal = tempfile.TemporaryDirectory()
-        self.ajustes = override_settings(MEDIA_ROOT=self.temporal.name, PRINT_SYNC=True, PRINT_BACKEND="archivo")
+        self.ajustes = override_settings(
+            MEDIA_ROOT=self.temporal.name,
+            PRINT_SYNC=True,
+            PRINT_BACKEND="archivo",
+            PEDIDOS_SUCURSALES_AUTO_SYNC=False,
+        )
         self.ajustes.enable()
         self.sucursal = Sucursal.objects.get(clave="ARBOLEDAS")
         self.producto = Producto.objects.get(sucursal=self.sucursal, codigo="TB")
@@ -82,6 +102,20 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(Mesa.objects.filter(sucursal=self.sucursal, canal="comedor").count(), 24)
         self.assertEqual(Mesa.objects.filter(sucursal=self.sucursal, canal="recoger").count(), 12)
         self.assertEqual(Mesa.objects.filter(sucursal=self.sucursal, canal="llevar").count(), 12)
+        self.assertEqual(Mesa.objects.filter(sucursal=self.sucursal, canal="domicilio").count(), 100)
+        self.assertEqual(SucursalPedido.objects.filter(sucursal=self.sucursal, activa=True).count(), 10)
+        self.assertEqual(Mesa.objects.filter(sucursal=self.sucursal, canal="sucursales", activa=True).count(), 110)
+        self.assertTrue(
+            Mesa.objects.filter(
+                sucursal=self.sucursal,
+                canal="sucursales",
+                cliente_sucursal__nombre="Estancia",
+                orden=1,
+                nombre="Estancia 1",
+            ).exists()
+        )
+        self.assertEqual(ProductoSucursal.objects.filter(sucursal=self.sucursal, activo=True).count(), 38)
+        self.assertEqual(PrecioProductoSucursal.objects.filter(sucursal=self.sucursal).count(), 372)
 
         precios = {
             producto.codigo: producto.precio_actual().importe
@@ -118,6 +152,204 @@ class FlujoPOSTests(TestCase):
             configuracion_producto("P63", "Agua de horchata rosa de medio litro")["nombre_corto"],
             "HR 1/2",
         )
+
+    def test_pedido_sucursal_captura_decimal_imprime_y_completa(self):
+        posicion = Mesa.objects.get(
+            sucursal=self.sucursal,
+            canal=Mesa.Canal.SUCURSALES,
+            cliente_sucursal__origen_id=3,
+            orden=1,
+        )
+        ticket, _ = abrir_ticket(posicion)
+        payload = self.client.get(f"/api/tickets/{ticket.id}/").json()
+        self.assertEqual(payload["ticket"]["cliente_sucursal"]["nombre"], "Estancia")
+        self.assertEqual(len(payload["ticket"]["catalogo_sucursal"]), 38)
+
+        barbacoa = ProductoSucursal.objects.get(sucursal=self.sucursal, origen_id=1)
+        respuesta = self.client.post(
+            f"/api/tickets/{ticket.id}/partidas/",
+            data=json.dumps({"producto_sucursal_id": str(barbacoa.id), "cantidad": "1"}),
+            content_type="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        partida = respuesta.json()["ticket"]["partidas"][0]
+        respuesta = self.client.patch(
+            f"/api/partidas/{partida['id']}/",
+            data=json.dumps({"cantidad": "36.000"}),
+            content_type="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(Decimal(respuesta.json()["ticket"]["total"]), Decimal("6948.00"))
+
+        chile = ProductoSucursal.objects.get(sucursal=self.sucursal, origen_id=7)
+        respuesta = self.client.post(
+            f"/api/tickets/{ticket.id}/partidas/",
+            data=json.dumps({"producto_sucursal_id": str(chile.id), "cantidad": "30.000"}),
+            content_type="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(Decimal(respuesta.json()["ticket"]["total"]), Decimal("7012.00"))
+
+        respuesta = self.client.post(f"/api/tickets/{ticket.id}/procesar/", data="{}", content_type="application/json")
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.json()["impresiones"][0]["formato"], TrabajoImpresion.Formato.SUCURSAL)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.PROCESADO)
+        imagen = render_sucursal(ticket)
+        self.assertEqual(imagen.width, 576)
+        self.assertGreater(imagen.height, 600)
+        self.assertLess(imagen.height, 750)
+
+        respuesta = self.client.post(
+            f"/api/tickets/{ticket.id}/completar-sucursal/",
+            data="{}",
+            content_type="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.PAGADO)
+
+    def test_cliente_mayorista_usa_precio_y_catalogo_especificos(self):
+        posicion = Mesa.objects.get(
+            sucursal=self.sucursal,
+            canal=Mesa.Canal.SUCURSALES,
+            cliente_sucursal__origen_id=8,
+            orden=1,
+        )
+        ticket, _ = abrir_ticket(posicion)
+        respuesta = self.client.get(f"/api/tickets/{ticket.id}/")
+        catalogo = respuesta.json()["ticket"]["catalogo_sucursal"]
+        self.assertEqual(len(catalogo), 36)
+        barbacoa = next(producto for producto in catalogo if producto["origen_id"] == 1)
+        self.assertEqual(Decimal(barbacoa["precio"]), Decimal("203.00"))
+        self.assertEqual(barbacoa["nombre_ticket"], "BARBACOA .M")
+        self.assertNotIn(25, {producto["origen_id"] for producto in catalogo})
+        self.assertNotIn(26, {producto["origen_id"] for producto in catalogo})
+
+    def test_integracion_local_importa_confirmado_del_dia_una_sola_vez(self):
+        ruta = Path(self.temporal.name) / "pedidos-externos.sqlite3"
+        conexion = sqlite3.connect(ruta)
+        conexion.executescript(
+            """
+            CREATE TABLE pedidos_pedido (
+                id INTEGER PRIMARY KEY,
+                sucursal_cliente_id INTEGER NOT NULL,
+                codigo_publico TEXT NOT NULL,
+                estado TEXT NOT NULL,
+                fecha_confirmacion TEXT,
+                eliminado INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE pedidos_itempedido (
+                id INTEGER PRIMARY KEY,
+                pedido_id INTEGER NOT NULL,
+                producto_id INTEGER NOT NULL,
+                cantidad TEXT NOT NULL,
+                precio_unitario TEXT NOT NULL
+            );
+            """
+        )
+        conexion.execute(
+            "INSERT INTO pedidos_pedido VALUES (?, ?, ?, ?, ?, ?)",
+            (901, 3, "codigo-prueba", "confirmado", timezone.now().isoformat(), 0),
+        )
+        conexion.execute(
+            "INSERT INTO pedidos_itempedido VALUES (?, ?, ?, ?, ?)",
+            (1, 901, 1, "2.000", "193.00"),
+        )
+        conexion.commit()
+        conexion.close()
+
+        with override_settings(
+            PEDIDOS_SUCURSALES_AUTO_SYNC=True,
+            PEDIDOS_SUCURSALES_DATABASE_URL="",
+            PEDIDOS_SUCURSALES_POSTGRES={"password": ""},
+            PEDIDOS_SUCURSALES_DB=ruta,
+        ):
+            primero = sincronizar_pedidos_confirmados(self.sucursal, forzar=True)
+            segundo = sincronizar_pedidos_confirmados(self.sucursal, forzar=True)
+        self.assertEqual(primero["importados"], 1)
+        self.assertEqual(segundo["importados"], 0)
+        importacion = PedidoSucursalImportado.objects.select_related("ticket").get(origen_id=901)
+        self.assertEqual(importacion.ticket.estado, Ticket.Estado.ABIERTO)
+        self.assertEqual(importacion.ticket.mesa.cliente_sucursal.origen_id, 3)
+        self.assertEqual(importacion.ticket.total, Decimal("386.00"))
+
+    def test_integracion_supabase_tiene_prioridad_y_es_idempotente(self):
+        pedidos = [
+            (
+                {
+                    "id": 902,
+                    "sucursal_cliente_id": 7,
+                    "sucursal_nombre": "Eventos MO",
+                    "codigo_publico": "eventos-mo-prueba",
+                    "estado": "confirmado",
+                    "fecha_confirmacion": timezone.now(),
+                },
+                [
+                    {
+                        "producto_id": 7,
+                        "producto_nombre": "LITRO DE BARBACOA",
+                        "producto_nombre_ticket": "BARBACOA",
+                        "cantidad": Decimal("2.000"),
+                        "precio_unitario": Decimal("193.00"),
+                    }
+                ],
+            )
+        ]
+        postgres = {"password": "configurada", "connect_timeout": 8}
+        with (
+            override_settings(
+                PEDIDOS_SUCURSALES_AUTO_SYNC=True,
+                PEDIDOS_SUCURSALES_DATABASE_URL="",
+                PEDIDOS_SUCURSALES_POSTGRES=postgres,
+                PEDIDOS_SUCURSALES_DB=Path(self.temporal.name) / "no-existe.sqlite3",
+            ),
+            patch("ventas.integracion_sucursales._leer_confirmados_postgres", return_value=pedidos) as lector,
+        ):
+            primero = sincronizar_pedidos_confirmados(self.sucursal, forzar=True)
+            segundo = sincronizar_pedidos_confirmados(self.sucursal, forzar=True)
+
+        self.assertEqual(primero["importados"], 1)
+        self.assertEqual(primero["fuente"], "Supabase")
+        self.assertEqual(segundo["importados"], 0)
+        self.assertEqual(lector.call_count, 2)
+        importacion = PedidoSucursalImportado.objects.select_related("ticket__mesa__cliente_sucursal").get(
+            origen_id=902
+        )
+        self.assertEqual(importacion.origen, "pedidos_sucursales_supabase")
+        self.assertEqual(importacion.ticket.mesa.cliente_sucursal.nombre, "Eventos MO")
+        self.assertEqual(importacion.ticket.total, Decimal("386.00"))
+        self.assertEqual(importacion.ticket.partidas.get().producto_sucursal.origen_id, 1)
+
+    def test_integracion_automatica_pausa_fuera_del_horario(self):
+        fuera_de_horario = timezone.make_aware(datetime.combine(timezone.localdate(), time(18, 0)))
+        with (
+            override_settings(
+                PEDIDOS_SUCURSALES_AUTO_SYNC=True,
+                PEDIDOS_SUCURSALES_DATABASE_URL="",
+                PEDIDOS_SUCURSALES_POSTGRES={"password": "configurada"},
+                PEDIDOS_SUCURSALES_HORA_INICIO="06:00",
+                PEDIDOS_SUCURSALES_HORA_FIN="17:35",
+            ),
+            patch("ventas.integracion_sucursales.timezone.localtime", return_value=fuera_de_horario),
+            patch("ventas.integracion_sucursales._leer_confirmados_postgres") as lector,
+        ):
+            resultado = sincronizar_pedidos_confirmados(self.sucursal)
+
+        self.assertTrue(resultado["activa"])
+        self.assertIn("fuera del horario", resultado["mensaje"])
+        lector.assert_not_called()
+
+    def test_estado_solo_sincroniza_supabase_al_solicitarlo(self):
+        resultado = {"activa": True, "importados": 0, "fuente": "Supabase", "mensaje": "Al día"}
+        with patch("ventas.views.sincronizar_pedidos_confirmados", return_value=resultado) as sincronizar:
+            normal = self.client.get("/api/estado/")
+            solicitado = self.client.get("/api/estado/?sincronizar_sucursales=1")
+
+        self.assertEqual(normal.status_code, 200)
+        self.assertEqual(solicitado.status_code, 200)
+        self.assertEqual(solicitado.json()["integracion_sucursales"]["fuente"], "Supabase")
+        sincronizar.assert_called_once_with(self.sucursal)
 
     def test_teclado_actualiza_cantidad_termino_y_elimina_grupo(self):
         mesa = Mesa.objects.get(sucursal=self.sucursal, clave="MESA-6")
@@ -415,8 +647,8 @@ class FlujoPOSTests(TestCase):
         self.assertNotContains(respuesta, "¿Cómo deseas entrar?")
         self.assertContains(respuesta, 'id="pantalla-completa"')
         self.assertContains(respuesta, 'id="comentario"')
-        self.assertContains(respuesta, "app.css?v=20260823-1")
-        self.assertContains(respuesta, "app.js?v=20260823-1")
+        self.assertContains(respuesta, "app.css?v=20260824-2")
+        self.assertContains(respuesta, "app.js?v=20260824-2")
         self.assertContains(respuesta, 'id="switch-tipo-pedido"')
         self.assertContains(respuesta, 'id="switch-modo-nombres"')
         self.assertContains(respuesta, 'id="datos-servicio-directo"')
@@ -424,7 +656,7 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(respuesta.content.decode().count('data-salir-mesero'), 2)
         worker = self.client.get("/service-worker.js")
         self.assertEqual(worker.headers["Cache-Control"], "no-cache")
-        self.assertContains(worker, "tocayos-pos-v9")
+        self.assertContains(worker, "tocayos-pos-v11")
 
     def test_comensal_24_bebidas_y_preparacion_global(self):
         mesa = Mesa.objects.get(sucursal=self.sucursal, clave="MESA-20")

@@ -1,6 +1,19 @@
 from django.contrib import admin
 
-from .models import Cliente, DomicilioCliente, EventoOutbox, Mesa, ModificadorTicket, Partida, TelefonoCliente, Ticket
+from .models import (
+    Cliente,
+    DomicilioCliente,
+    EventoOutbox,
+    Mesa,
+    ModificadorTicket,
+    Partida,
+    PedidoSucursalImportado,
+    PrecioProductoSucursal,
+    ProductoSucursal,
+    SucursalPedido,
+    TelefonoCliente,
+    Ticket,
+)
 
 
 class PartidaInline(admin.TabularInline):
@@ -40,6 +53,35 @@ class EventoOutboxAdmin(admin.ModelAdmin):
     list_display = ("tipo", "agregado_id", "creado_en", "publicado_en", "intentos")
     list_filter = ("tipo", "publicado_en", "sucursal")
     readonly_fields = ("id", "creado_en")
+
+
+@admin.register(SucursalPedido)
+class SucursalPedidoAdmin(admin.ModelAdmin):
+    list_display = ("origen_id", "nombre", "tipo", "activa")
+    list_filter = ("sucursal", "tipo", "activa")
+    search_fields = ("nombre",)
+
+
+@admin.register(ProductoSucursal)
+class ProductoSucursalAdmin(admin.ModelAdmin):
+    list_display = ("origen_id", "nombre", "unidad", "cantidad_por_precio", "orden", "activo")
+    list_filter = ("sucursal", "unidad", "activo")
+    search_fields = ("nombre", "nombre_ticket")
+
+
+@admin.register(PrecioProductoSucursal)
+class PrecioProductoSucursalAdmin(admin.ModelAdmin):
+    list_display = ("cliente_sucursal", "producto", "importe", "vigente_desde")
+    list_filter = ("sucursal", "cliente_sucursal", "vigente_desde")
+    search_fields = ("cliente_sucursal__nombre", "producto__nombre", "nombre_ticket")
+
+
+@admin.register(PedidoSucursalImportado)
+class PedidoSucursalImportadoAdmin(admin.ModelAdmin):
+    list_display = ("origen", "origen_id", "codigo_publico", "ticket", "estado_origen", "importado_en")
+    list_filter = ("sucursal", "origen", "estado_origen")
+    search_fields = ("codigo_publico", "ticket__folio")
+    readonly_fields = ("id", "importado_en")
 
 
 admin.site.register(Mesa)

@@ -11,6 +11,7 @@ class TrabajoImpresion(models.Model):
         COMANDA = "comanda", "Comanda"
         CUENTA = "cuenta", "Cuenta"
         DOMICILIO = "domicilio", "Domicilio"
+        SUCURSAL = "sucursal", "Pedido de sucursal"
 
     class Destino(models.TextChoices):
         COCINA = "cocina", "Cocina"
@@ -42,4 +43,5 @@ class TrabajoImpresion(models.Model):
         verbose_name_plural = "Trabajos de impresión"
 
     def __str__(self):
-        return f"{self.formato} {self.ticket.folio} → {self.destino}"
+        # Mantener la salida del worker compatible con la consola cp1252 de Windows.
+        return f"{self.formato} {self.ticket.folio} -> {self.destino}"

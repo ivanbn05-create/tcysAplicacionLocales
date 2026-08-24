@@ -5,12 +5,16 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import TrabajoImpresion
-from .render import enviar_tcp, guardar_png, render_comanda, render_cuenta, render_domicilio
+from .render import enviar_tcp, guardar_png, render_comanda, render_cuenta, render_domicilio, render_sucursal
 
 
 def encolar_impresiones(ticket, formato):
     destinos = []
-    if formato in {TrabajoImpresion.Formato.CUENTA, TrabajoImpresion.Formato.DOMICILIO}:
+    if formato in {
+        TrabajoImpresion.Formato.CUENTA,
+        TrabajoImpresion.Formato.DOMICILIO,
+        TrabajoImpresion.Formato.SUCURSAL,
+    }:
         destinos = [TrabajoImpresion.Destino.CAJA]
     else:
         productos = list(ticket.partidas.select_related("producto__categoria").all())
@@ -90,6 +94,8 @@ def procesar_trabajo(trabajo):
             imagen = render_cuenta(ticket)
         elif trabajo.formato == TrabajoImpresion.Formato.DOMICILIO:
             imagen = render_domicilio(ticket)
+        elif trabajo.formato == TrabajoImpresion.Formato.SUCURSAL:
+            imagen = render_sucursal(ticket)
         else:
             imagen = render_comanda(ticket, trabajo.destino)
         relativo, _ = guardar_png(imagen, ticket, trabajo.formato, trabajo.destino)

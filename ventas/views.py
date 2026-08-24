@@ -21,7 +21,8 @@ from .clientes import (
     duplicados_por_nombre,
     guardar_cliente,
 )
-from .models import Cliente, DomicilioCliente, Mesa, Partida, TelefonoCliente, Ticket
+from .integracion_sucursales import sincronizar_pedidos_confirmados
+from .models import Cliente, DomicilioCliente, Mesa, Partida, ProductoSucursal, TelefonoCliente, Ticket
 from .normalizacion import normalizar_telefono
 from .orden import ordenar_partidas
 from .promociones import configuracion_promocion, promocion_disponible, promociones_pendientes
@@ -31,11 +32,14 @@ from .services import (
     asegurar_modificador,
     ajustar_grupo_partidas,
     actualizar_partida,
+    actualizar_partida_sucursal,
     agregar_partida,
+    agregar_partida_sucursal,
     alternar_comentario_general,
     alternar_modificador,
     cobrar_ticket,
     cancelar_ticket,
+    completar_ticket_sucursal,
     convertir_tipo_ticket,
     procesar_ticket,
     registrar_evento,
@@ -52,7 +56,7 @@ OPCIONES_SALSA = {
 
 # Cambiar este valor obliga a las terminales y tabletas instaladas a descargar
 # los recursos de interfaz de esta entrega, incluso si conservan una caché PWA.
-ASSET_VERSION = "20260823-1"
+ASSET_VERSION = "20260824-2"
 
 
 def _sucursal():
@@ -72,7 +76,7 @@ def _json(request):
 def _ticket(ticket_id):
     try:
         return Ticket.objects.select_related(
-            "mesa", "cliente", "telefono_cliente", "domicilio_cliente", "atendio", "sucursal"
+            "mesa__cliente_sucursal", "cliente", "telefono_cliente", "domicilio_cliente", "atendio", "sucursal"
         ).get(pk=ticket_id, sucursal=_sucursal())
     except Ticket.DoesNotExist as exc:
         raise Http404("Ticket no encontrado") from exc
@@ -96,30 +100,94 @@ def _trabajos_payload(trabajos):
     return resultado
 
 
-def _ticket_payload(ticket):
-    partidas = []
-    consulta_partidas = ticket.partidas.select_related("producto__categoria", "promocion_aplicada__producto").all()
-    for partida in ordenar_partidas(consulta_partidas):
-        promocion = configuracion_promocion(partida.producto)
-        partidas.append(
+def _catalogo_sucursal_payload(ticket):
+    cliente_sucursal = ticket.mesa.cliente_sucursal
+    if not ticket.mesa.cliente_sucursal_id:
+        return []
+    vistos = set()
+    resultado = []
+    precios = (
+        cliente_sucursal.precios.select_related("producto")
+        .filter(vigente_desde__lte=timezone.localdate(), producto__activo=True)
+        .order_by("producto__orden", "-vigente_desde")
+    )
+    for precio in precios:
+        if precio.producto_id in vistos:
+            continue
+        vistos.add(precio.producto_id)
+        producto = precio.producto
+        resultado.append(
             {
-                "id": str(partida.id),
-                "producto_id": str(partida.producto_id),
-                "codigo": partida.producto.codigo,
-                "nombre": partida.nombre_producto,
-                "nombre_corto": partida.nombre_corto,
-                "comensal": partida.comensal,
-                "cantidad": str(partida.cantidad),
-                "precio": str(partida.precio_unitario),
-                "importe": str(partida.importe),
-                "categoria": partida.producto.categoria.nombre,
-                "destino": partida.producto.destino_impresion,
-                "termino": partida.termino,
-                "orden": partida.producto.orden,
-                "es_promocion": bool(promocion),
-                "promocion_id": str(partida.promocion_aplicada_id) if partida.promocion_aplicada_id else "",
+                "id": str(producto.id),
+                "origen_id": producto.origen_id,
+                "nombre": producto.nombre,
+                "nombre_ticket": precio.nombre_ticket or producto.nombre_ticket,
+                "unidad": producto.unidad,
+                "cantidad_por_precio": str(producto.cantidad_por_precio),
+                "precio": str(precio.importe),
+                "orden": producto.orden,
             }
         )
+    return resultado
+
+
+def _ticket_payload(ticket):
+    partidas = []
+    es_sucursal = ticket.canal == Mesa.Canal.SUCURSALES
+    if es_sucursal:
+        consulta_partidas = ticket.partidas.select_related("producto_sucursal").order_by(
+            "producto_sucursal__orden", "creada_en"
+        )
+        for partida in consulta_partidas:
+            producto = partida.producto_sucursal
+            partidas.append(
+                {
+                    "id": str(partida.id),
+                    "producto_id": str(partida.producto_sucursal_id),
+                    "producto_sucursal_id": str(partida.producto_sucursal_id),
+                    "codigo": str(producto.origen_id),
+                    "nombre": partida.nombre_producto,
+                    "nombre_catalogo": producto.nombre,
+                    "nombre_corto": partida.nombre_corto,
+                    "comensal": 1,
+                    "cantidad": str(partida.cantidad),
+                    "precio": str(partida.precio_unitario),
+                    "importe": str(partida.importe),
+                    "cantidad_por_precio": str(partida.cantidad_por_precio),
+                    "unidad": partida.unidad,
+                    "categoria": "Sucursales",
+                    "destino": "caja",
+                    "termino": "",
+                    "orden": producto.orden,
+                    "es_promocion": False,
+                    "promocion_id": "",
+                }
+            )
+    else:
+        consulta_partidas = ticket.partidas.select_related("producto__categoria", "promocion_aplicada__producto").all()
+        for partida in ordenar_partidas(consulta_partidas):
+            promocion = configuracion_promocion(partida.producto)
+            partidas.append(
+                {
+                    "id": str(partida.id),
+                    "producto_id": str(partida.producto_id),
+                    "codigo": partida.producto.codigo,
+                    "nombre": partida.nombre_producto,
+                    "nombre_corto": partida.nombre_corto,
+                    "comensal": partida.comensal,
+                    "cantidad": str(partida.cantidad),
+                    "precio": str(partida.precio_unitario),
+                    "importe": str(partida.importe),
+                    "cantidad_por_precio": str(partida.cantidad_por_precio),
+                    "unidad": partida.unidad,
+                    "categoria": partida.producto.categoria.nombre,
+                    "destino": partida.producto.destino_impresion,
+                    "termino": partida.termino,
+                    "orden": partida.producto.orden,
+                    "es_promocion": bool(promocion),
+                    "promocion_id": str(partida.promocion_aplicada_id) if partida.promocion_aplicada_id else "",
+                }
+            )
     modificadores = [
         {"id": str(mod.id), "comensal": mod.comensal, "codigo": mod.codigo, "nombre": mod.nombre}
         for mod in ticket.modificadores.all()
@@ -138,7 +206,8 @@ def _ticket_payload(ticket):
         "contacto_pedido_nombre": ticket.contacto_pedido_nombre,
         "contacto_pedido_telefono": ticket.contacto_pedido_telefono,
     }
-    pendientes = promociones_pendientes(ticket)
+    pendientes = [] if es_sucursal else promociones_pendientes(ticket)
+    cliente_sucursal = ticket.mesa.cliente_sucursal
     return {
         "id": str(ticket.id),
         "folio": ticket.folio,
@@ -147,6 +216,13 @@ def _ticket_payload(ticket):
         "mesa_id": str(ticket.mesa_id),
         "mesa": ticket.mesa.nombre,
         "posicion_numero": ticket.mesa.orden,
+        "cliente_sucursal": {
+            "id": str(cliente_sucursal.id) if cliente_sucursal else "",
+            "origen_id": cliente_sucursal.origen_id if cliente_sucursal else None,
+            "nombre": cliente_sucursal.nombre if cliente_sucursal else "",
+            "tipo": cliente_sucursal.tipo if cliente_sucursal else "",
+        },
+        "catalogo_sucursal": _catalogo_sucursal_payload(ticket) if es_sucursal else [],
         "total": str(ticket.total),
         "creado_en": ticket.creado_en.isoformat(),
         "comentario_general": ticket.comentario_general,
@@ -192,8 +268,17 @@ def _inicio(request, modo_tableta=False):
                 }
             )
     posiciones = [
-        {"id": str(mesa.id), "canal": mesa.canal, "clave": mesa.clave, "nombre": mesa.nombre, "orden": mesa.orden}
-        for mesa in Mesa.objects.filter(sucursal=sucursal, activa=True)
+        {
+            "id": str(mesa.id),
+            "canal": mesa.canal,
+            "clave": mesa.clave,
+            "nombre": mesa.nombre,
+            "orden": mesa.orden,
+            "cliente_sucursal_id": str(mesa.cliente_sucursal_id) if mesa.cliente_sucursal_id else "",
+            "cliente_sucursal_nombre": mesa.cliente_sucursal.nombre if mesa.cliente_sucursal_id else "",
+            "cliente_sucursal_orden": mesa.cliente_sucursal.origen_id if mesa.cliente_sucursal_id else 0,
+        }
+        for mesa in Mesa.objects.select_related("cliente_sucursal").filter(sucursal=sucursal, activa=True)
     ]
     return render(
         request,
@@ -219,6 +304,14 @@ def tabletas(request):
 @require_GET
 def api_estado(request):
     sucursal = _sucursal()
+    if request.GET.get("sincronizar_sucursales") == "1":
+        integracion = sincronizar_pedidos_confirmados(sucursal)
+    else:
+        integracion = {
+            "activa": settings.PEDIDOS_SUCURSALES_AUTO_SYNC,
+            "importados": 0,
+            "mensaje": "Sincronización de sucursales bajo demanda.",
+        }
     activos = Ticket.objects.filter(
         sucursal=sucursal,
         estado__in=[Ticket.Estado.ABIERTO, Ticket.Estado.PROCESADO, Ticket.Estado.COBRAR],
@@ -232,7 +325,7 @@ def api_estado(request):
         }
         for ticket in activos
     }
-    return JsonResponse({"tickets": tickets})
+    return JsonResponse({"tickets": tickets, "integracion_sucursales": integracion})
 
 
 @require_GET
@@ -456,6 +549,14 @@ def api_agregar_partida(request, ticket_id):
     try:
         ticket = _ticket(ticket_id)
         datos = _json(request)
+        if ticket.canal == Mesa.Canal.SUCURSALES:
+            producto = ProductoSucursal.objects.get(
+                pk=datos.get("producto_sucursal_id") or datos.get("producto_id"),
+                sucursal=ticket.sucursal,
+            )
+            agregar_partida_sucursal(ticket, producto, Decimal(str(datos.get("cantidad", "1"))))
+            ticket.refresh_from_db()
+            return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id))})
         producto = Producto.objects.get(pk=datos.get("producto_id"), sucursal=ticket.sucursal)
         comensal = int(datos.get("comensal", 1))
         cantidad = Decimal(str(datos.get("cantidad", "1")))
@@ -476,7 +577,7 @@ def api_agregar_partida(request, ticket_id):
         )
         ticket.refresh_from_db()
         return JsonResponse({"ticket": _ticket_payload(ticket)})
-    except (Producto.DoesNotExist, Partida.DoesNotExist, ErrorVenta, InvalidOperation, ValueError) as exc:
+    except (Producto.DoesNotExist, ProductoSucursal.DoesNotExist, Partida.DoesNotExist, ErrorVenta, InvalidOperation, ValueError) as exc:
         return JsonResponse({"error": str(exc) or "Producto no encontrado."}, status=400)
 
 
@@ -488,9 +589,12 @@ def api_partida(request, partida_id):
         datos = {} if request.method == "DELETE" else _json(request)
         cantidad = Decimal("0") if request.method == "DELETE" else Decimal(str(datos.get("cantidad", partida.cantidad)))
         termino = datos.get("termino") if "termino" in datos else None
-        actualizar_partida(partida, cantidad, termino)
+        if partida.producto_sucursal_id:
+            actualizar_partida_sucursal(partida, cantidad)
+        else:
+            actualizar_partida(partida, cantidad, termino)
         ticket.refresh_from_db()
-        return JsonResponse({"ticket": _ticket_payload(ticket)})
+        return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id))})
     except (Partida.DoesNotExist, ErrorVenta, InvalidOperation) as exc:
         return JsonResponse({"error": str(exc) or "Partida no encontrada."}, status=400)
 
@@ -542,7 +646,10 @@ def api_modificador(request, ticket_id):
 def api_procesar(request, ticket_id):
     try:
         ticket = procesar_ticket(_ticket(ticket_id))
-        trabajos = list(encolar_impresiones(ticket, TrabajoImpresion.Formato.COMANDA))
+        if ticket.canal == Mesa.Canal.SUCURSALES:
+            trabajos = list(encolar_impresiones(ticket, TrabajoImpresion.Formato.SUCURSAL))
+        else:
+            trabajos = list(encolar_impresiones(ticket, TrabajoImpresion.Formato.COMANDA))
         if ticket.canal == Mesa.Canal.DOMICILIO:
             trabajos.extend(encolar_impresiones(ticket, TrabajoImpresion.Formato.DOMICILIO))
         return JsonResponse({"ticket": _ticket_payload(ticket), "impresiones": _trabajos_payload(trabajos)})
@@ -553,6 +660,8 @@ def api_procesar(request, ticket_id):
 @require_POST
 def api_cobrar(request, ticket_id):
     try:
+        if _ticket(ticket_id).canal == Mesa.Canal.SUCURSALES:
+            raise ErrorVenta("Los pedidos de sucursal se completan sin registrar un cobro de caja.")
         datos = _json(request)
         forma = datos.get("forma_pago", Ticket.FormaPago.EFECTIVO)
         if forma not in Ticket.FormaPago.values:
@@ -563,6 +672,15 @@ def api_cobrar(request, ticket_id):
         trabajos = encolar_impresiones(ticket, TrabajoImpresion.Formato.CUENTA) if imprimir_ticket else []
         return JsonResponse({"ticket": _ticket_payload(ticket), "impresiones": _trabajos_payload(trabajos)})
     except (ErrorVenta, InvalidOperation) as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+
+@require_POST
+def api_completar_sucursal(request, ticket_id):
+    try:
+        ticket = completar_ticket_sucursal(_ticket(ticket_id))
+        return JsonResponse({"ticket": _ticket_payload(ticket)})
+    except ErrorVenta as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
 
@@ -584,6 +702,8 @@ def api_imprimir(request, ticket_id):
             raise ErrorVenta("Formato de impresión inválido.")
         if ticket.canal == Mesa.Canal.RECOGER and formato != TrabajoImpresion.Formato.COMANDA:
             raise ErrorVenta("Los pedidos para recoger sólo imprimen comanda.")
+        if ticket.canal == Mesa.Canal.SUCURSALES and formato != TrabajoImpresion.Formato.SUCURSAL:
+            raise ErrorVenta("Los pedidos de sucursal sólo usan el ticket total de sucursal.")
         trabajos = encolar_impresiones(ticket, formato)
         return JsonResponse({"impresiones": _trabajos_payload(trabajos)})
     except ErrorVenta as exc:
@@ -613,8 +733,8 @@ def manifest(request):
 
 
 def service_worker(request):
-    codigo = """const CACHE='tocayos-pos-v9';
-self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(['/static/ventas/app.css?v=20260823-1','/static/ventas/app.js?v=20260823-1','/static/ventas/brand/logoactual.jpeg','/static/ventas/fonts/Montserrat-Medium.ttf','/static/ventas/fonts/Montserrat-SemiBold.ttf']))));
+    codigo = """const CACHE='tocayos-pos-v11';
+self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(['/static/ventas/app.css?v=20260824-2','/static/ventas/app.js?v=20260824-2','/static/ventas/brand/logoactual.jpeg','/static/ventas/fonts/Montserrat-Medium.ttf','/static/ventas/fonts/Montserrat-SemiBold.ttf']))));
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))));
 self.addEventListener('fetch', e => { if (e.request.method === 'GET') e.respondWith(fetch(e.request).catch(() => caches.match(e.request))); });
 """

@@ -29,6 +29,18 @@ py -m venv .venv
 
 La configuración local usa SQLite para facilitar la prueba. Docker usa PostgreSQL 16.
 
+### Inicio rápido para pruebas en la LAN
+
+En la computadora principal, haz doble clic en `iniciar-prueba-lan.bat`. El iniciador
+comprueba dependencias, aplica migraciones y catálogos pendientes, y publica la
+aplicación exactamente en `http://192.168.0.30:8000`. También activa impresión TCP
+síncrona, por lo que no requiere abrir por separado el consumidor de impresión.
+
+La ventana debe permanecer abierta durante la prueba; `Ctrl+C` detiene el servidor. La
+computadora necesita conservar la dirección `192.168.0.30`, preferentemente mediante
+una reserva DHCP en el módem o router. Si Windows recibe otra IP, debe corregirse la
+reserva antes de usar este iniciador.
+
 ## Aplicación de escritorio para Windows
 
 La carpeta `desktop/` contiene un ejecutable ligero que abre el punto de venta como una
@@ -144,6 +156,51 @@ El importador omite filas sin nombre/domicilio/contacto y agrupa domicilios del 
 nombre. Cuando una empresa no tiene teléfono fijo pero la referencia contiene el
 contacto rotativo, se marca para solicitar nombre y celular en cada pedido.
 
+## Pedidos de sucursales
+
+La pestaña **Sucursales** contiene 11 posiciones para cada sucursal o cliente
+mayorista. Al seleccionar un producto se abre la calculadora integrada para capturar o
+editar cantidades enteras o decimales; al procesar se imprime un ticket total exclusivo
+con cantidad, precio e importe por concepto. El catálogo y sus precios vigentes se
+cargan con `cargar_datos_iniciales` y permanecen separados del menú de comedor.
+
+El POS consulta Supabase en modo de sólo lectura e importa una sola vez los pedidos
+confirmados del día. Se asignan al primer espacio libre de la sucursal correspondiente
+y quedan abiertos para revisión antes de imprimir. La conexión compartida se configura
+en `.env`; la contraseña nunca se guarda en Git:
+
+```env
+PEDIDOS_SUCURSALES_AUTO_SYNC=true
+PEDIDOS_SUCURSALES_SYNC_SECONDS=300
+PEDIDOS_SUCURSALES_HORA_INICIO=06:00
+PEDIDOS_SUCURSALES_HORA_FIN=17:35
+PEDIDOS_SUCURSALES_DB_HOST=aws-1-us-east-2.pooler.supabase.com
+PEDIDOS_SUCURSALES_DB_PORT=5432
+PEDIDOS_SUCURSALES_DB_NAME=postgres
+PEDIDOS_SUCURSALES_DB_USER=postgres.uxcuejhzueagtscdxwlo
+PEDIDOS_SUCURSALES_DB_PASSWORD=secreto-local
+PEDIDOS_SUCURSALES_DB_SSLMODE=require
+```
+
+También se acepta una URI completa en `PEDIDOS_SUCURSALES_DATABASE_URL`. Si no hay
+credenciales de Supabase, `PEDIDOS_SUCURSALES_DB` puede apuntar a una SQLite local para
+desarrollo sin conexión.
+
+La sincronización también puede ejecutarse manualmente:
+
+```powershell
+.\.venv\Scripts\python manage.py sincronizar_pedidos_sucursales
+```
+
+La consulta remota no modifica estados ni datos en Supabase. El control idempotente se
+guarda únicamente en la base local del POS. El intervalo predeterminado de cinco
+minutos reduce la carga remota a un máximo aproximado de 139 consultas diarias; fuera
+del horario configurado no se abre ninguna conexión. Los cinco minutos posteriores a
+las 17:30 funcionan como margen para recoger el último pedido permitido del día. Al
+entrar a la pestaña **Sucursales** se solicita una revisión inmediata; si ya hubo una en
+los últimos cinco minutos se reutiliza ese estado. La revisión periódica sólo permanece
+activa mientras el usuario está en esa pestaña.
+
 ## Pruebas
 
 ```powershell
@@ -153,4 +210,5 @@ python manage.py test
 Cubren apertura y cancelación, captura hasta 24 comensales, promociones y sus
 componentes, preparación global/individual excluyente, entrega programada, salsas,
 terminal, orden de impresión, acceso para tabletas, bebidas acumuladas, clientes,
-procesamiento, cobro opcional y generación de los formatos térmicos.
+procesamiento, cobro opcional, captura decimal de sucursales, importación idempotente y
+generación de los formatos térmicos.
