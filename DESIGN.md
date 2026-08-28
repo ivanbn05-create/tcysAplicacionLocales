@@ -165,13 +165,13 @@ La paleta combina identidad cálida con papel y carbón; los colores de estado s
 
 ## Layout
 
-La aplicación sigue una secuencia vertical: cabecera de marca compacta, riel de canales, estación de posiciones y franja de estado. La cabecera no aloja telemetría pasiva de conexión o impresora. En la vista de posiciones reserva las acciones de ventana y `Salir`; al entrar a captura, `Salir` desaparece y la navegación vuelve a depender de la acción contextual `Volver`.
+La aplicación sigue una secuencia vertical: cabecera de marca compacta, riel de canales y estación de posiciones. No usa un pie de página operativo: cada posición comunica su estado dentro de la propia tarjeta, con texto, símbolo y color. La cabecera no aloja telemetría pasiva de conexión o impresora. En la vista de posiciones reserva las acciones de ventana y `Salir`; al entrar a captura, `Salir` desaparece y la navegación vuelve a depender de la acción contextual `Volver`.
 
-Las etiquetas Comedor, Domicilio y Sucursales son tickets/clipboards horizontales orientados a la derecha, con icono SVG a la izquierda, texto breve y clip superior. La estación usa una rejilla de siete columnas en escritorio: la zona principal ocupa seis y Recoger/Llevar una. Ambas heredan el mismo `subgrid`, por lo que toda tarjeta principal y auxiliar tiene exactamente el mismo ancho, alto, separación y padding. Bajo 1180 px el reparto pasa a cuatro más una; bajo 700 px ambas zonas ocupan dos columnas y se apilan sin deformar las tarjetas.
+Las etiquetas Comedor, Domicilio y Sucursales son tickets/clipboards horizontales orientados a la derecha, con icono SVG a la izquierda, texto breve y clip superior. La estación usa una rejilla de siete columnas entre 701 px y escritorio: la zona principal ocupa cinco y Recoger/Llevar dos. Ambas heredan el mismo `subgrid`, por lo que toda tarjeta principal y auxiliar tiene exactamente el mismo ancho, alto, separación y padding. Bajo 700 px ambas zonas ocupan dos columnas y se apilan sin deformar las tarjetas.
 
-Las sucursales se organizan como columnas desplazables; sus encabezados y textos internos usan una escala compacta para evitar saturación. El flujo de captura mantiene tres zonas funcionales —comensal, catálogo y comanda— y reorganiza o desplaza contenido en pantallas estrechas sin ocultarlo con recortes.
+Las sucursales se organizan como columnas desplazables; sus encabezados y textos internos usan una escala compacta para evitar saturación. El flujo de captura mantiene tres zonas funcionales —comensal, catálogo y comanda—: el riel de comensales conserva 62 px y, en disposición horizontal, el espacio restante se reparte aproximadamente 60 % para catálogo y 40 % para comanda. La comanda puede compactar sus pistas, pero nunca alterar el orden ni el lenguaje de la impresión térmica. Bajo 700 px las tres zonas se apilan sin ocultar funciones.
 
-El catálogo usa tarjetas horizontales de dos mitades exactas. La izquierda muestra un WebP local con `object-fit: cover`; la derecha contiene abreviatura y nombre. La imagen administrada en `Producto.imagen` tiene prioridad. Si no existe, se consulta el mapa estático de 25 WebP en `ventas/static/ventas/menu/`; un código sin asignación usa `mainlogo.webp`. Los 25 recursos forman parte del precache del service worker para operación offline.
+El catálogo usa tarjetas horizontales de dos mitades exactas. La izquierda muestra un WebP local con `object-fit: cover`; la derecha contiene abreviatura y nombre. En PC de operación hasta 1180 px y en `/tabletas` se muestran dos productos por fila. El encabezado del menú completo ofrece siete atajos numerados, en el mismo orden del catálogo, que desplazan el panel a Taco, Promoción, Consomé y Barbacoa, Lonches, Gringas y Quesadillas, Bebidas y Postre. La imagen administrada en `Producto.imagen` tiene prioridad. Si no existe, se consulta el mapa estático de 25 WebP en `ventas/static/ventas/menu/`; un código sin asignación usa `mainlogo.webp`. Los 25 recursos forman parte del precache del service worker para operación offline.
 
 ## Elevation & Depth
 
@@ -215,7 +215,7 @@ El logotipo se muestra completo, proporcional y sin recoloración, rotación, co
 
 ### Navigation
 
-El riel de canales usa tres tickets tipo clipboard orientados a la derecha. El seleccionado expone `aria-pressed`, papel blanco, clip amarillo y una única regla roja inferior. `Salir` vive en la cabecera sólo mientras se muestran posiciones; dentro de una orden se oculta para evitar abandonar accidentalmente la captura.
+El riel de canales usa tres tickets tipo clipboard orientados a la derecha. El seleccionado expone `aria-pressed`, papel blanco, clip amarillo y una única regla roja inferior. Los siete atajos del catálogo son botones con nombre accesible y destino explícito; el desplazamiento respeta movimiento reducido y nunca cambia el orden de categorías. `Salir` vive en la cabecera sólo mientras se muestran posiciones; dentro de una orden se oculta para evitar abandonar accidentalmente la captura.
 
 ### Virtual Comanda
 
@@ -231,6 +231,7 @@ La resolución sigue una sola prioridad: `Producto.imagen` mediante endpoint aut
 
 - **Do** revisar `PRODUCT.md`, este archivo y el brief de superficie antes de crear o modificar una pantalla.
 - **Do** preservar la igualdad geométrica entre posiciones principales y auxiliares mediante la misma retícula.
+- **Do** mantener el reparto 5+2 de posiciones y 60/40 de catálogo/comanda en el formato horizontal de operación.
 - **Do** mantener color, etiqueta y símbolo en todos los estados operativos.
 - **Do** conservar la comanda virtual alineada con `impresion/render.py::render_comanda` y con una impresión real.
 - **Do** servir tipografías, iconos e imágenes desde el proyecto y registrar la procedencia de todo raster nuevo.
@@ -239,6 +240,7 @@ La resolución sigue una sola prioridad: `Producto.imagen` mediante endpoint aut
 ### Don't:
 
 - **Don't** devolver Orden abierta al rojo; amarillo es su semántica aprobada.
+- **Don't** reintroducir un footer de estado: esa información debe vivir en las posiciones y acciones que representa.
 - **Don't** mostrar `Salir` durante la captura ni reintroducir estados pasivos de conexión o impresora en la cabecera.
 - **Don't** crear tarjetas flotantes genéricas, glassmorphism, gradientes decorativos, halos, texturas de papel o sombras duras.
 - **Don't** deformar el logotipo ni usar Bebas Neue para instrucciones, datos de cliente o errores extensos.

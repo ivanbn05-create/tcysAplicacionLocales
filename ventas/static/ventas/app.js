@@ -432,10 +432,46 @@
     renderComanda();
   }
 
+  function configurarAtajosMenu(nombresSecciones = []) {
+    const contexto = $("#menu-contexto");
+    const atajos = $("#atajos-menu");
+    const mostrar = estado.modoMenu === "productos" && nombresSecciones.length > 0;
+    if (contexto) contexto.hidden = mostrar;
+    if (!atajos) return;
+    atajos.hidden = !mostrar;
+    if (!mostrar) return;
+    atajos.innerHTML = nombresSecciones.slice(0, 7).map((nombre, indice) => {
+      const numero = indice + 1;
+      const etiqueta = `${numero}. ${nombre}`;
+      return `<button data-menu-atajo="${numero}" type="button" aria-controls="menu-seccion-${numero}" aria-label="${escapar(`Ir a ${etiqueta}`)}" title="${escapar(etiqueta)}" ${numero === 1 ? 'aria-current="location"' : ""}>${numero}</button>`;
+    }).join("");
+  }
+
+  function desplazarASeccionMenu(numero) {
+    if (estado.modoMenu !== "productos") return;
+    const contenedor = $("#productos");
+    const destino = $(`#menu-seccion-${numero}`);
+    if (!contenedor || !destino) return;
+    const desplazamiento = destino.getBoundingClientRect().top
+      - contenedor.getBoundingClientRect().top
+      + contenedor.scrollTop;
+    const comportamiento = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? "auto" : "smooth";
+    if (typeof contenedor.scrollTo === "function") {
+      contenedor.scrollTo({ top: Math.max(0, desplazamiento), behavior: comportamiento });
+    } else {
+      contenedor.scrollTop = Math.max(0, desplazamiento);
+    }
+    $$("#atajos-menu [data-menu-atajo]").forEach(boton => {
+      if (boton.dataset.menuAtajo === String(numero)) boton.setAttribute("aria-current", "location");
+      else boton.removeAttribute("aria-current");
+    });
+  }
+
   function renderMenu() {
     const abierto = estado.ticket?.estado === "abierto";
     const esSucursal = estado.ticket?.canal === "sucursales";
     const modoCalculadora = ["calculadora", "calculadora-sucursal"].includes(estado.modoMenu);
+    configurarAtajosMenu();
     $(".panel-productos")?.classList.toggle("modo-calculadora", modoCalculadora);
     $("#productos")?.classList.toggle("modo-calculadora", modoCalculadora);
     const volverProductos = $("#menu-productos");
@@ -575,18 +611,25 @@
       if (!segmentos.has(producto.categoria)) segmentos.set(producto.categoria, []);
       segmentos.get(producto.categoria).push(producto);
     }
-    $("#productos").innerHTML = [...segmentos.entries()].map(([segmento, items]) => `
-      <section class="segmento-menu">
-        ${soloBebidas ? "" : `<h3><span>${escapar(segmento.toLocaleUpperCase("es-MX"))}</span></h3>`}
+    const secciones = [...segmentos.entries()];
+    $("#productos").innerHTML = secciones.map(([segmento, items], indice) => {
+      const numeroSeccion = soloBebidas ? "" : indice + 1;
+      const idSeccion = numeroSeccion ? `menu-seccion-${numeroSeccion}` : "";
+      const idTitulo = numeroSeccion ? `menu-seccion-titulo-${numeroSeccion}` : "";
+      return `
+      <section class="segmento-menu" ${idSeccion ? `id="${idSeccion}" data-menu-seccion="${numeroSeccion}" aria-labelledby="${idTitulo}"` : ""}>
+        ${soloBebidas ? "" : `<h3 id="${idTitulo}"><span>${escapar(segmento.toLocaleUpperCase("es-MX"))}</span></h3>`}
         <div class="segmento-productos">
-          ${items.map(producto => `<button class="producto producto-menu ${producto.es_promocion ? "promocion-menu" : ""}" data-id="${producto.id}" type="button" aria-label="${escapar(`${producto.nombre}. Abreviatura ${producto.corto}`)}" ${!abierto || !producto.disponible_hoy ? "disabled" : ""}>
+          ${items.map(producto => `<button class="producto producto-menu ${producto.es_promocion ? "promocion-menu" : ""} ${producto.es_promocion && !producto.disponible_hoy ? "no-disponible-hoy" : ""}" data-id="${producto.id}" type="button" aria-label="${escapar(`${producto.nombre}. Abreviatura ${producto.corto}`)}" ${!abierto || !producto.disponible_hoy ? "disabled" : ""}>
             ${producto.imagen_url
               ? `<span class="producto-imagen" data-abreviatura="${escapar(producto.corto)}"><img src="${escapar(producto.imagen_url)}" alt="" width="320" height="240" loading="lazy" decoding="async"></span>`
               : `<span class="producto-imagen producto-imagen-vacia" aria-hidden="true"><span><b>${escapar(producto.corto)}</b><small>Sin foto</small></span></span>`}
             <span class="producto-copy"><small>${escapar(producto.es_promocion ? `${producto.corto} · ${producto.promocion_dias}` : producto.corto)}</small><strong>${escapar(producto.nombre)}</strong></span>
           </button>`).join("")}
         </div>
-      </section>`).join("") || '<div class="vacio">No hay opciones disponibles.</div>';
+      </section>`;
+    }).join("") || '<div class="vacio">No hay opciones disponibles.</div>';
+    configurarAtajosMenu(soloBebidas ? [] : secciones.map(([nombre]) => nombre));
   }
 
   function formatoFechaComanda(valor) {
@@ -1022,7 +1065,9 @@
     $("#cancelar-orden").classList.toggle("oculto", !abierto || !permisos.cancelar);
     $("#cobrar").classList.toggle("oculto", !cobrable || !permisos.cobrar);
     $("#reimprimir").classList.toggle("oculto", abierto || !permisos.reimprimir);
-    $$(".persona, .opcion-preparacion, .comanda-papel button, .producto, .fila-partida-sucursal").forEach(b => b.disabled = !abierto);
+    $$(".persona, .opcion-preparacion, .comanda-papel button, .producto, .fila-partida-sucursal").forEach(b => {
+      b.disabled = !abierto || b.classList.contains("no-disponible-hoy");
+    });
     $$("#datos-cliente button, #datos-cliente input, #datos-cliente textarea").forEach(control => control.disabled = !abierto);
     $$("#datos-servicio-directo input, #ticket-switches input, #nombre-persona").forEach(control => control.disabled = !abierto);
     $$("#entrega, #pago-domicilio input").forEach(control => control.disabled = !abierto);
@@ -1723,6 +1768,10 @@
     contenedor.setAttribute("aria-hidden", "true");
     contenedor.innerHTML = `<span><b>${escapar(abreviatura)}</b><small>Sin foto</small></span>`;
   }, true);
+  $("#atajos-menu")?.addEventListener("click", evento => {
+    const atajo = evento.target.closest("[data-menu-atajo]");
+    if (atajo) desplazarASeccionMenu(Number(atajo.dataset.menuAtajo));
+  });
   $("#menu-productos").addEventListener("click", async () => cambiarModoMenu("productos"));
   $("#comanda-preview").addEventListener("click", async evento => {
     const partidaSucursal = evento.target.closest("[data-partida-sucursal]");

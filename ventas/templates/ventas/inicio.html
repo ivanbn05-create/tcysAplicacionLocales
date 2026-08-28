@@ -91,21 +91,6 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
       {% endif %}
       <div class="estacion-posiciones">
         <div id="rejilla-posiciones" class="rejilla-posiciones" aria-live="polite" aria-label="Posiciones de Comedor"></div>
-        <footer class="barra-estado-posiciones">
-          <div class="leyenda" aria-label="Estados de las posiciones">
-            <span><i class="libre"></i>Libre</span>
-            <span><i class="ocupada"></i>Orden abierta</span>
-            <span><i class="procesada"></i>Procesada</span>
-          </div>
-          <div class="sesion-operativa">
-            <span class="sesion-icono" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="7" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg></span>
-            <span><small>Operación</small><strong>{% if request.user.is_authenticated %}{{ request.user.get_full_name|default:request.user.username }}{% else %}Mesero{% endif %}</strong></span>
-          </div>
-          <div class="admin-futuro" aria-disabled="true">
-            <span aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="1"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 15v3"/></svg></span>
-            <span><small>Administrador</small><strong>Próximamente</strong></span>
-          </div>
-        </footer>
       </div>
     </section>
 
@@ -139,8 +124,9 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
 
         <section class="panel-productos">
           <div class="menu-encabezado">
-            <div>
+            <div class="menu-identidad">
               <p class="eyebrow" id="menu-contexto">Menú completo</p>
+              <nav id="atajos-menu" class="atajos-menu" aria-label="Ir a una sección del menú" hidden></nav>
               <strong id="menu-indicacion">Selecciona un producto</strong>
             </div>
             <button id="menu-productos" class="boton enlace oculto" type="button">Ver productos</button>

@@ -89,7 +89,7 @@ COMENTARIOS_GENERALES_PERMITIDOS = {
 
 # Cambiar este valor obliga a las terminales y tabletas instaladas a descargar
 # los recursos de interfaz de esta entrega, incluso si conservan una caché PWA.
-ASSET_VERSION = "20260827-impeccable-2"
+ASSET_VERSION = "20260828-adapt-1"
 PWA_CACHE = f"tocayos-pos-{ASSET_VERSION}"
 
 

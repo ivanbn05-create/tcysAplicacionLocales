@@ -20,6 +20,9 @@ related_targets: ["ventas/static/ventas/app.css","ventas/static/ventas/brand-pos
 - Rejilla de posiciones dominante, con lectura de 24 mesas a 1440×900 cuando el canal lo permita.
 - La captura real no implementa “Nuevo ticket” ni nombres inventados de la maqueta; la cabecera omite telemetría pasiva y reserva los avisos persistentes para fallos accionables.
 - En el flujo de ticket se conserva la topología funcional de tres pasos y se aplica la misma gramática material.
+- La estación horizontal usa siete pistas: cinco posiciones principales y dos auxiliares; no incluye footer.
+- En captura horizontal el riel de comensales conserva su ancho y catálogo/comanda reparten aproximadamente 60/40. PC operativo hasta 1180 px y `/tabletas` muestran dos productos por fila.
+- El menú completo ofrece siete atajos numerados que siguen el orden real de categorías y desplazan sólo el catálogo.
 
 ## Inventario y medio
 
@@ -47,6 +50,7 @@ related_targets: ["ventas/static/ventas/app.css","ventas/static/ventas/brand-pos
 - Conexión e impresora no ocupan la cabecera; los fallos que requieran actuar se anuncian mediante aviso persistente.
 - `Salir` vive en la cabecera sólo mientras se muestran posiciones; desaparece al entrar a captura para evitar abandonar accidentalmente la orden.
 - Comedor/Llevar y Domicilio/Recoger comparten las mismas pistas de rejilla, por lo que sus tarjetas tienen dimensiones idénticas en cada breakpoint.
+- Las promociones fuera de su día se ven en escala de grises y permanecen deshabilitadas desde el primer render.
 
 ## Límites
 

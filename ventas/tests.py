@@ -805,6 +805,8 @@ class FlujoPOSTests(TestCase):
         self.assertContains(respuesta, 'id="salir-tableta"')
         self.assertContains(respuesta, "manifest.webmanifest?modo=tableta")
         self.assertContains(respuesta, 'class="topbar"')
+        self.assertContains(respuesta, 'id="atajos-menu"')
+        self.assertNotContains(respuesta, 'class="barra-estado-posiciones"')
         self.assertNotContains(respuesta, 'data-canal="domicilio"')
         self.assertNotContains(respuesta, 'data-canal="sucursales"')
         manifest = self.client.get("/manifest.webmanifest?modo=tableta").json()
@@ -829,6 +831,8 @@ class FlujoPOSTests(TestCase):
         self.assertContains(respuesta, 'id="switch-tipo-pedido"')
         self.assertContains(respuesta, 'id="switch-modo-nombres"')
         self.assertContains(respuesta, 'id="datos-servicio-directo"')
+        self.assertContains(respuesta, 'id="atajos-menu"')
+        self.assertNotContains(respuesta, 'class="barra-estado-posiciones"')
         self.assertEqual(respuesta.content.decode().count('class="perfil-icono"'), 2)
         self.assertEqual(respuesta.content.decode().count('data-salir-mesero'), 1)
         worker = self.client.get("/service-worker.js")
@@ -836,6 +840,45 @@ class FlujoPOSTests(TestCase):
         self.assertContains(worker, f"tocayos-pos-{ASSET_VERSION}")
         self.assertContains(worker, "Montserrat-Variable.woff2")
         self.assertContains(worker, "BebasNeue-Regular.woff2")
+
+    @patch("ventas.views.timezone.localdate", return_value=date(2026, 8, 30))
+    def test_catalogo_inicial_ordena_siete_secciones_y_expone_promociones_no_disponibles(self, _fecha):
+        respuesta = self.client.get("/")
+        html = respuesta.content.decode()
+        marcador = '<script id="datos-productos" type="application/json">'
+        catalogo = json.loads(html.split(marcador, 1)[1].split("</script>", 1)[0])
+
+        categorias = list(dict.fromkeys(producto["categoria"] for producto in catalogo))
+        self.assertEqual(
+            categorias,
+            [
+                "Taco",
+                "Promoción",
+                "Consomé y Barbacoa",
+                "Lonches",
+                "Gringas y Quesadillas",
+                "Bebidas",
+                "Postre",
+            ],
+        )
+        promociones = [producto for producto in catalogo if producto["es_promocion"]]
+        self.assertTrue(promociones)
+        self.assertTrue(all(not producto["disponible_hoy"] for producto in promociones))
+
+    def test_javascript_conserva_contratos_de_atajos_y_promociones_inactivas(self):
+        javascript = (Path(settings.BASE_DIR) / "ventas" / "static" / "ventas" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        for contrato in (
+            'data-menu-atajo="${numero}"',
+            'aria-controls="menu-seccion-${numero}"',
+            'id="${idSeccion}" data-menu-seccion="${numeroSeccion}"',
+            'no-disponible-hoy',
+            'b.disabled = !abierto || b.classList.contains("no-disponible-hoy")',
+            '(prefers-reduced-motion: reduce)',
+        ):
+            with self.subTest(contrato=contrato):
+                self.assertIn(contrato, javascript)
 
     def test_imagen_producto_se_publica_como_miniatura_webp_privada(self):
         contenido = BytesIO()
