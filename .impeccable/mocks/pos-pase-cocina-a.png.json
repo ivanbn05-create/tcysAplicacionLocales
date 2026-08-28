@@ -1,0 +1,9 @@
+{
+  "approved": false,
+  "promptFile": "pos-pase-cocina-a.prompt.txt",
+  "references": [
+    "ventas/static/ventas/brand/logoactual.jpeg",
+    "MANUAL DE IDENTIDAD TOCAYOS.pdf, página 7"
+  ],
+  "decision": "Primera preferencia delegada; sustituida por la elección explícita del usuario de la opción 2 híbrida."
+}

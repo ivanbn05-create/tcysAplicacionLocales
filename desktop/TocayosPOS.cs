@@ -17,7 +17,7 @@ namespace LosTocayos.Desktop
     internal static class Program
     {
         private const string DefaultServerUrl = "http://127.0.0.1:8000";
-        private const string HealthPath = "/api/estado/";
+        private const string HealthPath = "/salud/";
 
         [STAThread]
         private static void Main(string[] args)
@@ -42,12 +42,13 @@ namespace LosTocayos.Desktop
                         return;
                     }
 
-                    StartLocalServer();
+                    StartLocalService();
                     if (!WaitUntilAvailable(serverUrl, TimeSpan.FromSeconds(35)))
                     {
                         ShowError(
                             "El servicio local no respondió a tiempo.\n\n" +
-                            "Ejecuta iniciar-local.ps1 para ver el detalle del error.");
+                            "Ejecuta iniciar-servicio-lan.ps1 como administrador y revisa " +
+                            "logs\\waitress.log.");
                         Environment.ExitCode = 3;
                         return;
                     }
@@ -96,10 +97,15 @@ namespace LosTocayos.Desktop
 
             Uri uri;
             if (!Uri.TryCreate(value, UriKind.Absolute, out uri) ||
-                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
+                !string.IsNullOrEmpty(uri.UserInfo) ||
+                uri.AbsolutePath != "/" ||
+                !string.IsNullOrEmpty(uri.Query) ||
+                !string.IsNullOrEmpty(uri.Fragment))
             {
                 throw new InvalidDataException(
-                    "La dirección configurada en servidor.txt no es válida: " + value);
+                    "La dirección debe ser sólo el origen HTTP(S), sin credenciales, ruta, " +
+                    "consulta ni fragmento: " + value);
             }
 
             return value;
@@ -149,43 +155,12 @@ namespace LosTocayos.Desktop
             return false;
         }
 
-        private static void StartLocalServer()
+        private static void StartLocalService()
         {
-            string projectRoot = FindProjectRoot();
-            string python = Path.Combine(projectRoot, ".venv", "Scripts", "python.exe");
-            string manage = Path.Combine(projectRoot, "manage.py");
-
-            if (!File.Exists(python))
-            {
-                throw new FileNotFoundException(
-                    "No se encontró el entorno local de Python. Ejecuta iniciar-local.ps1 una vez " +
-                    "para completar la instalación.",
-                    python);
-            }
-
-            RunSetupStep(python, projectRoot, "\"" + manage + "\" migrate --noinput", "migraciones");
-
-            ProcessStartInfo info = CreatePythonStartInfo(
-                python,
-                projectRoot,
-                "\"" + manage + "\" runserver 0.0.0.0:8000 --noreload");
-            info.UseShellExecute = false;
-            info.CreateNoWindow = true;
-
-            Process process = Process.Start(info);
-            if (process == null)
-            {
-                throw new InvalidOperationException("Windows no pudo crear el servicio local.");
-            }
-        }
-
-        private static void RunSetupStep(
-            string python,
-            string projectRoot,
-            string arguments,
-            string description)
-        {
-            ProcessStartInfo info = CreatePythonStartInfo(python, projectRoot, arguments);
+            string serviceController = Path.Combine(Environment.SystemDirectory, "sc.exe");
+            ProcessStartInfo info = new ProcessStartInfo();
+            info.FileName = serviceController;
+            info.Arguments = "start LosTocayosPOS";
             info.UseShellExecute = false;
             info.CreateNoWindow = true;
             info.RedirectStandardOutput = true;
@@ -195,12 +170,11 @@ namespace LosTocayos.Desktop
             {
                 if (process == null)
                 {
-                    throw new InvalidOperationException("No fue posible ejecutar " + description + ".");
+                    throw new InvalidOperationException("Windows no pudo solicitar el inicio del servicio local.");
                 }
-
-                string output = process.StandardOutput.ReadToEnd();
-                string error = process.StandardError.ReadToEnd();
-                if (!process.WaitForExit(120000))
+                process.StandardOutput.ReadToEnd();
+                process.StandardError.ReadToEnd();
+                if (!process.WaitForExit(15000))
                 {
                     try
                     {
@@ -208,68 +182,11 @@ namespace LosTocayos.Desktop
                     }
                     catch
                     {
-                        // El proceso ya había finalizado.
+                        // sc.exe ya había finalizado.
                     }
-
-                    throw new TimeoutException("La ejecución de " + description + " excedió dos minutos.");
-                }
-
-                if (process.ExitCode != 0)
-                {
-                    string detail = string.IsNullOrWhiteSpace(error) ? output : error;
-                    throw new InvalidOperationException(
-                        "Falló la ejecución de " + description + ".\n\n" + detail.Trim());
+                    throw new TimeoutException("Windows no respondió al solicitar el inicio del servicio.");
                 }
             }
-        }
-
-        private static ProcessStartInfo CreatePythonStartInfo(
-            string python,
-            string projectRoot,
-            string arguments)
-        {
-            ProcessStartInfo info = new ProcessStartInfo();
-            info.FileName = python;
-            info.WorkingDirectory = projectRoot;
-            info.Arguments = arguments;
-            info.EnvironmentVariables["DJANGO_ALLOWED_HOSTS"] = "*";
-            info.EnvironmentVariables["DJANGO_DEBUG"] = "true";
-            info.EnvironmentVariables["PRINT_BACKEND"] = GetEnvironmentOrDefault("PRINT_BACKEND", "tcp");
-            info.EnvironmentVariables["PRINT_SYNC"] = GetEnvironmentOrDefault("PRINT_SYNC", "true");
-            return info;
-        }
-
-        private static string GetEnvironmentOrDefault(string name, string defaultValue)
-        {
-            string value = Environment.GetEnvironmentVariable(name);
-            return string.IsNullOrWhiteSpace(value) ? defaultValue : value;
-        }
-
-        private static string FindProjectRoot()
-        {
-            string location = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-            DirectoryInfo directory = new DirectoryInfo(location);
-
-            while (directory != null)
-            {
-                if (File.Exists(Path.Combine(directory.FullName, "manage.py")))
-                {
-                    return directory.FullName;
-                }
-
-                directory = directory.Parent;
-            }
-
-            string configured = Environment.GetEnvironmentVariable("TOCAYOS_APP_ROOT");
-            if (!string.IsNullOrWhiteSpace(configured) &&
-                File.Exists(Path.Combine(configured, "manage.py")))
-            {
-                return Path.GetFullPath(configured);
-            }
-
-            throw new DirectoryNotFoundException(
-                "No se encontró manage.py. Conserva el ejecutable dentro de la carpeta del " +
-                "proyecto o define TOCAYOS_APP_ROOT.");
         }
 
         private static void OpenDesktopWindow(string serverUrl, bool tabletMode)

@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-28T07:13:55.0985733-06:00",
+  "title": "Design System: Los Tocayos · Punto de venta",
+  "extensions": {
+    "colorMeta": {
+      "brand-yellow": {
+        "role": "primary",
+        "displayName": "Amarillo de marca",
+        "canonical": "#ffed00",
+        "tonalRamp": ["oklch(15% 0.20 102)", "oklch(27% 0.20 102)", "oklch(39% 0.20 102)", "oklch(51% 0.20 102)", "oklch(63% 0.20 102)", "oklch(75% 0.20 102)", "oklch(87% 0.20 102)", "oklch(95% 0.20 102)"]
+      },
+      "brand-yellow-soft": {
+        "role": "primary",
+        "displayName": "Amarillo de apoyo",
+        "canonical": "#fff9b8",
+        "tonalRamp": ["oklch(15% 0.06 102)", "oklch(27% 0.06 102)", "oklch(39% 0.06 102)", "oklch(51% 0.06 102)", "oklch(63% 0.06 102)", "oklch(75% 0.06 102)", "oklch(87% 0.06 102)", "oklch(95% 0.06 102)"]
+      },
+      "state-open": {
+        "role": "secondary",
+        "displayName": "Amarillo orden abierta",
+        "canonical": "#f2c500",
+        "tonalRamp": ["oklch(15% 0.17 92)", "oklch(27% 0.17 92)", "oklch(39% 0.17 92)", "oklch(51% 0.17 92)", "oklch(63% 0.17 92)", "oklch(75% 0.17 92)", "oklch(87% 0.17 92)", "oklch(95% 0.17 92)"]
+      },
+      "state-open-surface": {
+        "role": "secondary",
+        "displayName": "Papel de orden abierta",
+        "canonical": "#fff7c8",
+        "tonalRamp": ["oklch(15% 0.07 98)", "oklch(27% 0.07 98)", "oklch(39% 0.07 98)", "oklch(51% 0.07 98)", "oklch(63% 0.07 98)", "oklch(75% 0.07 98)", "oklch(87% 0.07 98)", "oklch(95% 0.07 98)"]
+      },
+      "state-open-ink": {
+        "role": "secondary",
+        "displayName": "Tinta mostaza",
+        "canonical": "#795a00",
+        "tonalRamp": ["oklch(15% 0.13 84)", "oklch(27% 0.13 84)", "oklch(39% 0.13 84)", "oklch(51% 0.13 84)", "oklch(63% 0.13 84)", "oklch(75% 0.13 84)", "oklch(87% 0.13 84)", "oklch(95% 0.13 84)"]
+      },
+      "state-free": {
+        "role": "secondary",
+        "displayName": "Verde libre",
+        "canonical": "#4aa736",
+        "tonalRamp": ["oklch(15% 0.15 138)", "oklch(27% 0.15 138)", "oklch(39% 0.15 138)", "oklch(51% 0.15 138)", "oklch(63% 0.15 138)", "oklch(75% 0.15 138)", "oklch(87% 0.15 138)", "oklch(95% 0.15 138)"]
+      },
+      "state-free-ink": {
+        "role": "secondary",
+        "displayName": "Tinta verde",
+        "canonical": "#2f7a26",
+        "tonalRamp": ["oklch(15% 0.13 138)", "oklch(27% 0.13 138)", "oklch(39% 0.13 138)", "oklch(51% 0.13 138)", "oklch(63% 0.13 138)", "oklch(75% 0.13 138)", "oklch(87% 0.13 138)", "oklch(95% 0.13 138)"]
+      },
+      "state-free-surface": {
+        "role": "secondary",
+        "displayName": "Papel libre",
+        "canonical": "#e9f5e6",
+        "tonalRamp": ["oklch(15% 0.04 138)", "oklch(27% 0.04 138)", "oklch(39% 0.04 138)", "oklch(51% 0.04 138)", "oklch(63% 0.04 138)", "oklch(75% 0.04 138)", "oklch(87% 0.04 138)", "oklch(95% 0.04 138)"]
+      },
+      "state-processed": {
+        "role": "tertiary",
+        "displayName": "Rojo procesado",
+        "canonical": "#e42522",
+        "tonalRamp": ["oklch(15% 0.20 27)", "oklch(27% 0.20 27)", "oklch(39% 0.20 27)", "oklch(51% 0.20 27)", "oklch(63% 0.20 27)", "oklch(75% 0.20 27)", "oklch(87% 0.20 27)", "oklch(95% 0.20 27)"]
+      },
+      "state-processed-surface": {
+        "role": "tertiary",
+        "displayName": "Papel procesado",
+        "canonical": "#fde9e8",
+        "tonalRamp": ["oklch(15% 0.04 27)", "oklch(27% 0.04 27)", "oklch(39% 0.04 27)", "oklch(51% 0.04 27)", "oklch(63% 0.04 27)", "oklch(75% 0.04 27)", "oklch(87% 0.04 27)", "oklch(95% 0.04 27)"]
+      },
+      "charcoal": {
+        "role": "neutral",
+        "displayName": "Carbón de trabajo",
+        "canonical": "#353436",
+        "tonalRamp": ["oklch(15% 0.005 320)", "oklch(27% 0.005 320)", "oklch(39% 0.005 320)", "oklch(51% 0.005 320)", "oklch(63% 0.005 320)", "oklch(75% 0.005 320)", "oklch(87% 0.005 320)", "oklch(95% 0.005 320)"]
+      },
+      "charcoal-soft": {
+        "role": "neutral",
+        "displayName": "Carbón secundario",
+        "canonical": "#535154",
+        "tonalRamp": ["oklch(15% 0.007 320)", "oklch(27% 0.007 320)", "oklch(39% 0.007 320)", "oklch(51% 0.007 320)", "oklch(63% 0.007 320)", "oklch(75% 0.007 320)", "oklch(87% 0.007 320)", "oklch(95% 0.007 320)"]
+      },
+      "rail": {
+        "role": "neutral",
+        "displayName": "Riel oscuro",
+        "canonical": "#242629",
+        "tonalRamp": ["oklch(15% 0.008 255)", "oklch(27% 0.008 255)", "oklch(39% 0.008 255)", "oklch(51% 0.008 255)", "oklch(63% 0.008 255)", "oklch(75% 0.008 255)", "oklch(87% 0.008 255)", "oklch(95% 0.008 255)"]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Tinta secundaria",
+        "canonical": "#625f62",
+        "tonalRamp": ["oklch(15% 0.006 320)", "oklch(27% 0.006 320)", "oklch(39% 0.006 320)", "oklch(51% 0.006 320)", "oklch(63% 0.006 320)", "oklch(75% 0.006 320)", "oklch(87% 0.006 320)", "oklch(95% 0.006 320)"]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Papel térmico",
+        "canonical": "#f8f7f5",
+        "tonalRamp": ["oklch(15% 0.01 85)", "oklch(27% 0.01 85)", "oklch(39% 0.01 85)", "oklch(51% 0.01 85)", "oklch(63% 0.01 85)", "oklch(75% 0.01 85)", "oklch(87% 0.01 85)", "oklch(95% 0.01 85)"]
+      },
+      "canvas": {
+        "role": "neutral",
+        "displayName": "Lienzo cálido",
+        "canonical": "#e9e7e1",
+        "tonalRamp": ["oklch(15% 0.015 85)", "oklch(27% 0.015 85)", "oklch(39% 0.015 85)", "oklch(51% 0.015 85)", "oklch(63% 0.015 85)", "oklch(75% 0.015 85)", "oklch(87% 0.015 85)", "oklch(95% 0.015 85)"]
+      },
+      "focus": {
+        "role": "tertiary",
+        "displayName": "Azul de foco",
+        "canonical": "#0066cc",
+        "tonalRamp": ["oklch(15% 0.18 256)", "oklch(27% 0.18 256)", "oklch(39% 0.18 256)", "oklch(51% 0.18 256)", "oklch(63% 0.18 256)", "oklch(75% 0.18 256)", "oklch(87% 0.18 256)", "oklch(95% 0.18 256)"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Numeración operativa", "purpose": "Mesas, posiciones y cifras que deben localizarse de inmediato." },
+      "title": { "displayName": "Título de ticket", "purpose": "Canales, zonas y encabezados breves en mayúsculas." },
+      "body": { "displayName": "Lectura funcional", "purpose": "Productos, formularios, mensajes y datos de cliente." },
+      "label": { "displayName": "Etiqueta de estado", "purpose": "Estados, abreviaturas y metadatos cortos de alta prioridad." }
+    },
+    "shadows": [
+      { "name": "thermal-paper", "value": "0 6px 16px rgba(36, 38, 41, 0.12)", "purpose": "Separa únicamente la hoja de comanda de su bandeja." },
+      { "name": "persistent-notice", "value": "0 10px 26px rgba(36, 38, 41, 0.24)", "purpose": "Mantiene encontrable un aviso accionable sin elevar el resto de la interfaz." },
+      { "name": "modal", "value": "0 22px 54px rgba(0, 0, 0, 0.28)", "purpose": "Distingue un diálogo que bloquea temporalmente el flujo." }
+    ],
+    "motion": [
+      { "name": "channel-state", "value": "background-color 150ms ease-out, color 150ms ease-out", "purpose": "Confirma selección o paso del puntero sin desplazar la geometría del ticket." },
+      { "name": "reduced-motion", "value": "0.01ms", "purpose": "Reduce animaciones y transiciones a un cambio prácticamente inmediato cuando el sistema lo solicita." }
+    ],
+    "breakpoints": [
+      { "name": "compact-desktop", "value": "1180px" },
+      { "name": "tablet", "value": "900px" },
+      { "name": "mobile", "value": "700px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Cabecera compacta",
+      "kind": "nav",
+      "refersTo": "compact-header",
+      "description": "Franja de identidad amarilla para marca, sucursal y acciones de ventana; no aloja telemetría pasiva.",
+      "html": "<header class=\"ds-header\"><strong>LOS TOCAYOS</strong><span>SUCURSAL ARBOLEDAS</span><button type=\"button\">SALIR</button></header>",
+      "css": ".ds-header { min-height: 62px; padding: 5px clamp(14px, 2.4vw, 34px); display: grid; grid-template-columns: minmax(150px, 260px) 1fr auto; align-items: center; gap: 16px; border-bottom: 2px solid #353436; color: #353436; background: #ffed00; font-family: \"Montserrat Tocayos\", Montserrat, system-ui, sans-serif; } .ds-header strong { font-family: \"Bebas Neue Tocayos\", \"Arial Narrow\", sans-serif; font-size: 1.7rem; font-weight: 400; letter-spacing: .02em; } .ds-header span { font-size: .75rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; } .ds-header button { min-height: 44px; padding: 8px 14px; border: 2px solid #353436; border-radius: 2px; color: #353436; background: transparent; font: 800 .75rem/1 \"Montserrat Tocayos\", Montserrat, system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; } .ds-header button:hover { background: #fff9b8; } .ds-header button:focus-visible { outline: 3px solid #0066cc; outline-offset: 3px; }"
+    },
+    {
+      "name": "Acción primaria",
+      "kind": "button",
+      "refersTo": "action-primary",
+      "description": "Acción operativa principal, táctil y frontal, para avanzar o confirmar.",
+      "html": "<button class=\"ds-action-primary\" type=\"button\">PROCESAR ORDEN</button>",
+      "css": ".ds-action-primary { min-height: 44px; padding: 8px 14px; border: 2px solid #353436; border-radius: 2px; color: #353436; background: #ffed00; font: 800 .75rem/1.15 \"Montserrat Tocayos\", Montserrat, system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; transition: background-color 150ms ease-out; } .ds-action-primary:hover { background: #fff9b8; } .ds-action-primary:active { background: #f2c500; } .ds-action-primary:focus-visible { outline: 3px solid #0066cc; outline-offset: 3px; } .ds-action-primary:disabled { color: #625f62; background: #e9e7e1; cursor: not-allowed; }"
+    },
+    {
+      "name": "Campo de texto",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "Entrada funcional de papel blanco, borde inequívoco y foco visible.",
+      "html": "<label class=\"ds-field\"><span>NOMBRE PARA LA COMANDA</span><input type=\"text\" value=\"María\"></label>",
+      "css": ".ds-field { display: grid; gap: 6px; color: #353436; font-family: \"Montserrat Tocayos\", Montserrat, system-ui, sans-serif; } .ds-field span { font-size: .75rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; } .ds-field input { min-height: 44px; padding: 9px 10px; border: 1px solid #77736f; border-radius: 2px; color: #353436; background: #fff; font: 500 .875rem/1.35 \"Montserrat Tocayos\", Montserrat, system-ui, sans-serif; } .ds-field input:hover { border-color: #353436; } .ds-field input:focus-visible { outline: 3px solid #0066cc; outline-offset: 3px; } .ds-field input:disabled { color: #625f62; background: #e9e7e1; }"
+    },
+    {
+      "name": "Ticket de canal",
+      "kind": "nav",
+      "refersTo": "channel-ticket",
+      "description": "Navegación de canal como clipboard orientado a la derecha, con icono de línea y registro rojo único.",
+      "html": "<button class=\"ds-channel-ticket\" type=\"button\" aria-pressed=\"true\"><svg viewBox=\"0 0 32 32\" aria-hidden=\"true\"><path d=\"M6 16h20v5H6zM9 21v7M23 21v7M4 10h5v11M23 10h5v11M12 10a4 4 0 0 1 8 0\"/></svg><span>COMEDOR</span></button>",
+      "css": ".ds-channel-ticket { position: relative; min-height: 70px; padding: 10px 34px 10px 18px; display: grid; grid-template-columns: 38px 1fr; align-items: center; gap: 10px; border: 0; border-radius: 0; clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 50%, calc(100% - 16px) 100%, 0 100%); color: #353436; background: #fff; text-align: left; transition: background-color 150ms ease-out, color 150ms ease-out; } .ds-channel-ticket::before { content: \"\"; position: absolute; top: 0; left: 16px; width: 24px; height: 8px; border: 2px solid #353436; border-top: 0; background: #ffed00; } .ds-channel-ticket::after { content: \"\"; position: absolute; right: 0; bottom: 0; left: 0; height: 6px; background: #e42522; } .ds-channel-ticket svg { width: 36px; height: 36px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; } .ds-channel-ticket span { font: 400 1.7rem/1 \"Bebas Neue Tocayos\", \"Arial Narrow\", sans-serif; letter-spacing: .02em; } .ds-channel-ticket:hover { background: #fff9b8; } .ds-channel-ticket:active { background: #f8f7f5; } .ds-channel-ticket:focus-visible { outline: 3px solid #0066cc; outline-offset: 3px; }"
+    },
+    {
+      "name": "Posición libre",
+      "kind": "card",
+      "refersTo": "position-free",
+      "description": "Tarjeta disponible con número verde, etiqueta textual y marca circular.",
+      "html": "<button class=\"ds-position ds-position-free\" type=\"button\"><span class=\"ds-position-state\"><i></i>LIBRE</span><strong><span>MESA</span><b>12</b></strong><small>Disponible</small></button>",
+      "css": ".ds-position { min-height: 118px; padding: 10px 12px; display: grid; grid-template-rows: auto 1fr auto; gap: 2px; border: 1px solid #77736f; border-radius: 2px; color: #353436; background: #fff; text-align: left; } .ds-position-state { display: flex; align-items: center; gap: 6px; color: #2f7a26; font: 400 1rem/1 \"Bebas Neue Tocayos\", \"Arial Narrow\", sans-serif; letter-spacing: .035em; } .ds-position-state i { width: 12px; height: 12px; border: 2px solid #2f7a26; border-radius: 50%; background: #4aa736; } .ds-position strong { display: flex; align-items: end; justify-content: space-between; gap: 6px; font: 400 1.15rem/1 \"Bebas Neue Tocayos\", \"Arial Narrow\", sans-serif; } .ds-position b { color: #4aa736; font: 400 3.4rem/.82 \"Bebas Neue Tocayos\", \"Arial Narrow\", sans-serif; font-variant-numeric: tabular-nums; } .ds-position small { font: 700 .7rem/1.2 \"Montserrat Tocayos\", Montserrat, system-ui, sans-serif; } .ds-position:hover { border-color: #353436; box-shadow: inset 0 0 0 2px #ffed00; } .ds-position:active { background: #fff9b8; } .ds-position:focus-visible { outline: 3px solid #0066cc; outline-offset: 3px; }"
+    },
+    {
+      "name": "Posición con orden abierta",
+      "kind": "card",
+      "refersTo": "position-open",
+      "description": "Tarjeta amarilla para una orden todavía abierta, con tinta mostaza legible y símbolo de ticket.",
+      "html": "<button class=\"ds-position-open\" type=\"button\"><span class=\"ds-open-state\"><i></i>ORDEN ABIERTA</span><strong><span>MESA</span><b>08</b></strong><small>Ticket 24</small></button>",
+      "css": ".ds-position-open { min-height: 118px; padding: 10px 12px; display: grid; grid-template-rows: auto 1fr auto; gap: 2px; border: 1px solid #a87f00; border-radius: 2px; color: #353436; background: #fff7c8; box-shadow: inset 0 5px 0 #f2c500; text-align: left; } .ds-open-state { display: flex; align-items: center; gap: 6px; color: #795a00; font: 400 1rem/1 \"Bebas Neue Tocayos\", \"Arial Narrow\", sans-serif; letter-spacing: .035em; } .ds-open-state i { position: relative; width: 12px; height: 12px; border: 2px solid currentColor; } .ds-open-state i::after { content: \"\"; position: absolute; right: 2px; bottom: 2px; left: 2px; height: 2px; background: currentColor; box-shadow: 0 -3px 0 currentColor; } .ds-position-open strong { display: flex; align-items: end; justify-content: space-between; gap: 6px; font: 400 1.15rem/1 \"Bebas Neue Tocayos\", \"Arial Narrow\", sans-serif; } .ds-position-open b { color: #795a00; font: 400 3.4rem/.82 \"Bebas Neue Tocayos\", \"Arial Narrow\", sans-serif; font-variant-numeric: tabular-nums; } .ds-position-open small { font: 700 .7rem/1.2 \"Montserrat Tocayos\", Montserrat, system-ui, sans-serif; } .ds-position-open:hover { border-color: #353436; } .ds-position-open:active { background: #fff9b8; } .ds-position-open:focus-visible { outline: 3px solid #0066cc; outline-offset: 3px; }"
+    },
+    {
+      "name": "Posición procesada",
+      "kind": "card",
+      "refersTo": "position-processed",
+      "description": "Tarjeta resuelta con número rojo, etiqueta textual y marca de verificación.",
+      "html": "<button class=\"ds-position-processed\" type=\"button\"><span class=\"ds-processed-state\"><i></i>PROCESADA</span><strong><span>MESA</span><b>03</b></strong><small>Lista para cobro</small></button>",
+      "css": ".ds-position-processed { min-height: 118px; padding: 10px 12px; display: grid; grid-template-rows: auto 1fr auto; gap: 2px; border: 1px solid #e42522; border-radius: 2px; color: #353436; background: #fff; text-align: left; } .ds-processed-state { display: flex; align-items: center; gap: 6px; color: #e42522; font: 400 1rem/1 \"Bebas Neue Tocayos\", \"Arial Narrow\", sans-serif; letter-spacing: .035em; } .ds-processed-state i { position: relative; width: 12px; height: 12px; border: 2px solid currentColor; } .ds-processed-state i::after { content: \"\"; position: absolute; left: 2px; top: 1px; width: 6px; height: 3px; border-left: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg); } .ds-position-processed strong { display: flex; align-items: end; justify-content: space-between; gap: 6px; font: 400 1.15rem/1 \"Bebas Neue Tocayos\", \"Arial Narrow\", sans-serif; } .ds-position-processed b { color: #e42522; font: 400 3.4rem/.82 \"Bebas Neue Tocayos\", \"Arial Narrow\", sans-serif; font-variant-numeric: tabular-nums; } .ds-position-processed small { font: 700 .7rem/1.2 \"Montserrat Tocayos\", Montserrat, system-ui, sans-serif; } .ds-position-processed:hover { box-shadow: inset 0 0 0 2px #ffed00; } .ds-position-processed:active { background: #fde9e8; } .ds-position-processed:focus-visible { outline: 3px solid #0066cc; outline-offset: 3px; }"
+    },
+    {
+      "name": "Producto compacto 50/50",
+      "kind": "card",
+      "refersTo": "product-card",
+      "description": "Producto de menú con miniatura local en la mitad izquierda y abreviatura/nombre en la derecha.",
+      "html": "<button class=\"ds-product-card\" type=\"button\"><span class=\"ds-product-media\" aria-hidden=\"true\"><svg viewBox=\"0 0 120 80\"><path d=\"M18 49c15-24 69-24 84 0M22 49h76l-8 14H30z\"/><circle cx=\"42\" cy=\"43\" r=\"4\"/><circle cx=\"60\" cy=\"38\" r=\"4\"/><circle cx=\"78\" cy=\"43\" r=\"4\"/></svg></span><span class=\"ds-product-copy\"><small>TBQ</small><strong>Taco de barbacoa con queso</strong></span></button>",
+      "css": ".ds-product-card { width: 220px; height: 82px; padding: 0; display: grid; grid-template-columns: 1fr 1fr; border: 1px solid #77736f; border-radius: 2px; color: #353436; background: #fff; overflow: hidden; text-align: left; } .ds-product-media { min-width: 0; display: grid; place-items: center; border-right: 1px solid #353436; color: #353436; background: #e9e7e1; } .ds-product-media svg { width: 100%; height: 100%; fill: #ffed00; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; } .ds-product-copy { min-width: 0; padding: 8px; display: grid; align-content: center; gap: 5px; } .ds-product-copy small { color: #e42522; font: 900 .7rem/1 \"Montserrat Tocayos\", Montserrat, system-ui, sans-serif; letter-spacing: .06em; } .ds-product-copy strong { display: -webkit-box; overflow: hidden; font: 800 .75rem/1.15 \"Montserrat Tocayos\", Montserrat, system-ui, sans-serif; -webkit-box-orient: vertical; -webkit-line-clamp: 3; } .ds-product-card:hover { border-color: #353436; box-shadow: inset 0 0 0 2px #ffed00; } .ds-product-card:active { background: #fff9b8; } .ds-product-card:focus-visible { outline: 3px solid #0066cc; outline-offset: 3px; }"
+    },
+    {
+      "name": "Comanda virtual térmica",
+      "kind": "custom",
+      "refersTo": "virtual-comanda",
+      "description": "Hoja digital que conserva jerarquía, cuadrícula y sobriedad de la comanda impresa.",
+      "html": "<article class=\"ds-comanda\"><header><em>LOS TOCAYOS</em><div><span>MESA 08</span><span>TICKET 24</span></div><b>COMENSAL 1</b></header><div class=\"ds-comanda-grid\"><strong>PRODUCTO</strong><strong>CANT.</strong><button type=\"button\">Taco barbacoa</button><b>3</b><button type=\"button\">Consomé vaso</button><b>1</b></div><p>NOTA: SIN CEBOLLA</p></article>",
+      "css": ".ds-comanda { width: min(360px, 100%); padding: 11px; border: 1px solid #111; border-radius: 0; color: #111; background: #fff; box-shadow: 0 6px 16px rgba(36, 38, 41, .12); font-family: Arial, Helvetica, sans-serif; } .ds-comanda header { display: grid; gap: 5px; margin-bottom: 9px; font-size: .68rem; } .ds-comanda header em { justify-self: center; padding-bottom: 4px; border-bottom: 1px solid #111; font-size: .82rem; } .ds-comanda header div { display: flex; justify-content: space-between; gap: 10px; } .ds-comanda header b { justify-self: end; font-size: 1rem; } .ds-comanda-grid { display: grid; grid-template-columns: minmax(96px, 1.55fr) 64px; border-top: 2px solid #111; border-left: 1px solid #111; font-size: .84rem; } .ds-comanda-grid > * { min-height: 42px; padding: 5px; display: grid; place-items: center; border: 0; border-right: 1px solid #111; border-bottom: 1px solid #111; border-radius: 0; color: #111; background: #fff; font: inherit; } .ds-comanda-grid > :nth-child(odd) { justify-items: start; text-align: left; } .ds-comanda p { margin: 8px 0 0; padding-top: 7px; border-top: 1px solid #111; font-size: .72rem; font-weight: 800; text-align: center; } .ds-comanda-grid button:hover { background: #fff9b8; } .ds-comanda-grid button:active { background: #ffed00; } .ds-comanda-grid button:focus-visible { position: relative; outline: 3px solid #0066cc; outline-offset: -3px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "El pase de cocina digital",
+    "overview": "La interfaz traduce el trabajo físico del restaurante —pase, tickets, clips, papel térmico y marcadores de estado— a una superficie operativa de alta densidad. Debe sentirse propia de Los Tocayos: enérgica, franca y táctil; la marca vive en la estructura amarilla, la tipografía condensada, las reglas de carbón y las decisiones de color, no en efectos decorativos.\n\nLa referencia de composición aprobada es `.impeccable/mocks/pos-pase-cocina-b-hibrida.png`. El contenido y las capacidades siempre provienen del producto real. La comanda virtual conserva la topología y la sobriedad de la comanda impresa; el resto de la pantalla puede evolucionar dentro de este sistema.",
+    "keyCharacteristics": [
+      "Pase de cocina, no dashboard genérico.",
+      "Cabecera amarilla compacta y riel carbón con etiquetas de canal tipo ticket/clipboard.",
+      "Densidad táctil, lectura inmediata y objetivos principales de al menos 44 CSS px.",
+      "Estado siempre expresado con color, texto y marca visual.",
+      "Recursos, fuentes y miniaturas disponibles sin internet."
+    ],
+    "rules": [
+      { "name": "The Three-State Rule", "body": "Libre es verde, Orden abierta es amarilla y Procesada es roja. Cada estado conserva etiqueta visible y nombre accesible; el color nunca actúa solo.", "section": "colors" },
+      { "name": "The Red Means Resolved-or-Urgent Rule", "body": "El rojo queda reservado para procesado, cancelación, error o acción destructiva; no se usa como decoración abundante.", "section": "colors" },
+      { "name": "The Two-Voices Rule", "body": "Bebas Neue nombra y numera; Montserrat explica y permite operar. No se introducen nuevas familias tipográficas sin actualizar este sistema.", "section": "typography" },
+      { "name": "The Flat-by-Default Rule", "body": "Una superficie en reposo no usa sombra si una regla, un campo tonal o la propia geometría ya comunica su límite.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do revisar `PRODUCT.md`, este archivo y el brief de superficie antes de crear o modificar una pantalla.",
+      "Do preservar la igualdad geométrica entre posiciones principales y auxiliares mediante la misma retícula.",
+      "Do mantener color, etiqueta y símbolo en todos los estados operativos.",
+      "Do conservar la comanda virtual alineada con `impresion/render.py::render_comanda` y con una impresión real.",
+      "Do servir tipografías, iconos e imágenes desde el proyecto y registrar la procedencia de todo raster nuevo.",
+      "Do aplicar este lenguaje al futuro Administrador, pero con navegación separada y funciones sólo después de confirmar alcance y permisos."
+    ],
+    "donts": [
+      "Don't devolver Orden abierta al rojo; amarillo es su semántica aprobada.",
+      "Don't mostrar `Salir` durante la captura ni reintroducir estados pasivos de conexión o impresora en la cabecera.",
+      "Don't crear tarjetas flotantes genéricas, glassmorphism, gradientes decorativos, halos, texturas de papel o sombras duras.",
+      "Don't deformar el logotipo ni usar Bebas Neue para instrucciones, datos de cliente o errores extensos.",
+      "Don't sustituir la comanda por una maqueta raster o reorganizar su contenido como dashboard.",
+      "Don't cargar fotografías de terceros o depender de URLs remotas para productos."
+    ]
+  }
+}

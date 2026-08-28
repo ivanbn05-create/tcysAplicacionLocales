@@ -1,0 +1,12 @@
+Use case: ui-mockup
+Asset type: high-fidelity north-star comp for a desktop restaurant POS, 16:9 landscape, 1440x900 viewport
+Input images: Image 1 is the existing Los Tocayos logo asset; Image 2 is the official brand-manual palette and logo reference. Preserve their identity and proportions; do not reinterpret the logo.
+Primary request: Design the first operational screen of the Los Tocayos point of sale in the committed “pase de cocina” visual world. It must look like a real production interface for cashiers and servers under pressure, not a marketing poster and not a generic SaaS dashboard.
+Structure, in order: a compact full-width yellow brand/status rail; directly below, three strong channel tabs Comedor, Domicilio, Sucursales; the main work area is an asymmetrical kitchen pass with a large mesa grid on the left two-thirds and a narrow live-status/legend rail on the right. The mesa grid must visibly show Libre, Orden abierta, Procesada with text or icons as well as color. Include a clear disabled Administrador entry without making it the focus. Make the next task obvious within one glance.
+Visual world: brushed pass-counter logic translated into flat semantic UI, ticket-rail separators, thermal-paper white fields, bold black structural rules, small status stamps. No photorealistic kitchen and no skeuomorphic metal texture.
+Typography: Bebas Neue-like condensed display only for short zone headings and brand voice; Montserrat-like functional text for everything else. Large readable labels, tabular numerals.
+Color palette: exact brand yellow #FFED00 as a dominant structural field, green #4AA736 for ready/free, red #E42522 for urgent/destructive, warm charcoal #353436, off-white thermal paper. Use color by role, never decorative gradients.
+Component language: mostly squared or lightly clipped corners, 2px charcoal rules, tactile 44px-plus controls, no floating rounded cards, no pill overload, no glassmorphism, no shadows on the logo.
+Interaction cues: one thick sliding red rail marker for active channel, pressed-state inset for active mesa, printer/local status written plainly.
+Text (verbatim where shown): "LOS TOCAYOS", "TACOS DE BARBACOA", "Sucursal Arboledas", "Comedor", "Domicilio", "Sucursales", "Libre", "Orden abierta", "Procesada", "Mesero", "Administrador", "Próximamente".
+Constraints: preserve brand-manual colors and logo; Spanish interface; accessible contrast; compact but not cramped; no invented prices, metrics, charts, photos, illustrations, testimonials, or decorative food imagery. UI text remains legible.

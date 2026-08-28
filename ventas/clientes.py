@@ -1,4 +1,5 @@
 from difflib import SequenceMatcher
+from uuid import UUID
 
 from django.db import transaction
 from django.db.models import Prefetch, Q
@@ -11,6 +12,30 @@ from .normalizacion import normalizar_texto, normalizar_telefono
 
 class ErrorCliente(ValueError):
     pass
+
+
+MAX_TELEFONOS_POR_CLIENTE = 10
+MAX_DOMICILIOS_POR_CLIENTE = 10
+MAX_NOTAS_CLIENTE = 2000
+MAX_REFERENCIA_DOMICILIO = 1000
+
+
+def _id_opcional(value):
+    if value in (None, ""):
+        return None
+    try:
+        return str(UUID(str(value)))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ErrorCliente("El identificador de un teléfono o domicilio no es válido.") from exc
+
+
+def _lista_registros(datos, campo, limite):
+    registros = datos.get(campo, [])
+    if not isinstance(registros, list) or any(not isinstance(item, dict) for item in registros):
+        raise ErrorCliente(f"La lista de {campo} no es válida.")
+    if len(registros) > limite:
+        raise ErrorCliente(f"Se permiten como máximo {limite} {campo} por cliente.")
+    return registros
 
 
 def telefono_payload(telefono):
@@ -178,7 +203,7 @@ def _limpiar_telefono(datos):
     if not numero or len(normalizado) < 7:
         raise ErrorCliente("Cada teléfono debe contener al menos 7 dígitos.")
     return {
-        "id": datos.get("id"),
+        "id": _id_opcional(datos.get("id")),
         "numero": numero,
         "normalizado": normalizado,
         "etiqueta": str(datos.get("etiqueta", "Principal")).strip()[:30] or "Principal",
@@ -190,8 +215,11 @@ def _limpiar_domicilio(datos):
     exterior = str(datos.get("numero_exterior", "")).strip()[:30]
     if not calle:
         raise ErrorCliente("Cada domicilio requiere una calle o ubicación.")
+    referencia = str(datos.get("referencia", "")).strip()
+    if len(referencia) > MAX_REFERENCIA_DOMICILIO:
+        raise ErrorCliente(f"La referencia no puede superar {MAX_REFERENCIA_DOMICILIO} caracteres.")
     return {
-        "id": datos.get("id"),
+        "id": _id_opcional(datos.get("id")),
         "etiqueta": str(datos.get("etiqueta", "Principal")).strip()[:30] or "Principal",
         "calle": calle,
         "numero_exterior": exterior,
@@ -199,7 +227,7 @@ def _limpiar_domicilio(datos):
         "colonia": str(datos.get("colonia", "")).strip()[:120],
         "codigo_postal": str(datos.get("codigo_postal", "")).strip()[:10],
         "municipio": str(datos.get("municipio", "")).strip()[:120],
-        "referencia": str(datos.get("referencia", "")).strip(),
+        "referencia": referencia,
     }
 
 
@@ -218,12 +246,25 @@ def _siguiente_clave(sucursal):
 
 @transaction.atomic
 def guardar_cliente(sucursal, datos, cliente=None):
+    if not isinstance(datos, dict):
+        raise ErrorCliente("Los datos del cliente no son válidos.")
     nombre = str(datos.get("nombre", "")).strip()[:180]
     if not nombre:
         raise ErrorCliente("El nombre del cliente es obligatorio.")
-    telefonos = [_limpiar_telefono(item) for item in datos.get("telefonos", []) if item.get("numero")]
-    domicilios = [_limpiar_domicilio(item) for item in datos.get("domicilios", []) if item.get("calle") or item.get("numero_exterior")]
-    comentarios_multiples = bool(datos.get("comentarios_multiples", False))
+    telefonos_datos = _lista_registros(datos, "telefonos", MAX_TELEFONOS_POR_CLIENTE)
+    domicilios_datos = _lista_registros(datos, "domicilios", MAX_DOMICILIOS_POR_CLIENTE)
+    telefonos = [_limpiar_telefono(item) for item in telefonos_datos if item.get("numero")]
+    domicilios = [
+        _limpiar_domicilio(item)
+        for item in domicilios_datos
+        if item.get("calle") or item.get("numero_exterior")
+    ]
+    comentarios_multiples = datos.get("comentarios_multiples", False)
+    if not isinstance(comentarios_multiples, bool):
+        raise ErrorCliente("La opción de contactos múltiples no es válida.")
+    notas = str(datos.get("notas", "")).strip()
+    if len(notas) > MAX_NOTAS_CLIENTE:
+        raise ErrorCliente(f"Las notas no pueden superar {MAX_NOTAS_CLIENTE} caracteres.")
     if not telefonos and not comentarios_multiples:
         raise ErrorCliente("Agrega al menos un teléfono.")
     if not domicilios:
@@ -232,7 +273,7 @@ def guardar_cliente(sucursal, datos, cliente=None):
     if cliente:
         cliente = Cliente.objects.select_for_update().get(pk=cliente.pk, sucursal=sucursal, activo=True)
         cliente.nombre = nombre
-        cliente.notas = str(datos.get("notas", "")).strip()
+        cliente.notas = notas
         cliente.comentarios_multiples = comentarios_multiples
         cliente.save()
     else:
@@ -240,7 +281,7 @@ def guardar_cliente(sucursal, datos, cliente=None):
             sucursal=sucursal,
             clave_corta=_siguiente_clave(sucursal),
             nombre=nombre,
-            notas=str(datos.get("notas", "")).strip(),
+            notas=notas,
             comentarios_multiples=comentarios_multiples,
         )
 

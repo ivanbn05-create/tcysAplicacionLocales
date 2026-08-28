@@ -1,12 +1,18 @@
 import json
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from functools import wraps
+from pathlib import Path
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
-from django.http import Http404, HttpResponse, JsonResponse
+from django.core.exceptions import RequestDataTooBig, ValidationError
+from django.db import transaction
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import render
+from django.templatetags.static import static
+from django.urls import reverse
 from django.utils import timezone
+from django.utils.cache import patch_cache_control
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from catalogo.models import Producto
@@ -22,6 +28,13 @@ from .clientes import (
     guardar_cliente,
 )
 from .integracion_sucursales import sincronizar_pedidos_confirmados
+from .imagenes import respuesta_miniatura_producto
+from .menu_imagenes import (
+    IMAGEN_MENU_PREDETERMINADA,
+    IMAGEN_MENU_POR_CODIGO,
+    RUTA_MENU_ESTATICO,
+    imagen_producto_url,
+)
 from .models import Cliente, DomicilioCliente, Mesa, Partida, ProductoSucursal, TelefonoCliente, Ticket
 from .normalizacion import normalizar_telefono
 from .orden import ordenar_partidas
@@ -53,10 +66,78 @@ OPCIONES_SALSA = {
     "Limón", "Morada", "Serrano", "Cilantro", "Cacahuate", "Chipotle", "Mexicana",
     "Verde Tomate", "Habanero", "Roja Taquera",
 }
+MODIFICADORES_PERMITIDOS = {
+    "C/T": "CON TODO",
+    "S/N": "SIN NADA",
+    "CEB": "CEBOLLA",
+    "CH G": "CHILE GÜERO",
+    "CH V": "CHILE VERDE",
+    "LLEVAR": "LLEVAR",
+}
+COMENTARIOS_GENERALES_PERMITIDOS = {
+    "TODO_PLATO": "TODO POR PLATO",
+    "CEB_PLATO": "CEBOLLA POR PLATO",
+    "CH_PLATO": "CHILE POR PLATO",
+    "TODO_APARTE": "TODO A PARTE",
+    "CEB_APARTE": "CEBOLLA A PARTE",
+    "CH_APARTE": "CHILE A PARTE",
+    "MAS_GUERO": "MÁS CHILE GÜERO",
+    "MAS_VERDE": "MÁS CHILE VERDE",
+    "MAS_CEB": "MÁS CEBOLLA",
+    **MODIFICADORES_PERMITIDOS,
+}
 
 # Cambiar este valor obliga a las terminales y tabletas instaladas a descargar
 # los recursos de interfaz de esta entrega, incluso si conservan una caché PWA.
-ASSET_VERSION = "20260824-2"
+ASSET_VERSION = "20260827-impeccable-2"
+PWA_CACHE = f"tocayos-pos-{ASSET_VERSION}"
+
+
+class ErrorSolicitudJSON(ErrorVenta, ErrorCliente):
+    """Error de entrada común a las API de ventas y clientes."""
+
+
+def permiso_pos(campo):
+    """Aplica autorización de negocio además de la sesión Django."""
+
+    def decorar(vista):
+        @wraps(vista)
+        def protegida(request, *args, **kwargs):
+            if not getattr(settings, "POS_REQUIRE_AUTH", True):
+                return vista(request, *args, **kwargs)
+            if request.user.is_superuser:
+                return vista(request, *args, **kwargs)
+            perfil = getattr(request, "pos_user", None)
+            if perfil is None or not getattr(perfil.rol, campo, False):
+                response = JsonResponse(
+                    {"error": "La cuenta no tiene permiso para realizar esta operación."},
+                    status=403,
+                )
+                patch_cache_control(response, no_store=True, private=True)
+                return response
+            return vista(request, *args, **kwargs)
+
+        return protegida
+
+    return decorar
+
+
+def transaccion_en_metodos(*metodos):
+    """Abre una transacción inmediata sólo para métodos que mutan estado."""
+
+    permitidos = set(metodos)
+
+    def decorar(vista):
+        @wraps(vista)
+        def envuelta(request, *args, **kwargs):
+            if request.method not in permitidos:
+                return vista(request, *args, **kwargs)
+            with transaction.atomic():
+                return vista(request, *args, **kwargs)
+
+        return envuelta
+
+    return decorar
 
 
 def _sucursal():
@@ -68,9 +149,19 @@ def _sucursal():
 
 def _json(request):
     try:
-        return json.loads(request.body or b"{}")
-    except json.JSONDecodeError as exc:
-        raise ErrorVenta("El cuerpo JSON no es válido.") from exc
+        body = request.body
+    except RequestDataTooBig as exc:
+        raise ErrorSolicitudJSON("El cuerpo JSON supera el tamaño permitido.") from exc
+    max_bytes = max(1024, int(getattr(settings, "POS_MAX_JSON_BODY_BYTES", 131072)))
+    if len(body) > max_bytes:
+        raise ErrorSolicitudJSON("El cuerpo JSON supera el tamaño permitido.")
+    try:
+        data = json.loads(body or b"{}")
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ErrorSolicitudJSON("El cuerpo JSON no es válido.") from exc
+    if not isinstance(data, dict):
+        raise ErrorSolicitudJSON("El cuerpo JSON debe ser un objeto.")
+    return data
 
 
 def _ticket(ticket_id):
@@ -93,8 +184,8 @@ def _trabajos_payload(trabajos):
                 "destino": trabajo.destino,
                 "estado": trabajo.estado,
                 "backend": settings.PRINT_BACKEND,
-                "error": trabajo.error,
-                "url": f"{settings.MEDIA_URL}{trabajo.archivo}" if trabajo.archivo else "",
+                "error": "No fue posible completar la impresión." if trabajo.error else "",
+                "url": reverse("ventas:api_archivo_impresion", args=[trabajo.id]) if trabajo.archivo else "",
             }
         )
     return resultado
@@ -244,6 +335,14 @@ def _ticket_payload(ticket):
 
 def _inicio(request, modo_tableta=False):
     sucursal = _sucursal()
+    perfil = getattr(request, "pos_user", None)
+    acceso_total = not getattr(settings, "POS_REQUIRE_AUTH", True) or request.user.is_superuser
+    permisos = {
+        "cobrar": acceso_total or bool(perfil and perfil.rol.puede_cobrar),
+        "reimprimir": acceso_total or bool(perfil and perfil.rol.puede_reimprimir),
+        "cancelar": acceso_total or bool(perfil and perfil.rol.puede_cancelar),
+        "sincronizar": acceso_total or bool(perfil and perfil.rol.puede_sincronizar),
+    }
     productos = []
     for producto in Producto.objects.select_related("categoria").filter(sucursal=sucursal, activo=True):
         precio = producto.precio_actual()
@@ -261,6 +360,7 @@ def _inicio(request, modo_tableta=False):
                     "permite_termino": producto.permite_termino,
                     "termino_predeterminado": producto.termino_predeterminado,
                     "abreviaturas_termino": producto.abreviaturas_termino,
+                    "imagen_url": imagen_producto_url(producto),
                     "orden": producto.orden,
                     "es_promocion": bool(promocion),
                     "promocion_dias": promocion["dias_texto"] if promocion else "",
@@ -280,7 +380,7 @@ def _inicio(request, modo_tableta=False):
         }
         for mesa in Mesa.objects.select_related("cliente_sucursal").filter(sucursal=sucursal, activa=True)
     ]
-    return render(
+    response = render(
         request,
         "ventas/inicio.html",
         {
@@ -289,8 +389,11 @@ def _inicio(request, modo_tableta=False):
             "posiciones": posiciones,
             "modo_tableta": modo_tableta,
             "asset_version": ASSET_VERSION,
+            "permisos": permisos,
         },
     )
+    patch_cache_control(response, no_store=True, private=True)
+    return response
 
 
 def inicio(request):
@@ -302,16 +405,22 @@ def tabletas(request):
 
 
 @require_GET
+def salud(request):
+    """Sonda deliberadamente mínima: no consulta DB ni revela infraestructura."""
+
+    response = JsonResponse({"estado": "ok"})
+    patch_cache_control(response, no_store=True)
+    return response
+
+
+@require_GET
 def api_estado(request):
     sucursal = _sucursal()
-    if request.GET.get("sincronizar_sucursales") == "1":
-        integracion = sincronizar_pedidos_confirmados(sucursal)
-    else:
-        integracion = {
-            "activa": settings.PEDIDOS_SUCURSALES_AUTO_SYNC,
-            "importados": 0,
-            "mensaje": "Sincronización de sucursales bajo demanda.",
-        }
+    integracion = {
+        "activa": settings.PEDIDOS_SUCURSALES_AUTO_SYNC,
+        "importados": 0,
+        "mensaje": "Sincronización de sucursales bajo demanda.",
+    }
     activos = Ticket.objects.filter(
         sucursal=sucursal,
         estado__in=[Ticket.Estado.ABIERTO, Ticket.Estado.PROCESADO, Ticket.Estado.COBRAR],
@@ -328,9 +437,58 @@ def api_estado(request):
     return JsonResponse({"tickets": tickets, "integracion_sucursales": integracion})
 
 
+@require_POST
+@permiso_pos("puede_sincronizar")
+def api_sincronizar_sucursales(request):
+    integracion = sincronizar_pedidos_confirmados(_sucursal())
+    return JsonResponse({"integracion_sucursales": integracion})
+
+
+@require_GET
+def imagen_producto(request, producto_id):
+    producto = Producto.objects.filter(
+        pk=producto_id,
+        sucursal=_sucursal(),
+        activo=True,
+    ).first()
+    if producto is None:
+        raise Http404("Producto no encontrado.")
+    return respuesta_miniatura_producto(request, producto)
+
+
 @require_GET
 def api_estado_impresion(request):
     return JsonResponse(estado_impresora())
+
+
+@require_GET
+def api_archivo_impresion(request, trabajo_id):
+    try:
+        trabajo = TrabajoImpresion.objects.only("archivo").get(pk=trabajo_id, sucursal=_sucursal())
+    except TrabajoImpresion.DoesNotExist as exc:
+        raise Http404("Vista previa no encontrada.") from exc
+    if not trabajo.archivo:
+        raise Http404("Vista previa no encontrada.")
+
+    root = Path(settings.MEDIA_ROOT).resolve()
+    relative = Path(trabajo.archivo)
+    if relative.is_absolute():
+        raise Http404("Vista previa no encontrada.")
+    try:
+        candidate = (root / relative).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise Http404("Vista previa no encontrada.") from exc
+    if not candidate.is_relative_to(root) or candidate.suffix.lower() != ".png" or not candidate.is_file():
+        raise Http404("Vista previa no encontrada.")
+
+    try:
+        response = FileResponse(candidate.open("rb"), content_type="image/png")
+    except OSError as exc:
+        raise Http404("Vista previa no encontrada.") from exc
+    response["Content-Disposition"] = f'inline; filename="impresion-{trabajo.id}.png"'
+    response["X-Content-Type-Options"] = "nosniff"
+    patch_cache_control(response, no_store=True, private=True)
+    return response
 
 
 @require_POST
@@ -338,22 +496,39 @@ def api_abrir_ticket(request):
     try:
         datos = _json(request)
         mesa = Mesa.objects.get(pk=datos.get("mesa_id"), sucursal=_sucursal(), activa=True)
-        ticket, creado = abrir_ticket(mesa)
+        ticket, creado = abrir_ticket(mesa, atendio=getattr(request, "pos_user", None))
         return JsonResponse({"creado": creado, "ticket": _ticket_payload(ticket)})
     except (Mesa.DoesNotExist, ErrorVenta) as exc:
         return JsonResponse({"error": str(exc) or "Posición no encontrada."}, status=400)
 
 
 @require_http_methods(["GET", "PATCH"])
+@transaccion_en_metodos("PATCH")
 def api_ticket(request, ticket_id):
     ticket = _ticket(ticket_id)
+    if request.method == "PATCH":
+        ticket = (
+            Ticket.objects.select_for_update()
+            .select_related(
+                "mesa__cliente_sucursal",
+                "cliente",
+                "telefono_cliente",
+                "domicilio_cliente",
+                "atendio",
+                "sucursal",
+            )
+            .get(pk=ticket.pk)
+        )
     if request.method == "PATCH":
         try:
             datos = _json(request)
             if ticket.estado != Ticket.Estado.ABIERTO:
                 raise ErrorVenta("La orden ya fue procesada.")
             if "comentario_general" in datos:
-                ticket.comentario_general = str(datos["comentario_general"]).strip()
+                comentario = str(datos["comentario_general"]).strip()
+                if len(comentario) > 500:
+                    raise ErrorVenta("El comentario no puede superar 500 caracteres.")
+                ticket.comentario_general = comentario
             if "captura_por_nombres" in datos:
                 if ticket.canal not in {
                     Mesa.Canal.COMEDOR,
@@ -368,6 +543,8 @@ def api_ticket(request, ticket_id):
                 nombres = datos["nombres_comensales"]
                 if not isinstance(nombres, dict):
                     raise ErrorVenta("La lista de nombres no es válida.")
+                if len(nombres) > 24:
+                    raise ErrorVenta("La lista de nombres no puede superar 24 personas.")
                 nombres_limpios = {}
                 for clave, valor in nombres.items():
                     numero = int(clave)
@@ -418,12 +595,17 @@ def api_ticket(request, ticket_id):
                 grupos = datos["salsas_verduras"]
                 if not isinstance(grupos, list):
                     raise ErrorVenta("La selección de salsas y verduras no es válida.")
+                if len(grupos) > len(PREFIJOS_SALSA):
+                    raise ErrorVenta("La selección contiene demasiados grupos.")
                 normalizados = []
                 for grupo in grupos:
                     if not isinstance(grupo, dict):
                         raise ErrorVenta("La selección de salsas y verduras no es válida.")
                     prefijo = str(grupo.get("prefijo", ""))
-                    elementos = list(dict.fromkeys(str(item) for item in grupo.get("elementos", [])))
+                    elementos_crudos = grupo.get("elementos", [])
+                    if not isinstance(elementos_crudos, list) or len(elementos_crudos) > len(OPCIONES_SALSA):
+                        raise ErrorVenta("La selección de salsas y verduras no es válida.")
+                    elementos = list(dict.fromkeys(str(item) for item in elementos_crudos))
                     if prefijo not in PREFIJOS_SALSA or not elementos or any(item not in OPCIONES_SALSA for item in elementos):
                         raise ErrorVenta("La selección de salsas y verduras contiene una opción no válida.")
                     normalizados.append({"prefijo": prefijo, "elementos": elementos})
@@ -435,11 +617,17 @@ def api_ticket(request, ticket_id):
     return JsonResponse({"ticket": _ticket_payload(ticket)})
 
 
-@require_GET
+@require_POST
 def api_buscar_clientes(request):
     try:
-        limite = int(request.GET.get("limite", 10))
-        return JsonResponse({"resultados": buscar_clientes(_sucursal(), request.GET.get("q", ""), limite)})
+        datos = _json(request)
+        consulta = str(datos.get("q", "")).strip()
+        if len(consulta) > 180:
+            raise ErrorSolicitudJSON("La búsqueda es demasiado larga.")
+        limite = int(datos.get("limite", 10))
+        return JsonResponse({"resultados": buscar_clientes(_sucursal(), consulta, limite)})
+    except ErrorSolicitudJSON as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
     except (TypeError, ValueError):
         return JsonResponse({"error": "El límite de resultados no es válido."}, status=400)
 
@@ -479,9 +667,22 @@ def api_cliente(request, cliente_id):
 
 
 @require_http_methods(["POST", "DELETE"])
+@transaction.atomic
 def api_ticket_cliente(request, ticket_id):
     try:
         ticket = _ticket(ticket_id)
+        ticket = (
+            Ticket.objects.select_for_update()
+            .select_related(
+                "mesa__cliente_sucursal",
+                "cliente",
+                "telefono_cliente",
+                "domicilio_cliente",
+                "atendio",
+                "sucursal",
+            )
+            .get(pk=ticket.pk)
+        )
         if ticket.estado != Ticket.Estado.ABIERTO:
             raise ErrorVenta("La orden ya fue procesada.")
         if ticket.canal != Mesa.Canal.DOMICILIO:
@@ -620,12 +821,15 @@ def api_modificador(request, ticket_id):
         ticket = _ticket(ticket_id)
         datos = _json(request)
         codigo = str(datos.get("codigo", "")).strip()[:20]
-        nombre = str(datos.get("nombre", codigo)).strip()[:60]
         if datos.get("tipo") == "general":
-            if not codigo:
+            nombre = COMENTARIOS_GENERALES_PERMITIDOS.get(codigo)
+            if not nombre:
                 raise ErrorVenta("Comentario general inválido.")
             alternar_comentario_general(ticket, codigo, nombre)
         else:
+            nombre = MODIFICADORES_PERMITIDOS.get(codigo)
+            if not nombre:
+                raise ErrorVenta("Modificador inválido.")
             comensales = datos.get("comensales")
             if comensales is not None:
                 comensales = sorted({int(valor) for valor in comensales})
@@ -658,6 +862,7 @@ def api_procesar(request, ticket_id):
 
 
 @require_POST
+@permiso_pos("puede_cobrar")
 def api_cobrar(request, ticket_id):
     try:
         if _ticket(ticket_id).canal == Mesa.Canal.SUCURSALES:
@@ -676,6 +881,7 @@ def api_cobrar(request, ticket_id):
 
 
 @require_POST
+@permiso_pos("puede_cobrar")
 def api_completar_sucursal(request, ticket_id):
     try:
         ticket = completar_ticket_sucursal(_ticket(ticket_id))
@@ -685,6 +891,7 @@ def api_completar_sucursal(request, ticket_id):
 
 
 @require_POST
+@permiso_pos("puede_cancelar")
 def api_cancelar(request, ticket_id):
     try:
         ticket = cancelar_ticket(_ticket(ticket_id))
@@ -694,6 +901,7 @@ def api_cancelar(request, ticket_id):
 
 
 @require_POST
+@permiso_pos("puede_reimprimir")
 def api_imprimir(request, ticket_id):
     try:
         ticket = _ticket(ticket_id)
@@ -725,7 +933,7 @@ def manifest(request):
             "background_color": "#ffed00",
             "theme_color": "#ffed00",
             "icons": [
-                {"src": "/static/ventas/brand/logoactual.jpeg", "sizes": "1181x1181", "type": "image/jpeg", "purpose": "any maskable"}
+                {"src": "/static/ventas/brand/logoactual.jpeg", "sizes": "1181x1181", "type": "image/jpeg", "purpose": "any"}
             ],
         },
         content_type="application/manifest+json",
@@ -733,9 +941,23 @@ def manifest(request):
 
 
 def service_worker(request):
-    codigo = """const CACHE='tocayos-pos-v11';
-self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(['/static/ventas/app.css?v=20260824-2','/static/ventas/app.js?v=20260824-2','/static/ventas/brand/logoactual.jpeg','/static/ventas/fonts/Montserrat-Medium.ttf','/static/ventas/fonts/Montserrat-SemiBold.ttf']))));
+    recursos_menu = {
+        static(f"{RUTA_MENU_ESTATICO}/{archivo}")
+        for archivo in (*IMAGEN_MENU_POR_CODIGO.values(), IMAGEN_MENU_PREDETERMINADA)
+    }
+    precache = [
+        f"{static('ventas/app.css')}?v={ASSET_VERSION}",
+        f"{static('ventas/brand-pos.css')}?v={ASSET_VERSION}",
+        f"{static('ventas/app.js')}?v={ASSET_VERSION}",
+        static("ventas/brand/logoactual.jpeg"),
+        static("ventas/fonts/Montserrat-Variable.woff2"),
+        static("ventas/fonts/BebasNeue-Regular.woff2"),
+        *sorted(recursos_menu),
+    ]
+    codigo = """const CACHE='__CACHE__';
+const PRECACHE=__PRECACHE__;
+self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(PRECACHE))));
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))));
 self.addEventListener('fetch', e => { if (e.request.method === 'GET') e.respondWith(fetch(e.request).catch(() => caches.match(e.request))); });
-"""
+""".replace("__CACHE__", PWA_CACHE).replace("__PRECACHE__", json.dumps(precache))
     return HttpResponse(codigo, content_type="application/javascript", headers={"Cache-Control": "no-cache"})

@@ -1,5 +1,9 @@
 import os
+import re
+from ipaddress import ip_address
 from pathlib import Path
+
+from django.core.exceptions import ImproperlyConfigured
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -31,9 +35,53 @@ def env_bool(name, default=False):
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "si", "sí", "yes"}
 
 
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "solo-desarrollo-cambiar-en-produccion")
-DEBUG = env_bool("DJANGO_DEBUG", True)
-ALLOWED_HOSTS = [host.strip() for host in os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",") if host.strip()]
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "").strip()
+_CLAVES_INSEGURAS = (
+    "cambiar",
+    "solo-desarrollo",
+    "clave-exclusiva-de-prueba",
+    "django-insecure-",
+)
+if len(SECRET_KEY) < 50 or any(
+    SECRET_KEY.lower().startswith(prefijo) for prefijo in _CLAVES_INSEGURAS
+) or len(set(SECRET_KEY)) < 5:
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY es obligatoria, debe tener al menos 50 caracteres aleatorios "
+        "y no puede ser un marcador de ejemplo."
+    )
+
+# La configuración principal siempre es de producción. El modo de prueba vive en
+# pos.settings_development/pos.settings_test y nunca debe activarse desde .env.
+DEBUG = False
+
+_HOST_DNS = re.compile(
+    r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\."
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
+)
+
+
+def host_permitido(host):
+    if not host or host != host.strip() or any(caracter in host for caracter in "*/\\"):
+        return False
+    if "://" in host or any(caracter.isspace() for caracter in host):
+        return False
+    candidato_ip = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    try:
+        ip_address(candidato_ip)
+        return ":" not in host or (host.startswith("[") and host.endswith("]"))
+    except ValueError:
+        return bool(_HOST_DNS.fullmatch(host)) and ":" not in host
+
+
+_hosts_configurados = os.getenv(
+    "DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]"
+).split(",")
+if not _hosts_configurados or any(not host_permitido(host) for host in _hosts_configurados):
+    raise ImproperlyConfigured(
+        "DJANGO_ALLOWED_HOSTS sólo acepta hosts/IP concretos separados por coma, sin "
+        "comodines, espacios, esquemas, rutas ni puertos."
+    )
+ALLOWED_HOSTS = _hosts_configurados
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -50,10 +98,12 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "ventas.middleware.POSSessionAuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -76,42 +126,177 @@ TEMPLATES = [
 WSGI_APPLICATION = "pos.wsgi.application"
 
 if os.getenv("DB_ENGINE", "sqlite").lower() == "postgres":
+    postgres_password = os.getenv("POSTGRES_PASSWORD", "").strip()
+    if not postgres_password:
+        raise ImproperlyConfigured("POSTGRES_PASSWORD es obligatoria al usar PostgreSQL.")
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
             "NAME": os.getenv("POSTGRES_DB", "tocayos"),
             "USER": os.getenv("POSTGRES_USER", "tocayos"),
-            "PASSWORD": os.getenv("POSTGRES_PASSWORD", "tocayos-local"),
+            "PASSWORD": postgres_password,
             "HOST": os.getenv("POSTGRES_HOST", "db"),
             "PORT": os.getenv("POSTGRES_PORT", "5432"),
             "CONN_MAX_AGE": 60,
         }
     }
 else:
-    DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
+    sqlite_path = Path(os.getenv("SQLITE_PATH", "db.sqlite3"))
+    if not sqlite_path.is_absolute():
+        sqlite_path = BASE_DIR / sqlite_path
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": sqlite_path,
+            "OPTIONS": {"timeout": 20, "transaction_mode": "IMMEDIATE"},
+        }
+    }
 
-AUTH_PASSWORD_VALIDATORS = []
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
+    },
+    {
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        "OPTIONS": {"min_length": 12},
+    },
+    {
+        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
+    },
+    {
+        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
+    },
+]
 LANGUAGE_CODE = "es-mx"
 TIME_ZONE = "America/Mexico_City"
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+DATA_UPLOAD_MAX_MEMORY_SIZE = 1 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 1 * 1024 * 1024
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 1000
+DATA_UPLOAD_MAX_NUMBER_FILES = 10
+
+RUNTIME_DIR = BASE_DIR / "runtime"
+CACHE_DIR = RUNTIME_DIR / "cache"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": str(CACHE_DIR),
+        "TIMEOUT": 900,
+        "OPTIONS": {"MAX_ENTRIES": 2000},
+    }
+}
+
+# Cabeceras seguras compatibles con HTTP dentro de una LAN. Waitress no termina
+# TLS; estas protecciones se activan sólo detrás de un proxy HTTPS confiable.
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_AGE = 12 * 60 * 60
+SESSION_SAVE_EVERY_REQUEST = True
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+CSRF_COOKIE_SAMESITE = "Lax"
+X_FRAME_OPTIONS = "DENY"
+HTTPS_ENABLED = env_bool("DJANGO_HTTPS", False)
+WAITRESS_HOST = os.getenv("WAITRESS_HOST", "127.0.0.1").strip()
+WAITRESS_TRUSTED_PROXY = os.getenv("WAITRESS_TRUSTED_PROXY", "").strip()
+ALLOW_INSECURE_HTTP_LAN = env_bool("ALLOW_INSECURE_HTTP_LAN", False)
+try:
+    _direccion_escucha = ip_address(WAITRESS_HOST)
+except ValueError as exc:
+    raise ImproperlyConfigured("WAITRESS_HOST debe ser una dirección IP concreta.") from exc
+if _direccion_escucha.is_multicast:
+    raise ImproperlyConfigured("WAITRESS_HOST no puede ser una dirección multicast.")
+
+_direccion_proxy = None
+if WAITRESS_TRUSTED_PROXY:
+    try:
+        _direccion_proxy = ip_address(WAITRESS_TRUSTED_PROXY)
+    except ValueError as exc:
+        raise ImproperlyConfigured(
+            "WAITRESS_TRUSTED_PROXY debe ser una dirección IP concreta."
+        ) from exc
+    if not _direccion_proxy.is_loopback or not _direccion_escucha.is_loopback:
+        raise ImproperlyConfigured(
+            "El proxy confiable y Waitress deben comunicarse exclusivamente por loopback."
+        )
+
+if HTTPS_ENABLED and _direccion_proxy is None:
+    raise ImproperlyConfigured(
+        "DJANGO_HTTPS requiere WAITRESS_TRUSTED_PROXY y Waitress escuchando en loopback."
+    )
+if not HTTPS_ENABLED and not _direccion_escucha.is_loopback and not ALLOW_INSECURE_HTTP_LAN:
+    raise ImproperlyConfigured(
+        "Exponer HTTP fuera de loopback requiere ALLOW_INSECURE_HTTP_LAN=true de forma explícita."
+    )
+
+SESSION_COOKIE_SECURE = HTTPS_ENABLED
+CSRF_COOKIE_SECURE = HTTPS_ENABLED
+SECURE_SSL_REDIRECT = HTTPS_ENABLED
+SECURE_HSTS_SECONDS = int(os.getenv("DJANGO_HSTS_SECONDS", "31536000")) if HTTPS_ENABLED else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("DJANGO_HSTS_INCLUDE_SUBDOMAINS", False)
+SECURE_HSTS_PRELOAD = env_bool("DJANGO_HSTS_PRELOAD", False)
+if HTTPS_ENABLED:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "seguro": {
+            "format": "{asctime} {levelname} {name}: {message}",
+            "style": "{",
+        }
+    },
+    "handlers": {
+        "archivo": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": LOG_DIR / "django.log",
+            "maxBytes": 5 * 1024 * 1024,
+            "backupCount": 5,
+            "encoding": "utf-8",
+            "formatter": "seguro",
+            "level": "WARNING",
+        }
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["archivo"],
+            "level": "WARNING",
+            "propagate": False,
+        }
+    },
+}
 
 SUCURSAL_CLAVE = os.getenv("SUCURSAL_CLAVE", "ARBOLEDAS")
-# Preparado para el módulo administrativo. La entrada permanece deshabilitada
-# hasta implementar permisos y sesiones; nunca se expone esta clave al navegador.
-POS_ADMIN_PASSWORD = os.getenv("POS_ADMIN_PASSWORD", "admin123")
+POS_REQUIRE_AUTH = True
+LOGIN_URL = "/acceso/"
+POS_LOGIN_MAX_ATTEMPTS = int(os.getenv("POS_LOGIN_MAX_ATTEMPTS", "5"))
+POS_LOGIN_MAX_IP_ATTEMPTS = int(os.getenv("POS_LOGIN_MAX_IP_ATTEMPTS", "20"))
+POS_LOGIN_LOCKOUT_SECONDS = int(os.getenv("POS_LOGIN_LOCKOUT_SECONDS", "900"))
 PRINT_BACKEND = os.getenv("PRINT_BACKEND", "tcp").lower()
 if PRINT_BACKEND not in {"tcp", "archivo"}:
     raise ValueError("PRINT_BACKEND debe ser 'tcp' o 'archivo'.")
 PRINT_SYNC = env_bool("PRINT_SYNC", DEBUG)
 PRINTER_PORT = int(os.getenv("PRINTER_PORT", "9100"))
 PRINTER_TIMEOUT = float(os.getenv("PRINTER_TIMEOUT", "5"))
+PRINT_PREVIEW_RETENTION_DAYS = int(os.getenv("PRINT_PREVIEW_RETENTION_DAYS", "7"))
+if not 0 <= PRINT_PREVIEW_RETENTION_DAYS <= 30:
+    raise ImproperlyConfigured("PRINT_PREVIEW_RETENTION_DAYS debe estar entre 0 y 30.")
 PRINTER_HOSTS = {
     "caja": os.getenv("PRINTER_CAJA_HOST", "192.168.0.33"),
     "cocina": os.getenv("PRINTER_COCINA_HOST", "192.168.0.33"),
@@ -121,19 +306,26 @@ PRINTER_HOSTS = {
 # Puente de sólo lectura con la base de pedidos. Supabase tiene prioridad y la
 # SQLite hermana queda como respaldo para desarrollo sin conexión.
 PEDIDOS_SUCURSALES_DATABASE_URL = os.getenv("PEDIDOS_SUCURSALES_DATABASE_URL", "").strip()
+PEDIDOS_SUCURSALES_FUENTE = os.getenv("PEDIDOS_SUCURSALES_FUENTE", "desactivada").strip().lower()
+if PEDIDOS_SUCURSALES_FUENTE not in {"desactivada", "supabase", "sqlite"}:
+    raise ImproperlyConfigured(
+        "PEDIDOS_SUCURSALES_FUENTE debe ser 'desactivada', 'supabase' o 'sqlite'."
+    )
 PEDIDOS_SUCURSALES_POSTGRES = {
-    "host": os.getenv("PEDIDOS_SUCURSALES_DB_HOST", "aws-1-us-east-2.pooler.supabase.com"),
+    "host": os.getenv("PEDIDOS_SUCURSALES_DB_HOST", "").strip(),
     "port": int(os.getenv("PEDIDOS_SUCURSALES_DB_PORT", "5432")),
     "dbname": os.getenv("PEDIDOS_SUCURSALES_DB_NAME", "postgres"),
-    "user": os.getenv("PEDIDOS_SUCURSALES_DB_USER", "postgres.uxcuejhzueagtscdxwlo"),
-    "password": os.getenv("PEDIDOS_SUCURSALES_DB_PASSWORD", os.getenv("SB_PASSWORD", "")),
-    "sslmode": os.getenv("PEDIDOS_SUCURSALES_DB_SSLMODE", "require"),
+    "user": os.getenv("PEDIDOS_SUCURSALES_DB_USER", "").strip(),
+    "password": os.getenv("PEDIDOS_SUCURSALES_DB_PASSWORD", ""),
+    "sslmode": os.getenv("PEDIDOS_SUCURSALES_DB_SSLMODE", "verify-full"),
+    "sslrootcert": os.getenv("PEDIDOS_SUCURSALES_DB_SSLROOTCERT", "").strip(),
     "connect_timeout": int(os.getenv("PEDIDOS_SUCURSALES_DB_TIMEOUT", "8")),
 }
+PEDIDOS_SUCURSALES_MAX_PEDIDOS = int(os.getenv("PEDIDOS_SUCURSALES_MAX_PEDIDOS", "500"))
 PEDIDOS_SUCURSALES_DB = Path(
     os.getenv("PEDIDOS_SUCURSALES_DB", str(BASE_DIR.parent / "tcysPedidosSucursales" / "db.sqlite3"))
 )
-PEDIDOS_SUCURSALES_AUTO_SYNC = env_bool("PEDIDOS_SUCURSALES_AUTO_SYNC", True)
+PEDIDOS_SUCURSALES_AUTO_SYNC = env_bool("PEDIDOS_SUCURSALES_AUTO_SYNC", False)
 PEDIDOS_SUCURSALES_SYNC_SECONDS = int(os.getenv("PEDIDOS_SUCURSALES_SYNC_SECONDS", "300"))
 PEDIDOS_SUCURSALES_HORA_INICIO = os.getenv("PEDIDOS_SUCURSALES_HORA_INICIO", "06:00")
 # Cinco minutos de gracia garantizan una lectura posterior al último pedido de las 17:30.

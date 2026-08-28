@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
 from django.db.models import Max
@@ -31,6 +31,7 @@ CANALES_CONVERSION = {
     Mesa.Canal.DOMICILIO: Mesa.Canal.RECOGER,
     Mesa.Canal.RECOGER: Mesa.Canal.DOMICILIO,
 }
+_ATENDIO_AUTOMATICO = object()
 
 
 def _limpiar_cliente_ticket(ticket):
@@ -183,7 +184,7 @@ def _reasignar_componentes_promocion(ticket):
 
 
 @transaction.atomic
-def abrir_ticket(mesa):
+def abrir_ticket(mesa, atendio=_ATENDIO_AUTOMATICO):
     mesa = Mesa.objects.select_for_update().get(pk=mesa.pk)
     activo = Ticket.objects.filter(
         mesa=mesa,
@@ -194,7 +195,12 @@ def abrir_ticket(mesa):
     # Serializa la asignación de folios por sucursal también cuando la base está concurrida.
     Sucursal.objects.select_for_update().get(pk=mesa.sucursal_id)
     ultimo = Ticket.objects.filter(sucursal=mesa.sucursal).aggregate(Max("folio"))["folio__max"] or 0
-    atendio = UsuarioPOS.objects.filter(sucursal=mesa.sucursal, activo=True).first()
+    if atendio is _ATENDIO_AUTOMATICO:
+        atendio = UsuarioPOS.objects.filter(sucursal=mesa.sucursal, activo=True).first()
+    elif atendio is not None and (
+        not atendio.activo or atendio.sucursal_id != mesa.sucursal_id
+    ):
+        raise ErrorVenta("El perfil del operador no está activo en esta sucursal.")
     ticket = Ticket.objects.create(
         sucursal=mesa.sucursal,
         mesa=mesa,
@@ -272,6 +278,7 @@ def agregar_partida(
     termino=None,
     promocion_aplicada=None,
 ):
+    ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if ticket.estado != Ticket.Estado.ABIERTO:
         raise ErrorVenta("La orden ya fue procesada; no admite nuevas partidas.")
     cantidad = Decimal(str(cantidad))
@@ -364,7 +371,9 @@ def agregar_partida_sucursal(ticket, producto, cantidad=Decimal("1.000")):
 
 @transaction.atomic
 def actualizar_partida_sucursal(partida, cantidad):
+    ticket = Ticket.objects.select_for_update().get(pk=partida.ticket_id)
     partida = Partida.objects.select_for_update().select_related("ticket").get(pk=partida.pk)
+    partida.ticket = ticket
     if not partida.producto_sucursal_id:
         raise ErrorVenta("La partida no pertenece al catálogo de sucursales.")
     if partida.ticket.estado != Ticket.Estado.ABIERTO:
@@ -390,6 +399,9 @@ def actualizar_partida_sucursal(partida, cantidad):
 
 @transaction.atomic
 def actualizar_partida(partida, cantidad, termino=None, validar_componente=True):
+    ticket = Ticket.objects.select_for_update().get(pk=partida.ticket_id)
+    partida = Partida.objects.select_for_update().select_related("producto", "ticket").get(pk=partida.pk)
+    partida.ticket = ticket
     if partida.ticket.estado != Ticket.Estado.ABIERTO:
         raise ErrorVenta("La orden ya fue procesada.")
     cantidad = Decimal(str(cantidad))
@@ -481,6 +493,7 @@ def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar
 
 @transaction.atomic
 def alternar_modificador(ticket, comensal, codigo, nombre):
+    ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if ticket.estado != Ticket.Estado.ABIERTO:
         raise ErrorVenta("La orden ya fue procesada.")
     existente = ModificadorTicket.objects.filter(ticket=ticket, comensal=comensal, codigo=codigo).first()
@@ -506,6 +519,7 @@ def alternar_modificador(ticket, comensal, codigo, nombre):
 
 @transaction.atomic
 def alternar_comentario_general(ticket, codigo, nombre):
+    ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if ticket.estado != Ticket.Estado.ABIERTO:
         raise ErrorVenta("La orden ya fue procesada.")
     comentarios = list(ticket.comentarios_generales or [])
@@ -525,6 +539,7 @@ def alternar_comentario_general(ticket, codigo, nombre):
 
 @transaction.atomic
 def asegurar_modificador(ticket, comensales, codigo, nombre):
+    ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if ticket.estado != Ticket.Estado.ABIERTO:
         raise ErrorVenta("La orden ya fue procesada.")
     comensales_con_producto = set(
@@ -595,9 +610,32 @@ def cobrar_ticket(ticket, forma_pago, importe_recibido=None):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if ticket.estado not in [Ticket.Estado.PROCESADO, Ticket.Estado.COBRAR]:
         raise ErrorVenta("Primero procesa la orden.")
+    if forma_pago not in Ticket.FormaPago.values:
+        raise ErrorVenta("Forma de pago inválida.")
+    total = ticket.total
+    try:
+        recibido = Decimal(str(importe_recibido)) if importe_recibido is not None else None
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ErrorVenta("El importe recibido no es válido.") from exc
+    if recibido is not None:
+        if not recibido.is_finite():
+            raise ErrorVenta("El importe recibido debe ser un número finito.")
+        try:
+            cuantizado = recibido.quantize(Decimal("0.01"))
+        except InvalidOperation as exc:
+            raise ErrorVenta("El importe recibido no es válido.") from exc
+        if recibido != cuantizado or recibido <= 0 or recibido > Decimal("99999999.99"):
+            raise ErrorVenta("El importe recibido debe ser positivo y tener máximo dos decimales.")
+    if forma_pago == Ticket.FormaPago.EFECTIVO:
+        if recibido is None or recibido < total:
+            raise ErrorVenta("El importe recibido no puede ser menor que el total.")
+    else:
+        if recibido is not None and recibido != total:
+            raise ErrorVenta("El importe de tarjeta debe coincidir con el total.")
+        recibido = total
     ticket.estado = Ticket.Estado.PAGADO
     ticket.forma_pago = forma_pago
-    ticket.importe_recibido = importe_recibido
+    ticket.importe_recibido = recibido
     ticket.pagado_en = timezone.now()
     ticket.save(update_fields=["estado", "forma_pago", "importe_recibido", "pagado_en", "actualizado_en"])
     _evento(ticket, "ticket.pagado", {"total": str(ticket.total), "forma_pago": forma_pago})

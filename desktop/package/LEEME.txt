@@ -12,6 +12,10 @@ http://192.168.0.30:8000
 La dirección puede cambiarse después desde:
 Menú Inicio > Los Tocayos POS > Configurar servidor
 
+La dirección debe ser sólo el origen HTTP(S), sin usuario, contraseña, ruta, consulta
+ni fragmento. HTTPS es el perfil recomendado. Para guardar HTTP, el instalador pedirá
+escribir exactamente "HTTP LAN": HTTP no cifra sesiones, credenciales ni pedidos.
+
 El cliente no contiene la base de datos ni imprime directamente. Las ventas y las
 impresiones se procesan en la computadora principal de la sucursal.
 

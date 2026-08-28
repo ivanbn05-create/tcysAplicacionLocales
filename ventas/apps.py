@@ -5,3 +5,6 @@ class VentasConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "ventas"
     verbose_name = "Ventas"
+
+    def ready(self):
+        from . import checks  # noqa: F401

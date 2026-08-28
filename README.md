@@ -4,42 +4,82 @@ Primera versión local del punto de venta de Los Tocayos. Permite operar pedidos
 comedor, domicilio y sucursales, capturar partidas por comensal, procesar la orden,
 cobrarla y generar comandas/cuentas térmicas en modo ráster.
 
-## Inicio rápido con Docker
+## Producción local en Windows
 
-1. Copia `.env.example` como `.env`. El valor predeterminado `PRINT_BACKEND=tcp` envía
-   directamente a la impresora térmica configurada.
-2. Ejecuta `docker compose up --build`.
-3. Abre `http://localhost:8000`.
+Instala Python para **todos los usuarios** y abre PowerShell como administrador. El
+instalador genera `DJANGO_SECRET_KEY` si falta, obliga `DEBUG=false`, valida una lista
+concreta de hosts, instala Waitress y registra `LosTocayosPOS` como servicio con inicio
+automático retardado:
 
-La base se migra y el menú se carga automáticamente. En modo archivo, las impresiones
-de prueba quedan en `media/impresiones/` sin gastar papel.
-
-## Inicio local sin Docker
-
-En PowerShell, ejecuta `./iniciar-local.ps1`. La primera vez crea el entorno e instala
-dependencias. Los pasos equivalentes son:
+El perfil recomendado escucha sólo en loopback detrás de un proxy HTTPS local:
 
 ```powershell
-py -m venv .venv
-.\.venv\Scripts\python -m pip install -r requirements.txt
-.\.venv\Scripts\python manage.py migrate
-.\.venv\Scripts\python manage.py cargar_datos_iniciales
-.\.venv\Scripts\python manage.py runserver 0.0.0.0:8000
+.\instalar-servicio-lan.ps1 `
+  -AllowedHosts "localhost,127.0.0.1,192.168.0.30" `
+  -ListenAddress "127.0.0.1" `
+  -TrustedProxy "127.0.0.1" `
+  -Https `
+  -Port 8000
 ```
 
-La configuración local usa SQLite para facilitar la prueba. Docker usa PostgreSQL 16.
+Si todavía no existe ese proxy y se acepta operar temporalmente sin cifrado, la
+exposición LAN exige el consentimiento explícito `-AllowInsecureHttpLan`:
 
-### Inicio rápido para pruebas en la LAN
+```powershell
+.\instalar-servicio-lan.ps1 `
+  -AllowedHosts "localhost,127.0.0.1,192.168.0.30" `
+  -ListenAddress "0.0.0.0" `
+  -AllowInsecureHttpLan `
+  -Port 8000
+```
 
-En la computadora principal, haz doble clic en `iniciar-prueba-lan.bat`. El iniciador
-comprueba dependencias, aplica migraciones y catálogos pendientes, y publica la
-aplicación exactamente en `http://192.168.0.30:8000`. También activa impresión TCP
-síncrona, por lo que no requiere abrir por separado el consumidor de impresión.
+El instalador migra la base a `runtime\db.sqlite3`, crea una cuenta administrativa y
+otra operativa mediante prompts sin eco de contraseña, recopila estáticos, limita el
+firewall a perfil privado/subred local y comprueba `/salud/`. El servicio corre como
+`LocalService`; sólo puede modificar `runtime`, `logs` y `media`. El código, `.venv`,
+`.env`, certificados y respaldos quedan bajo una ACL de SYSTEM/Administradores.
 
-La ventana debe permanecer abierta durante la prueba; `Ctrl+C` detiene el servidor. La
-computadora necesita conservar la dirección `192.168.0.30`, preferentemente mediante
-una reserva DHCP en el módem o router. Si Windows recibe otra IP, debe corregirse la
-reserva antes de usar este iniciador.
+Para iniciar o comprobar posteriormente el servicio:
+
+```powershell
+.\iniciar-servicio-lan.ps1
+```
+
+`iniciar-local.ps1` conserva un arranque de producción en consola con Waitress para
+diagnóstico. Por defecto sólo escucha en `127.0.0.1`; para HTTP LAN exige el mismo
+indicador `-AllowInsecureHttpLan`. No usa `runserver` y la ventana debe permanecer
+abierta.
+
+HTTP dentro de una LAN no cifra contraseñas, cookies ni datos de clientes. Para el
+perfil recomendado coloca un proxy inverso con certificado delante del aplicativo y
+ejecuta el instalador con `-Https`; en ese modo Waitress sólo acepta loopback y confía
+en un proxy loopback concreto. La opción configura Django/Waitress, pero no instala el
+proxy ni el certificado HTTPS.
+
+### Modo de prueba explícito y aislado
+
+`iniciar-prueba-lan.bat` es el único arranque con `runserver` y `DEBUG=true`. Publica
+`http://192.168.0.30:8001`, usa exclusivamente
+`runtime\prueba\db.sqlite3` y `runtime\prueba\media`, desactiva Supabase y guarda las
+impresiones como archivos. No toca la base, los clientes ni las impresoras de
+producción. Carece de autenticación y nunca debe dejarse activo para operación real.
+
+La computadora necesita conservar la dirección `192.168.0.30`, preferentemente con
+una reserva DHCP. `Ctrl+C` detiene este modo.
+
+## Inicio con Docker
+
+1. Copia `.env.example` como `.env`, genera valores aleatorios para
+   `DJANGO_SECRET_KEY` y `POSTGRES_PASSWORD`, y restringe `DJANGO_ALLOWED_HOSTS`.
+2. El `compose` publica Gunicorn en la LAN y falla cerrado: para ese despliegue HTTP
+   directo debes aceptar conscientemente el riesgo con `ALLOW_INSECURE_HTTP_LAN=true`
+   en `.env`; no reutilices esa opción si después colocas un proxy HTTPS.
+3. Ejecuta `docker compose up --build`.
+4. Crea las cuentas con `docker compose exec web python manage.py createsuperuser` y
+   `docker compose exec web python manage.py crear_operador_pos`.
+5. Abre `http://localhost:8000`.
+
+Docker usa PostgreSQL 16 y Gunicorn; Waitress es el servidor de producción de Windows.
 
 ## Aplicación de escritorio para Windows
 
@@ -118,15 +158,22 @@ El servicio `impresion` consume la cola de trabajos, renderiza PNG monocromátic
 576 píxeles (80 mm) y envía comandos ESC/POS ráster por TCP. Conserva el PNG como
 evidencia incluso cuando imprime por red.
 
-La pantalla de acceso muestra `Impresora lista`, `Impresora sin conexión` o `Sólo vista
-previa`. Un trabajo en modo archivo queda como `Vista previa generada`; sólo se marca
-`Impreso` después de completar el envío TCP.
+La cabecera no ocupa espacio con telemetría pasiva. Un trabajo en modo archivo queda
+como `Vista previa generada`; sólo se marca `Impreso` después de completar el envío TCP.
+Los fallos de impresión aparecen como avisos persistentes cuando requieren una acción.
 
 ## Identidad de marca
 
 La interfaz usa el logotipo actual y los lineamientos del manual de identidad:
 amarillo `#FFED00`, verde `#4AA736`, rojo `#E42522`, carbón `#353436` y Montserrat.
 Los recursos están empaquetados localmente para que la PWA no dependa de internet.
+La dirección de producto, los tokens, los componentes y las reglas para extender el
+futuro módulo Administrador están documentados en `DESIGN.md` y `PRODUCT.md`.
+
+El selector de operación conserva una lectura de pase de cocina: mesas libres en verde,
+órdenes abiertas en amarillo y procesadas en rojo, siempre con etiqueta e ícono para no
+depender sólo del color. La comanda virtual mantiene la estructura del ticket térmico;
+no debe convertirse en una tarjeta genérica ni en una imagen.
 
 ## Catálogo
 
@@ -142,6 +189,15 @@ python manage.py importar_catalogo_legado "C:\ruta\Listado-Productos.xlsx"
 
 Los precios y productos se editan desde `/admin/` después de crear un superusuario con
 `python manage.py createsuperuser`.
+
+Cada producto admite opcionalmente una fotografía JPG, PNG o WebP de hasta 3 MB desde
+`/admin/`. El archivo original no se publica directamente: el POS entrega una miniatura
+WebP privada, sin metadatos y recortada a `320×240`. Si no hay una carga administrada,
+el POS usa el mapa local de 25 WebP de `ventas/static/ventas/menu/`; un código sin foto
+asignada usa `mainlogo.webp`. Lonches sin queso comparten la foto de su variante normal,
+todas las aguas frescas comparten `aguasfrescas.webp` y todos los refrescos comparten
+`refresco.webp`. Las tarjetas compactas conservan la proporción 50/50 entre imagen y
+nombre/abreviatura, y los recursos quedan disponibles sin conexión.
 
 ## Clientes a domicilio
 
@@ -170,21 +226,33 @@ y quedan abiertos para revisión antes de imprimir. La conexión compartida se c
 en `.env`; la contraseña nunca se guarda en Git:
 
 ```env
+PEDIDOS_SUCURSALES_FUENTE=supabase
 PEDIDOS_SUCURSALES_AUTO_SYNC=true
 PEDIDOS_SUCURSALES_SYNC_SECONDS=300
+PEDIDOS_SUCURSALES_MAX_PEDIDOS=500
 PEDIDOS_SUCURSALES_HORA_INICIO=06:00
 PEDIDOS_SUCURSALES_HORA_FIN=17:35
-PEDIDOS_SUCURSALES_DB_HOST=aws-1-us-east-2.pooler.supabase.com
+PEDIDOS_SUCURSALES_DB_HOST=<pooler-del-proyecto>.supabase.com
 PEDIDOS_SUCURSALES_DB_PORT=5432
 PEDIDOS_SUCURSALES_DB_NAME=postgres
-PEDIDOS_SUCURSALES_DB_USER=postgres.uxcuejhzueagtscdxwlo
-PEDIDOS_SUCURSALES_DB_PASSWORD=secreto-local
-PEDIDOS_SUCURSALES_DB_SSLMODE=require
+PEDIDOS_SUCURSALES_DB_USER=pos_local_reader.<project-ref>
+PEDIDOS_SUCURSALES_DB_PASSWORD=<secreto-local-aleatorio>
+PEDIDOS_SUCURSALES_DB_SSLMODE=verify-full
+PEDIDOS_SUCURSALES_DB_SSLROOTCERT=certs/prod-ca-2021.crt
 ```
 
-También se acepta una URI completa en `PEDIDOS_SUCURSALES_DATABASE_URL`. Si no hay
-credenciales de Supabase, `PEDIDOS_SUCURSALES_DB` puede apuntar a una SQLite local para
-desarrollo sin conexión.
+También se acepta una URI completa en `PEDIDOS_SUCURSALES_DATABASE_URL`. Producción no
+hace fallback silencioso: `PEDIDOS_SUCURSALES_FUENTE=sqlite` sólo funciona con el
+módulo de prueba. Antes de activar Supabase aplica y verifica, en orden, los archivos de
+`seguridad\supabase\`; el aplicativo rechaza roles distintos de `pos_local_reader`,
+TLS sin validación de host/CA, permisos extra, RLS ausente y funciones públicas
+`SECURITY DEFINER` accesibles.
+
+La auditoría remota fechada y su alcance están en
+`seguridad\supabase\AUDITORIA_2026-08-26.md`. La exposición detectada no queda
+corregida en el proyecto remoto por el solo hecho de incorporar estos archivos:
+requiere el inventario, respaldo, aplicación controlada de los SQL y las revisiones
+del Dashboard descritas en `seguridad\supabase\README.md`.
 
 La sincronización también puede ejecutarse manualmente:
 
@@ -192,7 +260,9 @@ La sincronización también puede ejecutarse manualmente:
 .\.venv\Scripts\python manage.py sincronizar_pedidos_sucursales
 ```
 
-La consulta remota no modifica estados ni datos en Supabase. El control idempotente se
+La consulta remota no modifica estados ni datos en Supabase. Se ejecuta en una
+transacción `READ ONLY`, limita tablas/columnas/pedidos/partidas y vuelve a validar
+identidades, cantidades y precios contra el catálogo local. El control idempotente se
 guarda únicamente en la base local del POS. El intervalo predeterminado de cinco
 minutos reduce la carga remota a un máximo aproximado de 139 consultas diarias; fuera
 del horario configurado no se abre ninguna conexión. Los cinco minutos posteriores a
@@ -204,11 +274,30 @@ activa mientras el usuario está en esa pestaña.
 ## Pruebas
 
 ```powershell
-python manage.py test
+.\.venv\Scripts\python manage.py test
+.\.venv\Scripts\python manage.py check --deploy
 ```
 
 Cubren apertura y cancelación, captura hasta 24 comensales, promociones y sus
 componentes, preparación global/individual excluyente, entrega programada, salsas,
 terminal, orden de impresión, acceso para tabletas, bebidas acumuladas, clientes,
 procesamiento, cobro opcional, captura decimal de sucursales, importación idempotente y
-generación de los formatos térmicos.
+generación de los formatos térmicos. También cubren autenticación/CSRF, rate limiting,
+permisos por rol, pagos inválidos, privacidad de caché, rutas de vistas previas y
+validación defensiva de la integración externa.
+
+## Controles de seguridad operativa
+
+- Usa la cuenta operativa para ventas y reserva el superusuario para `/admin/`.
+  `UsuarioPOS` vincula cada cuenta Django con una sucursal y un rol; cobro,
+  cancelación, reimpresión y sincronización se autorizan por separado.
+- Las API y páginas con datos operativos envían `private, no-store`, exigen sesión y
+  CSRF, y aplican CSP, `frame-ancestors 'none'`, `nosniff` y política restrictiva de
+  capacidades del navegador.
+- Las vistas previas de impresión sólo se entregan tras autenticación y se purgan a
+  los siete días por defecto (`PRINT_PREVIEW_RETENTION_DAYS`, máximo 30).
+- SQLite usa transacciones `IMMEDIATE` y espera de bloqueo para serializar mutaciones
+  entre hilos de Waitress. Si la concurrencia supera una sucursal pequeña, cambia la
+  base principal a PostgreSQL.
+- Revisa `logs\django.log` y `logs\waitress.log`, prueba restauraciones de respaldo,
+  aplica actualizaciones y ejecuta auditoría de dependencias antes de cada entrega.

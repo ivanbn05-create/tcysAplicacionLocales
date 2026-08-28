@@ -1,9 +1,69 @@
 import uuid
+import warnings
 
+from PIL import Image, UnidentifiedImageError
+from django.core.exceptions import ValidationError
+from django.core.validators import FileExtensionValidator
 from django.db import models
 from django.utils import timezone
 
 from personas.models import Sucursal
+
+
+TAMANO_MAXIMO_IMAGEN_PRODUCTO = 1 * 1024 * 1024
+DIMENSION_MAXIMA_IMAGEN_PRODUCTO = 4096
+PIXELES_MAXIMOS_IMAGEN_PRODUCTO = 8_000_000
+FORMATOS_IMAGEN_PRODUCTO = {"JPEG", "PNG", "WEBP"}
+
+
+def validar_imagen_producto(archivo):
+    """Valida el contenido de una imagen y deja el archivo listo para reutilizarse."""
+
+    try:
+        try:
+            tamano = archivo.size
+        except (AttributeError, OSError, TypeError, ValueError) as exc:
+            raise ValidationError("No fue posible validar la imagen del producto.") from exc
+
+        if tamano > TAMANO_MAXIMO_IMAGEN_PRODUCTO:
+            raise ValidationError("La imagen del producto no puede superar 1 MB.")
+
+        archivo.seek(0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(archivo) as imagen:
+                if imagen.format not in FORMATOS_IMAGEN_PRODUCTO:
+                    raise ValidationError("La imagen del producto debe ser un JPG, PNG o WebP válido.")
+
+                # El POS sólo necesita una miniatura estática. Rechazar animaciones
+                # evita forzar al decodificador a recorrer un número no acotado de
+                # cuadros dentro de un archivo comprimido pequeño.
+                if getattr(imagen, "n_frames", 1) != 1:
+                    raise ValidationError("La imagen del producto debe tener un solo cuadro.")
+
+                ancho, alto = imagen.size
+                if (
+                    ancho > DIMENSION_MAXIMA_IMAGEN_PRODUCTO
+                    or alto > DIMENSION_MAXIMA_IMAGEN_PRODUCTO
+                    or ancho * alto > PIXELES_MAXIMOS_IMAGEN_PRODUCTO
+                ):
+                    raise ValidationError(
+                        "La imagen del producto supera las dimensiones máximas permitidas."
+                    )
+                imagen.verify()
+    except ValidationError:
+        raise
+    except (Image.DecompressionBombWarning, Image.DecompressionBombError) as exc:
+        raise ValidationError(
+            "La imagen del producto supera las dimensiones seguras permitidas."
+        ) from exc
+    except (OSError, SyntaxError, TypeError, ValueError, UnidentifiedImageError) as exc:
+        raise ValidationError("La imagen del producto debe ser un JPG, PNG o WebP válido.") from exc
+    finally:
+        try:
+            archivo.seek(0)
+        except (AttributeError, OSError, ValueError):
+            pass
 
 
 class Categoria(models.Model):
@@ -42,6 +102,15 @@ class Producto(models.Model):
     permite_termino = models.BooleanField(default=False)
     termino_predeterminado = models.CharField(max_length=8, choices=Termino.choices, blank=True)
     abreviaturas_termino = models.JSONField(default=dict, blank=True)
+    imagen = models.ImageField(
+        upload_to="productos/%Y/%m/",
+        blank=True,
+        validators=[
+            FileExtensionValidator(["jpg", "jpeg", "png", "webp"]),
+            validar_imagen_producto,
+        ],
+        help_text="JPG, PNG o WebP estático de hasta 1 MB. El POS genera una miniatura 4:3 protegida.",
+    )
     destino_impresion = models.CharField(max_length=10, choices=Destino.choices, default=Destino.COCINA)
     activo = models.BooleanField(default=True)
     origen = models.CharField(max_length=30, default="menu_2026")

@@ -1,0 +1,8 @@
+Use case: ui-mockup
+Asset type: high-fidelity north-star comp for the Los Tocayos desktop restaurant POS, 16:9 landscape, 1440x900 viewport
+Input images: Image 1 is the current Los Tocayos logo; Image 2 is the official brand-manual palette. Preserve the logo proportions and identity; do not redesign it.
+Committed world: “pase de cocina” — ticket rail, thermal paper, strong charcoal rules, direct kitchen labels, exact brand colors. Production interface for cashiers and servers under pressure, not a marketing poster or generic dashboard.
+Typography: Bebas Neue-like condensed display only for short zone headings; Montserrat-like functional text; tabular numerals.
+Palette: #FFED00 dominant structural yellow, #4AA736 green, #E42522 red, #353436 charcoal, thermal-paper off-white.
+Constraints: Spanish; accessible high contrast; 44px-plus controls; state conveyed by label/icon plus color; no gradients, glass, rounded floating card grid, photos, food illustration, charts, invented prices or metrics. Keep logo clean without shadow, outline, distortion or recoloring.
+Composition option 2 — horizontal ticket rail: a thin yellow top identity strip, then a black ticket rail holding three oversized clipped paper tabs “Comedor”, “Domicilio”, “Sucursales”. Under it, a wide station-map mesa field occupies the full width with four visually grouped rows of six mesas. Status labels are stamped at the upper-left of every mesa tile, while the mesa number is huge. A narrow bottom command bar contains the legend, printer/network state, active mesero, disabled “Administrador · Próximamente”, and the single primary action. Use subtle paper seams and registration marks, not shadows. The focal moment is the active mesa being physically clipped under the red rail marker.

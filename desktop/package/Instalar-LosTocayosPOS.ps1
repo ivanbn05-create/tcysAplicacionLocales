@@ -1,7 +1,8 @@
 param(
     [string]$ServerUrl,
     [string]$InstallRoot,
-    [switch]$SkipIntegration
+    [switch]$SkipIntegration,
+    [switch]$AllowInsecureHttp
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,7 +22,11 @@ function Test-ServerUrl {
 
     $uri = $null
     return [Uri]::TryCreate($Value, [UriKind]::Absolute, [ref]$uri) -and
-        $uri.Scheme -in @("http", "https")
+        $uri.Scheme -in @("http", "https") -and
+        [string]::IsNullOrEmpty($uri.UserInfo) -and
+        $uri.AbsolutePath -eq "/" -and
+        [string]::IsNullOrEmpty($uri.Query) -and
+        [string]::IsNullOrEmpty($uri.Fragment)
 }
 
 function Test-ServerConnection {
@@ -30,9 +35,10 @@ function Test-ServerConnection {
     try {
         $response = Invoke-WebRequest `
             -UseBasicParsing `
-            -Uri ($Value.TrimEnd("/") + "/api/estado/") `
+            -Uri ($Value.TrimEnd("/") + "/salud/") `
             -TimeoutSec 3
-        return $response.StatusCode -ge 200 -and $response.StatusCode -lt 400
+        $contenido = $response.Content | ConvertFrom-Json
+        return $response.StatusCode -eq 200 -and $contenido.estado -eq "ok"
     }
     catch {
         return $false
@@ -66,8 +72,19 @@ if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
 
 $ServerUrl = $ServerUrl.TrimEnd("/")
 if (-not (Test-ServerUrl -Value $ServerUrl)) {
-    Write-Host "La dirección '$ServerUrl' no es una URL HTTP o HTTPS válida." -ForegroundColor Red
+    Write-Host "La dirección debe ser sólo el origen HTTP(S), sin credenciales, ruta, consulta ni fragmento." -ForegroundColor Red
     exit 2
+}
+
+$uriServidor = [Uri]$ServerUrl
+if ($uriServidor.Scheme -eq "http" -and -not $AllowInsecureHttp) {
+    Write-Host ""
+    Write-Host "ADVERTENCIA: HTTP permite leer o alterar sesiones y pedidos desde la LAN." -ForegroundColor Red
+    $aceptacion = Read-Host "Escribe exactamente HTTP LAN para aceptar este riesgo"
+    if ($aceptacion -cne "HTTP LAN") {
+        Write-Host "Instalación cancelada. Configura primero una dirección HTTPS." -ForegroundColor Yellow
+        exit 4
+    }
 }
 
 Write-Host "Comprobando $ServerUrl ..."

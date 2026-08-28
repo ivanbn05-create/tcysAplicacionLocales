@@ -1,15 +1,22 @@
 import json
 import sqlite3
 import tempfile
+import uuid
+from io import BytesIO
 from collections import OrderedDict
 from datetime import date, datetime, time
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.core.cache import cache
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
-from django.test import TestCase, override_settings
+from django.test import Client, TestCase, override_settings
 from django.utils import timezone
+from PIL import Image
 
 from catalogo.models import Producto
 from impresion.models import TrabajoImpresion
@@ -28,9 +35,9 @@ from impresion.render import (
     render_sucursal,
 )
 from impresion.services import encolar_impresiones
-from personas.models import Sucursal
+from personas.models import Rol, Sucursal, UsuarioPOS
 
-from .integracion_sucursales import sincronizar_pedidos_confirmados
+from .integracion_sucursales import _parametros_conexion_postgres, sincronizar_pedidos_confirmados
 from .models import (
     Cliente,
     EventoOutbox,
@@ -54,6 +61,12 @@ from .services import (
     cobrar_ticket,
     procesar_ticket,
 )
+from .views import ASSET_VERSION
+
+
+SECURITY_MIDDLEWARE = list(settings.MIDDLEWARE)
+if "ventas.middleware.POSSessionAuthenticationMiddleware" not in SECURITY_MIDDLEWARE:
+    SECURITY_MIDDLEWARE.append("ventas.middleware.POSSessionAuthenticationMiddleware")
 
 
 class FlujoPOSTests(TestCase):
@@ -260,7 +273,9 @@ class FlujoPOSTests(TestCase):
         conexion.close()
 
         with override_settings(
+            DEBUG=True,
             PEDIDOS_SUCURSALES_AUTO_SYNC=True,
+            PEDIDOS_SUCURSALES_FUENTE="sqlite",
             PEDIDOS_SUCURSALES_DATABASE_URL="",
             PEDIDOS_SUCURSALES_POSTGRES={"password": ""},
             PEDIDOS_SUCURSALES_DB=ruta,
@@ -279,7 +294,7 @@ class FlujoPOSTests(TestCase):
             (
                 {
                     "id": 902,
-                    "sucursal_cliente_id": 7,
+                    "sucursal_cliente_id": 4,
                     "sucursal_nombre": "Eventos MO",
                     "codigo_publico": "eventos-mo-prueba",
                     "estado": "confirmado",
@@ -287,7 +302,7 @@ class FlujoPOSTests(TestCase):
                 },
                 [
                     {
-                        "producto_id": 7,
+                        "producto_id": 1,
                         "producto_nombre": "LITRO DE BARBACOA",
                         "producto_nombre_ticket": "BARBACOA",
                         "cantidad": Decimal("2.000"),
@@ -300,6 +315,7 @@ class FlujoPOSTests(TestCase):
         with (
             override_settings(
                 PEDIDOS_SUCURSALES_AUTO_SYNC=True,
+                PEDIDOS_SUCURSALES_FUENTE="supabase",
                 PEDIDOS_SUCURSALES_DATABASE_URL="",
                 PEDIDOS_SUCURSALES_POSTGRES=postgres,
                 PEDIDOS_SUCURSALES_DB=Path(self.temporal.name) / "no-existe.sqlite3",
@@ -321,11 +337,158 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(importacion.ticket.total, Decimal("386.00"))
         self.assertEqual(importacion.ticket.partidas.get().producto_sucursal.origen_id, 1)
 
+    def test_integracion_rechaza_datos_manipulados_y_continua_con_pedidos_validos(self):
+        def pedido_remoto(origen_id, cantidad, precio):
+            return (
+                {
+                    "id": origen_id,
+                    "sucursal_cliente_id": 4,
+                    "sucursal_nombre": "Eventos MO",
+                    "codigo_publico": f"integridad-{origen_id}",
+                    "estado": "confirmado",
+                    "fecha_confirmacion": timezone.now(),
+                },
+                [
+                    {
+                        "producto_id": 1,
+                        "producto_nombre": "LITRO DE BARBACOA",
+                        "producto_nombre_ticket": "BARBACOA",
+                        "cantidad": cantidad,
+                        "precio_unitario": precio,
+                    }
+                ],
+            )
+
+        pedidos = [
+            pedido_remoto(910, "NaN", "193.00"),
+            pedido_remoto(911, "-0.001", "193.00"),
+            pedido_remoto(912, "1000.000", "193.00"),
+            pedido_remoto(913, "1.000", "194.00"),
+            pedido_remoto(914, "1.000", "NaN"),
+            pedido_remoto(915, "2.000", "193.00"),
+        ]
+        with (
+            override_settings(
+                PEDIDOS_SUCURSALES_AUTO_SYNC=True,
+                PEDIDOS_SUCURSALES_FUENTE="supabase",
+                PEDIDOS_SUCURSALES_DATABASE_URL="",
+                PEDIDOS_SUCURSALES_POSTGRES={"password": "configurada"},
+                PEDIDOS_SUCURSALES_DB=Path(self.temporal.name) / "no-existe.sqlite3",
+            ),
+            patch("ventas.integracion_sucursales._leer_confirmados_postgres", return_value=pedidos),
+        ):
+            resultado = sincronizar_pedidos_confirmados(self.sucursal, forzar=True)
+
+        self.assertTrue(resultado["activa"])
+        self.assertEqual(resultado["importados"], 1)
+        self.assertEqual(resultado["rechazados"], 5)
+        self.assertFalse(PedidoSucursalImportado.objects.filter(origen_id__in=range(910, 915)).exists())
+        importacion = PedidoSucursalImportado.objects.get(origen_id=915)
+        partida = importacion.ticket.partidas.get()
+        self.assertEqual(partida.cantidad, Decimal("2.000"))
+        self.assertEqual(partida.precio_unitario, Decimal("193.00"))
+
+    def test_integracion_supabase_bloquea_rol_privilegiado_y_tls_debil(self):
+        with override_settings(
+            DEBUG=False,
+            PEDIDOS_SUCURSALES_DATABASE_URL="",
+            PEDIDOS_SUCURSALES_POSTGRES={
+                "host": "db.proyecto.supabase.co",
+                "port": 5432,
+                "dbname": "postgres",
+                "user": "postgres.proyecto",
+                "password": "secreto",
+                "sslmode": "verify-full",
+            },
+        ):
+            with self.assertRaisesMessage(ValueError, "pos_local_reader"):
+                _parametros_conexion_postgres()
+
+        with override_settings(
+            DEBUG=False,
+            PEDIDOS_SUCURSALES_DATABASE_URL="",
+            PEDIDOS_SUCURSALES_POSTGRES={
+                "host": "db.proyecto.supabase.co",
+                "port": 5432,
+                "dbname": "postgres",
+                "user": "pos_local_reader.proyecto",
+                "password": "secreto",
+                "sslmode": "require",
+            },
+        ):
+            with self.assertRaisesMessage(ValueError, "sslmode=verify-full"):
+                _parametros_conexion_postgres()
+
+        with override_settings(
+            DEBUG=False,
+            PEDIDOS_SUCURSALES_DATABASE_URL=(
+                "postgresql://postgres.proyecto:secreto@db.proyecto.supabase.co:5432/postgres"
+                "?sslmode=verify-full&sslrootcert=C%3A%5Ccerts%5Csupabase-ca.crt"
+            ),
+            PEDIDOS_SUCURSALES_POSTGRES={},
+        ):
+            with self.assertRaisesMessage(ValueError, "pos_local_reader"):
+                _parametros_conexion_postgres()
+
+        with override_settings(
+            DEBUG=False,
+            PEDIDOS_SUCURSALES_DATABASE_URL="",
+            PEDIDOS_SUCURSALES_POSTGRES={
+                "host": "db.proyecto.supabase.co",
+                "port": 5432,
+                "dbname": "postgres",
+                "user": "pos_local_reader.proyecto",
+                "password": "secreto",
+                "sslmode": "verify-full",
+            },
+        ):
+            with self.assertRaisesMessage(ValueError, "sslrootcert"):
+                _parametros_conexion_postgres()
+
+        with override_settings(
+            DEBUG=False,
+            PEDIDOS_SUCURSALES_DATABASE_URL="",
+            PEDIDOS_SUCURSALES_POSTGRES={
+                "host": "base-no-autorizada.example",
+                "port": 5432,
+                "dbname": "postgres",
+                "user": "pos_local_reader.proyecto",
+                "password": "secreto",
+                "sslmode": "verify-full",
+                "sslrootcert": "C:\\certs\\supabase-ca.crt",
+            },
+        ):
+            with self.assertRaisesMessage(ValueError, "no pertenece a Supabase"):
+                _parametros_conexion_postgres()
+
+    def test_integracion_supabase_acepta_solo_configuracion_dedicada_con_ca_existente(self):
+        ca = Path(self.temporal.name) / "supabase-ca.crt"
+        ca.write_text("certificado de prueba", encoding="utf-8")
+        with override_settings(
+            PEDIDOS_SUCURSALES_DATABASE_URL="",
+            PEDIDOS_SUCURSALES_POSTGRES={
+                "host": "db.proyecto.supabase.co",
+                "port": 5432,
+                "dbname": "postgres",
+                "user": "pos_local_reader.proyecto",
+                "password": "secreto",
+                "sslmode": "verify-full",
+                "sslrootcert": str(ca),
+                "connect_timeout": 8,
+            },
+        ):
+            parametros = _parametros_conexion_postgres()
+
+        self.assertEqual(parametros["user"], "pos_local_reader.proyecto")
+        self.assertEqual(parametros["sslmode"], "verify-full")
+        self.assertEqual(Path(parametros["sslrootcert"]), ca.resolve())
+
     def test_integracion_automatica_pausa_fuera_del_horario(self):
         fuera_de_horario = timezone.make_aware(datetime.combine(timezone.localdate(), time(18, 0)))
         with (
             override_settings(
                 PEDIDOS_SUCURSALES_AUTO_SYNC=True,
+                PEDIDOS_SUCURSALES_FUENTE="supabase",
                 PEDIDOS_SUCURSALES_DATABASE_URL="",
                 PEDIDOS_SUCURSALES_POSTGRES={"password": "configurada"},
                 PEDIDOS_SUCURSALES_HORA_INICIO="06:00",
@@ -340,13 +503,19 @@ class FlujoPOSTests(TestCase):
         self.assertIn("fuera del horario", resultado["mensaje"])
         lector.assert_not_called()
 
-    def test_estado_solo_sincroniza_supabase_al_solicitarlo(self):
+    def test_sincronizacion_supabase_usa_post_dedicado(self):
         resultado = {"activa": True, "importados": 0, "fuente": "Supabase", "mensaje": "Al día"}
         with patch("ventas.views.sincronizar_pedidos_confirmados", return_value=resultado) as sincronizar:
             normal = self.client.get("/api/estado/")
-            solicitado = self.client.get("/api/estado/?sincronizar_sucursales=1")
+            query_obsoleto = self.client.get("/api/estado/?sincronizar_sucursales=1")
+            solicitado = self.client.post(
+                "/api/sincronizacion/sucursales/",
+                data="{}",
+                content_type="application/json",
+            )
 
         self.assertEqual(normal.status_code, 200)
+        self.assertEqual(query_obsoleto.status_code, 200)
         self.assertEqual(solicitado.status_code, 200)
         self.assertEqual(solicitado.json()["integracion_sucursales"]["fuente"], "Supabase")
         sincronizar.assert_called_once_with(self.sucursal)
@@ -486,7 +655,11 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(Cliente.objects.count(), 2)
 
         for consulta in ["5860", "3312345678", "María", cliente["clave_corta"], "recepcion"]:
-            respuesta = self.client.get("/api/clientes/buscar/", {"q": consulta})
+            respuesta = self.client.post(
+                "/api/clientes/buscar/",
+                data=json.dumps({"q": consulta}),
+                content_type="application/json",
+            )
             self.assertEqual(respuesta.status_code, 200)
             nombres = [resultado["nombre"] for resultado in respuesta.json()["resultados"]]
             self.assertIn("María López", nombres)
@@ -631,7 +804,7 @@ class FlujoPOSTests(TestCase):
         self.assertContains(respuesta, 'id="pantalla-completa"')
         self.assertContains(respuesta, 'id="salir-tableta"')
         self.assertContains(respuesta, "manifest.webmanifest?modo=tableta")
-        self.assertNotContains(respuesta, 'class="topbar"')
+        self.assertContains(respuesta, 'class="topbar"')
         self.assertNotContains(respuesta, 'data-canal="domicilio"')
         self.assertNotContains(respuesta, 'data-canal="sucursales"')
         manifest = self.client.get("/manifest.webmanifest?modo=tableta").json()
@@ -647,16 +820,61 @@ class FlujoPOSTests(TestCase):
         self.assertNotContains(respuesta, "¿Cómo deseas entrar?")
         self.assertContains(respuesta, 'id="pantalla-completa"')
         self.assertContains(respuesta, 'id="comentario"')
-        self.assertContains(respuesta, "app.css?v=20260824-2")
-        self.assertContains(respuesta, "app.js?v=20260824-2")
+        self.assertContains(respuesta, f"app.css?v={ASSET_VERSION}")
+        self.assertContains(respuesta, f"brand-pos.css?v={ASSET_VERSION}")
+        self.assertContains(respuesta, f"app.js?v={ASSET_VERSION}")
+        self.assertContains(respuesta, "102e4b50")
+        self.assertContains(respuesta, 'data-canal="comedor" type="button" aria-pressed="true"')
+        self.assertContains(respuesta, 'aria-labelledby="titulo-dialogo-cobro"')
         self.assertContains(respuesta, 'id="switch-tipo-pedido"')
         self.assertContains(respuesta, 'id="switch-modo-nombres"')
         self.assertContains(respuesta, 'id="datos-servicio-directo"')
         self.assertEqual(respuesta.content.decode().count('class="perfil-icono"'), 2)
-        self.assertEqual(respuesta.content.decode().count('data-salir-mesero'), 2)
+        self.assertEqual(respuesta.content.decode().count('data-salir-mesero'), 1)
         worker = self.client.get("/service-worker.js")
         self.assertEqual(worker.headers["Cache-Control"], "no-cache")
-        self.assertContains(worker, "tocayos-pos-v11")
+        self.assertContains(worker, f"tocayos-pos-{ASSET_VERSION}")
+        self.assertContains(worker, "Montserrat-Variable.woff2")
+        self.assertContains(worker, "BebasNeue-Regular.woff2")
+
+    def test_imagen_producto_se_publica_como_miniatura_webp_privada(self):
+        contenido = BytesIO()
+        Image.new("RGB", (640, 420), (228, 37, 34)).save(contenido, format="PNG")
+        self.producto.imagen = SimpleUploadedFile(
+            "taco-real.png",
+            contenido.getvalue(),
+            content_type="image/png",
+        )
+        self.producto.full_clean()
+        self.producto.save(update_fields=["imagen", "actualizado_en"])
+
+        pagina = self.client.get("/")
+        ruta = f"/catalogo/productos/{self.producto.id}/imagen.webp"
+        self.assertContains(pagina, ruta)
+        respuesta = self.client.get(ruta)
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.headers["Content-Type"], "image/webp")
+        self.assertEqual(respuesta.headers["X-Content-Type-Options"], "nosniff")
+        self.assertIn("private", respuesta.headers["Cache-Control"])
+        self.assertIn("immutable", respuesta.headers["Cache-Control"])
+        self.assertTrue(respuesta.headers["ETag"])
+        self.assertEqual(Image.open(BytesIO(respuesta.content)).size, (320, 240))
+
+        no_modificada = self.client.get(ruta, HTTP_IF_NONE_MATCH=respuesta.headers["ETag"])
+        self.assertEqual(no_modificada.status_code, 304)
+
+    def test_imagen_producto_faltante_o_corrupta_no_expone_archivo(self):
+        sin_imagen = self.client.get(f"/catalogo/productos/{self.producto.id}/imagen.webp")
+        self.assertEqual(sin_imagen.status_code, 404)
+
+        self.producto.imagen = SimpleUploadedFile(
+            "archivo-corrupto.png",
+            b"esto no es una imagen",
+            content_type="image/png",
+        )
+        self.producto.save(update_fields=["imagen", "actualizado_en"])
+        corrupta = self.client.get(f"/catalogo/productos/{self.producto.id}/imagen.webp")
+        self.assertEqual(corrupta.status_code, 404)
 
     def test_comensal_24_bebidas_y_preparacion_global(self):
         mesa = Mesa.objects.get(sucursal=self.sucursal, clave="MESA-20")
@@ -913,7 +1131,7 @@ class FlujoPOSTests(TestCase):
             trabajo = encolar_impresiones(ticket, TrabajoImpresion.Formato.COMANDA)[0]
         trabajo.refresh_from_db()
         self.assertEqual(trabajo.estado, TrabajoImpresion.Estado.ERROR)
-        self.assertIn("impresora no disponible", trabajo.error)
+        self.assertEqual(trabajo.error, "No fue posible completar la impresión.")
         self.assertTrue((Path(self.temporal.name) / trabajo.archivo).is_file())
 
     def test_cancelar_borra_la_orden_y_libera_la_posicion(self):
@@ -945,6 +1163,37 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(respuesta.status_code, 200)
         self.assertEqual(respuesta.json()["impresiones"], [])
         self.assertFalse(TrabajoImpresion.objects.filter(ticket=ticket, formato="cuenta").exists())
+
+    def test_cobro_rechaza_importes_ausentes_insuficientes_no_finitos_y_con_decimales_extra(self):
+        mesa = Mesa.objects.get(sucursal=self.sucursal, clave="MESA-10")
+        ticket, _ = abrir_ticket(mesa)
+        agregar_partida(ticket, self.producto)
+        procesar_ticket(ticket)
+        casos = [None, "-1", "24.99", "NaN", "Infinity", "25.001"]
+        for recibido in casos:
+            respuesta = self.client.post(
+                f"/api/tickets/{ticket.id}/cobrar/",
+                data=json.dumps({"forma_pago": "efectivo", "importe_recibido": recibido}),
+                content_type="application/json",
+            )
+            self.assertEqual(respuesta.status_code, 400, recibido)
+            ticket.refresh_from_db()
+            self.assertEqual(ticket.estado, Ticket.Estado.PROCESADO)
+
+        tarjeta_inexacta = self.client.post(
+            f"/api/tickets/{ticket.id}/cobrar/",
+            data=json.dumps({"forma_pago": "tarjeta", "importe_recibido": "26.00"}),
+            content_type="application/json",
+        )
+        self.assertEqual(tarjeta_inexacta.status_code, 400)
+        valida = self.client.post(
+            f"/api/tickets/{ticket.id}/cobrar/",
+            data=json.dumps(
+                {"forma_pago": "efectivo", "importe_recibido": "25.00", "imprimir_ticket": False}
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(valida.status_code, 200)
 
     def test_conversion_domicilio_recoger_mueve_la_misma_orden_y_usa_el_primer_lugar_libre(self):
         ocupado, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="REC-1"))
@@ -1080,3 +1329,273 @@ class FlujoPOSTests(TestCase):
         self.assertIn("máximo de 4", respuesta.json()["error"])
         ticket.refresh_from_db()
         self.assertFalse(ticket.captura_por_nombres)
+
+
+@override_settings(
+    POS_REQUIRE_AUTH=True,
+    MIDDLEWARE=SECURITY_MIDDLEWARE,
+    PEDIDOS_SUCURSALES_AUTO_SYNC=False,
+    PRINT_BACKEND="archivo",
+    PRINT_SYNC=False,
+)
+class SeguridadPOSTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.sucursal = Sucursal.objects.create(clave="ARBOLEDAS", nombre="Arboledas")
+        cls.user = get_user_model().objects.create_user(
+            username="operador-seguridad",
+            password="Clave-prueba-segura-2026",
+        )
+        cls.rol = Rol.objects.create(
+            sucursal=cls.sucursal,
+            nombre="Operador de seguridad",
+            puede_cobrar=True,
+            puede_reimprimir=True,
+            puede_cancelar=True,
+            puede_sincronizar=True,
+        )
+        cls.perfil = UsuarioPOS.objects.create(
+            sucursal=cls.sucursal,
+            rol=cls.rol,
+            cuenta=cls.user,
+            nombre="Operador de seguridad",
+            clave="SEG-01",
+        )
+
+    def setUp(self):
+        cache.clear()
+        self.temporal = tempfile.TemporaryDirectory()
+        self.media_settings = override_settings(MEDIA_ROOT=self.temporal.name)
+        self.media_settings.enable()
+
+    def tearDown(self):
+        self.media_settings.disable()
+        self.temporal.cleanup()
+        cache.clear()
+
+    def _login(self, client=None, **extra):
+        client = client or self.client
+        return client.post(
+            "/acceso/",
+            {"username": self.user.username, "password": "Clave-prueba-segura-2026", **extra},
+        )
+
+    def test_anonimo_recibe_redirect_en_ui_401_json_en_api_y_salud_publica(self):
+        ui = self.client.get("/")
+        api = self.client.get("/api/estado/")
+        salud = self.client.get("/salud/")
+        manifest = self.client.get("/manifest.webmanifest")
+
+        self.assertRedirects(ui, "/acceso/?next=/", fetch_redirect_response=False)
+        self.assertEqual(api.status_code, 401)
+        self.assertEqual(api.json(), {"error": "Autenticación requerida."})
+        self.assertEqual(api.headers["WWW-Authenticate"], "Session")
+        self.assertIn("no-store", api.headers["Cache-Control"])
+        self.assertIn("default-src 'self'", api.headers["Content-Security-Policy"])
+        self.assertIn("object-src 'none'", api.headers["Content-Security-Policy"])
+        self.assertIn("frame-ancestors 'none'", api.headers["Content-Security-Policy"])
+        self.assertIn("camera=()", api.headers["Permissions-Policy"])
+        self.assertEqual(api.headers["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(salud.status_code, 200)
+        self.assertEqual(salud.json(), {"estado": "ok"})
+        self.assertEqual(manifest.status_code, 200)
+
+    def test_ui_autenticada_no_se_guarda_en_cache_y_atribuye_el_operador(self):
+        self.client.force_login(self.user)
+        pagina = self.client.get("/")
+        self.assertEqual(pagina.status_code, 200)
+        self.assertIn("no-store", pagina.headers["Cache-Control"])
+
+        mesa = Mesa.objects.create(
+            sucursal=self.sucursal,
+            canal=Mesa.Canal.COMEDOR,
+            clave="AUDIT-ACTOR",
+            nombre="Auditoría actor",
+        )
+        respuesta = self.client.post(
+            "/api/tickets/abrir/",
+            data=json.dumps({"mesa_id": str(mesa.id)}),
+            content_type="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        ticket = Ticket.objects.get(pk=respuesta.json()["ticket"]["id"])
+        self.assertEqual(ticket.atendio, self.perfil)
+
+    def test_usuario_sin_permisos_no_cobra_cancela_reimprime_ni_sincroniza(self):
+        restringido = get_user_model().objects.create_user(
+            username="operador-restringido",
+            password="Clave-restringida-2026",
+        )
+        rol = Rol.objects.create(sucursal=self.sucursal, nombre="Sólo captura")
+        UsuarioPOS.objects.create(
+            sucursal=self.sucursal,
+            rol=rol,
+            cuenta=restringido,
+            nombre="Sólo captura",
+            clave="SEG-02",
+        )
+        self.client.force_login(restringido)
+        ticket_id = uuid.uuid4()
+        solicitudes = [
+            (f"/api/tickets/{ticket_id}/cobrar/", {"forma_pago": "efectivo", "importe_recibido": "1"}),
+            (f"/api/tickets/{ticket_id}/completar-sucursal/", {}),
+            (f"/api/tickets/{ticket_id}/cancelar/", {}),
+            (f"/api/tickets/{ticket_id}/imprimir/", {"formato": "cuenta"}),
+            ("/api/sincronizacion/sucursales/", {}),
+        ]
+        for url, datos in solicitudes:
+            respuesta = self.client.post(url, data=json.dumps(datos), content_type="application/json")
+            self.assertEqual(respuesta.status_code, 403, url)
+            self.assertIn("permiso", respuesta.json()["error"])
+
+    def test_login_valido_sin_perfil_pos_no_crea_sesion(self):
+        sin_perfil = get_user_model().objects.create_user(
+            username="sin-perfil",
+            password="Clave-sin-perfil-2026",
+        )
+        respuesta = self.client.post(
+            "/acceso/",
+            {"username": sin_perfil.username, "password": "Clave-sin-perfil-2026"},
+        )
+        self.assertEqual(respuesta.status_code, 403)
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_login_rechaza_redirect_externo_y_logout_solo_acepta_post(self):
+        login = self._login(next="https://malicioso.example/robar")
+        self.assertRedirects(login, "/", fetch_redirect_response=False)
+        self.assertEqual(self.client.get("/api/estado/").status_code, 200)
+        self.assertEqual(self.client.get("/salir/").status_code, 405)
+        self.assertRedirects(self.client.post("/salir/"), "/acceso/", fetch_redirect_response=False)
+        self.assertEqual(self.client.get("/api/estado/").status_code, 401)
+
+    def test_login_y_logout_exigen_csrf(self):
+        client = Client(enforce_csrf_checks=True)
+        page = client.get("/acceso/")
+        token = page.cookies["csrftoken"].value
+        credentials = {"username": self.user.username, "password": "Clave-prueba-segura-2026"}
+
+        self.assertEqual(client.post("/acceso/", credentials).status_code, 403)
+        login = client.post("/acceso/", credentials, HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(login.status_code, 302)
+        self.assertEqual(client.post("/salir/").status_code, 403)
+        logout = client.post("/salir/", HTTP_X_CSRFTOKEN=client.cookies["csrftoken"].value)
+        self.assertEqual(logout.status_code, 302)
+
+    @override_settings(
+        POS_LOGIN_MAX_ATTEMPTS=10,
+        POS_LOGIN_MAX_IP_ATTEMPTS=2,
+        POS_LOGIN_LOCKOUT_SECONDS=321,
+    )
+    def test_rate_limit_agregado_bloquea_pulverizacion_de_usuarios_por_ip(self):
+        first = self.client.post(
+            "/acceso/",
+            {"username": "usuario-inexistente-1", "password": "incorrecta"},
+            REMOTE_ADDR="10.20.30.40",
+        )
+        second = self.client.post(
+            "/acceso/",
+            {"username": "usuario-inexistente-2", "password": "incorrecta"},
+            REMOTE_ADDR="10.20.30.40",
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.headers["Retry-After"], "321")
+        self.assertNotIn("10.20.30.40", " ".join(cache._cache.keys()))
+        self.assertNotIn("usuario-inexistente", " ".join(cache._cache.keys()))
+
+    def test_busqueda_pii_usa_post_y_json_no_objeto_devuelve_400(self):
+        self.client.force_login(self.user)
+        get_response = self.client.get("/api/clientes/buscar/?q=Maria")
+        search = self.client.post(
+            "/api/clientes/buscar/",
+            data=json.dumps({"q": "Maria", "limite": 5}),
+            content_type="application/json",
+        )
+        invalid_json_shape = self.client.post(
+            "/api/clientes/",
+            data="[]",
+            content_type="application/json",
+        )
+
+        self.assertEqual(get_response.status_code, 405)
+        self.assertEqual(search.status_code, 200)
+        self.assertEqual(search.wsgi_request.get_full_path(), "/api/clientes/buscar/")
+        self.assertIn("no-store", search.headers["Cache-Control"])
+        self.assertEqual(invalid_json_shape.status_code, 400)
+        self.assertIn("debe ser un objeto", invalid_json_shape.json()["error"])
+
+    def test_limita_registros_anidados_de_cliente(self):
+        self.client.force_login(self.user)
+        response = self.client.post(
+            "/api/clientes/",
+            data=json.dumps(
+                {
+                    "nombre": "Cliente excesivo",
+                    "telefonos": [
+                        {"numero": f"33123456{index:02d}", "etiqueta": "Celular"}
+                        for index in range(11)
+                    ],
+                    "domicilios": [{"calle": "Patria", "numero_exterior": "1"}],
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("máximo 10", response.json()["error"])
+
+    def test_preview_impresion_requiere_sesion_y_valida_archivo(self):
+        mesa = Mesa.objects.create(
+            sucursal=self.sucursal,
+            canal=Mesa.Canal.COMEDOR,
+            clave="AUDIT-MESA",
+            nombre="Auditoría",
+        )
+        ticket = Ticket.objects.create(sucursal=self.sucursal, mesa=mesa, folio=1, canal=Mesa.Canal.COMEDOR)
+        relative = Path("impresiones") / "seguridad" / "preview.png"
+        absolute = Path(self.temporal.name) / relative
+        absolute.parent.mkdir(parents=True, exist_ok=True)
+        png = b"\x89PNG\r\n\x1a\ncontenido-prueba"
+        absolute.write_bytes(png)
+        trabajo = TrabajoImpresion.objects.create(
+            sucursal=self.sucursal,
+            ticket=ticket,
+            formato=TrabajoImpresion.Formato.CUENTA,
+            destino=TrabajoImpresion.Destino.CAJA,
+            archivo=relative.as_posix(),
+        )
+        url = f"/api/impresiones/{trabajo.id}/archivo/"
+
+        self.assertEqual(self.client.get(url).status_code, 401)
+        self.client.force_login(self.user)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Content-Type"], "image/png")
+        self.assertTrue(response.headers["Content-Disposition"].startswith("inline;"))
+        self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+        self.assertIn("no-store", response.headers["Cache-Control"])
+        self.assertEqual(b"".join(response.streaming_content), png)
+        response.close()
+        self.assertEqual(
+            self.client.get(f"/api/impresiones/{uuid.uuid4()}/archivo/").status_code,
+            404,
+        )
+
+    @override_settings(
+        PRINT_BACKEND="tcp",
+        PRINTER_HOSTS={"caja": "10.99.88.77"},
+        PRINTER_PORT=9100,
+        PRINTER_TIMEOUT=1,
+    )
+    @patch("impresion.services.socket.create_connection", side_effect=OSError("10.99.88.77:9100 secreto"))
+    def test_estado_impresora_no_expone_topologia_ni_error_crudo(self, _connection):
+        self.client.force_login(self.user)
+        response = self.client.get("/api/impresion/estado/")
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("host", payload)
+        self.assertNotIn("puerto", payload)
+        self.assertNotIn("10.99.88.77", payload["mensaje"])
+        self.assertNotIn("secreto", payload["mensaje"])

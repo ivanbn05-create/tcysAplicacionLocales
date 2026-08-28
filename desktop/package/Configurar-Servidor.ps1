@@ -1,5 +1,6 @@
 param(
-    [string]$ServerUrl
+    [string]$ServerUrl,
+    [switch]$AllowInsecureHttp
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,18 +21,33 @@ if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
 $ServerUrl = $ServerUrl.TrimEnd("/")
 $uri = $null
 if (-not [Uri]::TryCreate($ServerUrl, [UriKind]::Absolute, [ref]$uri) -or
-    $uri.Scheme -notin @("http", "https")) {
-    Write-Host "La dirección no es una URL HTTP o HTTPS válida." -ForegroundColor Red
+    $uri.Scheme -notin @("http", "https") -or
+    -not [string]::IsNullOrEmpty($uri.UserInfo) -or
+    $uri.AbsolutePath -ne "/" -or
+    -not [string]::IsNullOrEmpty($uri.Query) -or
+    -not [string]::IsNullOrEmpty($uri.Fragment)) {
+    Write-Host "La dirección debe ser sólo el origen HTTP(S), sin credenciales, ruta, consulta ni fragmento." -ForegroundColor Red
     Read-Host "Presiona Enter para cerrar"
     exit 2
+}
+
+if ($uri.Scheme -eq "http" -and -not $AllowInsecureHttp) {
+    Write-Host ""
+    Write-Host "ADVERTENCIA: HTTP permite leer o alterar sesiones y pedidos desde la LAN." -ForegroundColor Red
+    $aceptacion = Read-Host "Escribe exactamente HTTP LAN para guardar esta dirección"
+    if ($aceptacion -cne "HTTP LAN") {
+        Write-Host "Cambio cancelado. Conserva o configura una dirección HTTPS." -ForegroundColor Yellow
+        exit 4
+    }
 }
 
 try {
     $response = Invoke-WebRequest `
         -UseBasicParsing `
-        -Uri ($ServerUrl + "/api/estado/") `
+        -Uri ($ServerUrl + "/salud/") `
         -TimeoutSec 3
-    $conectado = $response.StatusCode -ge 200 -and $response.StatusCode -lt 400
+    $contenido = $response.Content | ConvertFrom-Json
+    $conectado = $response.StatusCode -eq 200 -and $contenido.estado -eq "ok"
 }
 catch {
     $conectado = $false

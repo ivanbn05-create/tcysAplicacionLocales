@@ -1,4 +1,9 @@
+import logging
 import socket
+import threading
+import time
+from datetime import timedelta
+from pathlib import Path
 
 from django.conf import settings
 from django.db import transaction
@@ -8,7 +13,58 @@ from .models import TrabajoImpresion
 from .render import enviar_tcp, guardar_png, render_comanda, render_cuenta, render_domicilio, render_sucursal
 
 
+logger = logging.getLogger(__name__)
+_purga_lock = threading.Lock()
+_ultima_purga = 0.0
+
+
+def purgar_vistas_previas(forzar=False):
+    """Elimina PNG con PII al vencer la retención, sin salir de MEDIA_ROOT."""
+
+    global _ultima_purga
+    ahora_monotono = time.monotonic()
+    if not forzar and ahora_monotono - _ultima_purga < 3600:
+        return 0
+    if not _purga_lock.acquire(blocking=False):
+        return 0
+    eliminados = 0
+    try:
+        _ultima_purga = ahora_monotono
+        dias = int(getattr(settings, "PRINT_PREVIEW_RETENTION_DAYS", 7))
+        limite = timezone.now() - timedelta(days=dias)
+        root = Path(settings.MEDIA_ROOT).resolve()
+        trabajos = list(
+            TrabajoImpresion.objects.exclude(archivo="")
+            .filter(creado_en__lt=limite)
+            .only("id", "archivo")[:500]
+        )
+        for trabajo in trabajos:
+            relative = Path(trabajo.archivo)
+            if relative.is_absolute():
+                logger.warning("Se omitió una ruta absoluta durante la purga de impresiones.")
+                continue
+            try:
+                candidate = (root / relative).resolve(strict=True)
+            except (OSError, RuntimeError):
+                TrabajoImpresion.objects.filter(pk=trabajo.pk).update(archivo="")
+                continue
+            if not candidate.is_relative_to(root) or not candidate.is_file():
+                logger.warning("Se omitió una ruta fuera de MEDIA_ROOT durante la purga.")
+                continue
+            try:
+                candidate.unlink()
+            except OSError as exc:
+                logger.warning("No fue posible purgar una impresión (%s).", type(exc).__name__)
+                continue
+            TrabajoImpresion.objects.filter(pk=trabajo.pk).update(archivo="")
+            eliminados += 1
+        return eliminados
+    finally:
+        _purga_lock.release()
+
+
 def encolar_impresiones(ticket, formato):
+    purgar_vistas_previas()
     destinos = []
     if formato in {
         TrabajoImpresion.Formato.CUENTA,
@@ -42,8 +98,6 @@ def estado_impresora(destino="caja"):
             "backend": settings.PRINT_BACKEND,
             "disponible": False,
             "destino": destino,
-            "host": host,
-            "puerto": settings.PRINTER_PORT,
             "mensaje": "Modo vista previa: no se enviará papel a la impresora.",
         }
     try:
@@ -53,18 +107,18 @@ def estado_impresora(destino="caja"):
             "backend": "tcp",
             "disponible": True,
             "destino": destino,
-            "host": host,
-            "puerto": settings.PRINTER_PORT,
             "mensaje": "Impresora térmica conectada.",
         }
     except OSError as exc:
+        logger.warning(
+            "No se pudo conectar con la impresora configurada (%s).",
+            type(exc).__name__,
+        )
         return {
             "backend": "tcp",
             "disponible": False,
             "destino": destino,
-            "host": host,
-            "puerto": settings.PRINTER_PORT,
-            "mensaje": f"Impresora sin conexión: {exc}",
+            "mensaje": "Impresora sin conexión.",
         }
 
 
@@ -110,7 +164,8 @@ def procesar_trabajo(trabajo):
         trabajo.error = ""
         trabajo.save(update_fields=["estado", "archivo", "procesado_en", "error"])
     except Exception as exc:
+        logger.warning("Falló un trabajo de impresión (%s).", type(exc).__name__)
         trabajo.estado = TrabajoImpresion.Estado.ERROR
-        trabajo.error = str(exc)
+        trabajo.error = "No fue posible completar la impresión."
         trabajo.save(update_fields=["estado", "error"])
     return trabajo

@@ -1,0 +1,9 @@
+{
+  "approved": false,
+  "promptFile": "pos-pase-cocina-b.prompt.txt",
+  "references": [
+    "ventas/static/ventas/brand/logoactual.jpeg",
+    "MANUAL DE IDENTIDAD TOCAYOS.pdf, página 7"
+  ],
+  "decision": "Elegida por el usuario como base; sustituida por la revisión híbrida que añade iconos de canal y semántica verde/roja en mesas."
+}

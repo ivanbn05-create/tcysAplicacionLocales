@@ -3,6 +3,7 @@
 
   const productos = JSON.parse(document.getElementById("datos-productos").textContent);
   const posiciones = JSON.parse(document.getElementById("datos-posiciones").textContent);
+  const permisos = JSON.parse(document.getElementById("datos-permisos").textContent);
   const nombresCanal = {
     comedor: "Comedor",
     llevar: "Llevar",
@@ -65,6 +66,7 @@
     prefijoSalsa: "",
     modoEntrega: "aproximada",
     entregaProgramadaDigitos: "",
+    botonOperacion: null,
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -76,6 +78,8 @@
 
   async function api(url, opciones = {}) {
     const respuesta = await fetch(url, {
+      cache: "no-store",
+      credentials: "same-origin",
       ...opciones,
       headers: {
         "Content-Type": "application/json",
@@ -83,6 +87,11 @@
         ...(opciones.headers || {}),
       },
     });
+    if (respuesta.status === 401) {
+      const siguiente = encodeURIComponent(`${window.location.pathname}${window.location.search}`);
+      window.location.replace(`/acceso/?next=${siguiente}`);
+      throw new Error("La sesión expiró. Inicia sesión nuevamente.");
+    }
     let datos;
     try { datos = await respuesta.json(); } catch { datos = {}; }
     if (!respuesta.ok) {
@@ -94,17 +103,53 @@
     return datos;
   }
 
+  function cerrarToast() {
+    const nodo = $("#toast");
+    clearTimeout(toast.temporizador);
+    nodo.classList.remove("visible", "persistente");
+  }
+
   function toast(mensaje, error = false) {
     const nodo = $("#toast");
-    nodo.textContent = mensaje;
+    nodo.setAttribute("role", error ? "alert" : "status");
+    nodo.setAttribute("aria-live", error ? "assertive" : "polite");
+    $("#toast-mensaje").textContent = mensaje;
     nodo.classList.toggle("error", error);
+    nodo.classList.toggle("persistente", error);
     nodo.classList.add("visible");
     clearTimeout(toast.temporizador);
-    toast.temporizador = setTimeout(() => nodo.classList.remove("visible"), 3300);
+    if (!error) toast.temporizador = setTimeout(cerrarToast, 3300);
   }
 
   function bloquear(valor) {
     estado.operando = valor;
+    document.body.setAttribute("aria-busy", String(valor));
+    if (valor) {
+      const boton = document.activeElement?.closest?.("button");
+      if (boton && !boton.disabled) {
+        const etiquetas = {
+          procesar: "Procesando orden…",
+          cobrar: "Registrando cobro…",
+          "cancelar-orden": "Cancelando orden…",
+          reimprimir: "Preparando impresión…",
+        };
+        boton.dataset.textoCarga = etiquetas[boton.id] || "Cargando…";
+        boton.dataset.ariaOperacionOriginal = boton.getAttribute("aria-label") || "";
+        boton.classList.add("operando");
+        boton.setAttribute("aria-busy", "true");
+        boton.setAttribute("aria-label", boton.dataset.textoCarga);
+        estado.botonOperacion = boton;
+      }
+    } else if (estado.botonOperacion) {
+      const boton = estado.botonOperacion;
+      boton.classList.remove("operando");
+      boton.removeAttribute("aria-busy");
+      if (boton.dataset.ariaOperacionOriginal) boton.setAttribute("aria-label", boton.dataset.ariaOperacionOriginal);
+      else boton.removeAttribute("aria-label");
+      delete boton.dataset.textoCarga;
+      delete boton.dataset.ariaOperacionOriginal;
+      estado.botonOperacion = null;
+    }
     $$("button").forEach(boton => boton.disabled = valor);
     $(".perfil-acceso.administrador")?.setAttribute("disabled", "");
     if (!valor && estado.ticket) {
@@ -115,55 +160,41 @@
   }
 
   async function cargarEstado(sincronizarSucursales = false) {
-    const conexion = $("#conexion");
     try {
-      const sufijo = sincronizarSucursales ? "?sincronizar_sucursales=1" : "";
-      const datos = await api(`/api/estado/${sufijo}`);
+      if (sincronizarSucursales && permisos.sincronizar) {
+        await api("/api/sincronizacion/sucursales/", { method: "POST", body: "{}" });
+      }
+      const datos = await api("/api/estado/");
       estado.tickets = datos.tickets;
-      conexion?.classList.remove("error");
       renderPosiciones();
     } catch (error) {
-      conexion?.classList.add("error");
       toast(error.message, true);
-    }
-  }
-
-  async function cargarEstadoImpresion() {
-    const nodo = $("#impresora-estado");
-    if (!nodo) return;
-    nodo.className = "impresora-estado comprobando";
-    nodo.querySelector("span").textContent = "Comprobando impresora";
-    try {
-      const datos = await api("/api/impresion/estado/");
-      nodo.title = `${datos.mensaje} ${datos.host}:${datos.puerto}`;
-      if (datos.backend === "archivo") {
-        nodo.className = "impresora-estado vista-previa";
-        nodo.querySelector("span").textContent = "Sólo vista previa";
-      } else if (datos.disponible) {
-        nodo.className = "impresora-estado lista";
-        nodo.querySelector("span").textContent = "Impresora lista";
-      } else {
-        nodo.className = "impresora-estado error";
-        nodo.querySelector("span").textContent = "Impresora sin conexión";
-      }
-    } catch (error) {
-      nodo.className = "impresora-estado error";
-      nodo.querySelector("span").textContent = "Error de impresora";
-      nodo.title = error.message;
     }
   }
 
   function renderPosiciones() {
     const contenedor = $("#rejilla-posiciones");
+    contenedor.setAttribute("aria-label", `Posiciones de ${nombresCanal[estado.canal] || estado.canal}`);
+    const renderTarjeta = (posicion, opciones = {}) => {
+      const ticket = estado.tickets[posicion.id];
+      const clase = ticket ? (ticket.estado === "abierto" ? "ocupada" : "procesada") : "libre";
+      const etiquetaEstado = ticket ? (ticket.estado === "abierto" ? "Orden abierta" : "Procesada") : "Libre";
+      const detalle = ticket ? `Ticket ${ticket.folio} · ${dinero(ticket.total)}` : "Disponible";
+      const partes = String(posicion.nombre).match(/^(.*?)[\s-]*(\d+)$/);
+      const tipo = partes ? partes[1].trim() : "Posición";
+      const numero = partes ? partes[2] : posicion.nombre;
+      const tipoVisible = opciones.tipoVisible || tipo;
+      const etiquetaAccesible = `${posicion.nombre}. ${etiquetaEstado}. ${detalle}`;
+      return `<button class="posicion ${clase}" data-id="${posicion.id}" data-estado="${clase}" type="button" aria-label="${escapar(etiquetaAccesible)}">
+        <span class="posicion-estado"><i aria-hidden="true"></i>${etiquetaEstado}</span>
+        <strong><span class="posicion-tipo">${escapar(tipoVisible)}</span><span class="posicion-numero">${escapar(numero)}</span></strong>
+        <small>${escapar(detalle)}</small>
+      </button>`;
+    };
     const renderTarjetas = canal => posiciones
       .filter(posicion => posicion.canal === canal)
       .sort((a, b) => a.orden - b.orden)
-      .map(posicion => {
-      const ticket = estado.tickets[posicion.id];
-      const clase = ticket ? (ticket.estado === "abierto" ? "ocupada" : "procesada") : "";
-      const detalle = ticket ? `Ticket ${ticket.folio} · ${dinero(ticket.total)}` : "Disponible";
-      return `<button class="posicion ${clase}" data-id="${posicion.id}" type="button"><strong>${posicion.nombre}</strong><small>${detalle}</small></button>`;
-      }).join("");
+      .map(renderTarjeta).join("");
     if (estado.canal === "sucursales") {
       const grupos = new Map();
       for (const posicion of posiciones
@@ -182,12 +213,7 @@
       contenedor.innerHTML = [...grupos.values()].map(grupo => `
         <section class="columna-sucursal">
           <header title="${escapar(grupo.nombre)}">${escapar(grupo.nombre)}</header>
-          <div>${grupo.posiciones.map(posicion => {
-            const ticket = estado.tickets[posicion.id];
-            const clase = ticket ? (ticket.estado === "abierto" ? "ocupada" : "procesada") : "";
-            const detalle = ticket ? `Ticket ${ticket.folio} · ${dinero(ticket.total)}` : "Disponible";
-            return `<button class="posicion ${clase}" data-id="${posicion.id}" type="button"><strong>${escapar(posicion.nombre)}</strong><small>${detalle}</small></button>`;
-          }).join("")}</div>
+          <div>${grupo.posiciones.map(posicion => renderTarjeta(posicion, { tipoVisible: "Pedido" })).join("")}</div>
         </section>`).join("") || '<p class="vacio">No hay sucursales configuradas.</p>';
       return;
     }
@@ -215,16 +241,22 @@
     clearInterval(estado.temporizadorSucursales);
     estado.temporizadorSucursales = null;
     if (estado.canal === "sucursales") {
-      estado.temporizadorSucursales = setInterval(() => cargarEstado(true), 300000);
+      if (permisos.sincronizar) {
+        estado.temporizadorSucursales = setInterval(() => cargarEstado(true), 300000);
+      }
     }
   }
 
   async function cambiarCanal(canal) {
     estado.canal = canal;
-    $$(".canal").forEach(b => b.classList.toggle("activo", b.dataset.canal === canal));
+    $$(".canal").forEach(b => {
+      const activo = b.dataset.canal === canal;
+      b.classList.toggle("activo", activo);
+      b.setAttribute("aria-pressed", String(activo));
+    });
     renderPosiciones();
     programarSincronizacionSucursales();
-    if (canal === "sucursales") await cargarEstado(true);
+    if (canal === "sucursales") await cargarEstado(permisos.sincronizar);
   }
 
   async function abrirPosicion(mesaId) {
@@ -244,6 +276,7 @@
   function mostrarTicket() {
     const ticket = estado.ticket;
     const esSucursal = ticket.canal === "sucursales";
+    document.body.classList.add("en-ticket");
     $("#vista-posiciones").classList.add("oculto");
     $("#vista-ticket").classList.remove("oculto");
     $("#vista-ticket").classList.toggle("ticket-sucursal", esSucursal);
@@ -546,8 +579,11 @@
       <section class="segmento-menu">
         ${soloBebidas ? "" : `<h3><span>${escapar(segmento.toLocaleUpperCase("es-MX"))}</span></h3>`}
         <div class="segmento-productos">
-          ${items.map(producto => `<button class="producto producto-menu ${producto.es_promocion ? "promocion-menu" : ""}" data-id="${producto.id}" type="button" ${!abierto || !producto.disponible_hoy ? "disabled" : ""}>
-            <small>${escapar(producto.es_promocion ? `${producto.corto} · ${producto.promocion_dias}` : producto.corto)}</small><strong>${escapar(producto.nombre)}</strong>
+          ${items.map(producto => `<button class="producto producto-menu ${producto.es_promocion ? "promocion-menu" : ""}" data-id="${producto.id}" type="button" aria-label="${escapar(`${producto.nombre}. Abreviatura ${producto.corto}`)}" ${!abierto || !producto.disponible_hoy ? "disabled" : ""}>
+            ${producto.imagen_url
+              ? `<span class="producto-imagen" data-abreviatura="${escapar(producto.corto)}"><img src="${escapar(producto.imagen_url)}" alt="" width="320" height="240" loading="lazy" decoding="async"></span>`
+              : `<span class="producto-imagen producto-imagen-vacia" aria-hidden="true"><span><b>${escapar(producto.corto)}</b><small>Sin foto</small></span></span>`}
+            <span class="producto-copy"><small>${escapar(producto.es_promocion ? `${producto.corto} · ${producto.promocion_dias}` : producto.corto)}</small><strong>${escapar(producto.nombre)}</strong></span>
           </button>`).join("")}
         </div>
       </section>`).join("") || '<div class="vacio">No hay opciones disponibles.</div>';
@@ -837,7 +873,10 @@
   async function buscarClientes(consulta) {
     const token = ++estado.tokenBusquedaCliente;
     try {
-      const datos = await api(`/api/clientes/buscar/?q=${encodeURIComponent(consulta)}&limite=12`);
+      const datos = await api("/api/clientes/buscar/", {
+        method: "POST",
+        body: JSON.stringify({ q: consulta, limite: 12 }),
+      });
       if (token !== estado.tokenBusquedaCliente || estado.ticket?.canal !== "domicilio") return;
       estado.resultadosClientes = datos.resultados;
       renderResultadosClientes();
@@ -980,9 +1019,9 @@
     $("#procesar").textContent = esSucursal ? "Procesar e imprimir" : "Procesar orden";
     $("#cobrar").textContent = esSucursal ? "Completar pedido" : "Cobrar";
     $("#procesar").classList.toggle("oculto", !abierto);
-    $("#cancelar-orden").classList.toggle("oculto", !abierto);
-    $("#cobrar").classList.toggle("oculto", !cobrable);
-    $("#reimprimir").classList.toggle("oculto", abierto);
+    $("#cancelar-orden").classList.toggle("oculto", !abierto || !permisos.cancelar);
+    $("#cobrar").classList.toggle("oculto", !cobrable || !permisos.cobrar);
+    $("#reimprimir").classList.toggle("oculto", abierto || !permisos.reimprimir);
     $$(".persona, .opcion-preparacion, .comanda-papel button, .producto, .fila-partida-sucursal").forEach(b => b.disabled = !abierto);
     $$("#datos-cliente button, #datos-cliente input, #datos-cliente textarea").forEach(control => control.disabled = !abierto);
     $$("#datos-servicio-directo input, #ticket-switches input, #nombre-persona").forEach(control => control.disabled = !abierto);
@@ -1514,7 +1553,6 @@
     } else {
       toast(`${mensajeBase} Impresión en cola.`);
     }
-    cargarEstadoImpresion();
   }
 
   async function cancelarOrden() {
@@ -1536,6 +1574,7 @@
     if (!forzar && !(await finalizarEdicion())) return;
     clearTimeout(estado.temporizadorNombre);
     estado.ticket = null;
+    document.body.classList.remove("en-ticket");
     $("#vista-ticket").classList.add("oculto");
     $("#vista-posiciones").classList.remove("oculto");
     cargarEstado();
@@ -1544,6 +1583,7 @@
   async function salirModoMesero() {
     if (!(await finalizarEdicion())) return;
     estado.ticket = null;
+    document.body.classList.remove("en-ticket");
     $("#vista-ticket").classList.add("oculto");
     $("#vista-posiciones").classList.remove("oculto");
     $("main").classList.add("oculto");
@@ -1587,10 +1627,11 @@
     $("#pantalla-acceso").classList.add("oculto");
     $("main").classList.remove("oculto");
     document.body.classList.add("en-operacion");
+    document.body.classList.remove("en-ticket");
     cargarEstado(estado.canal === "sucursales");
     programarSincronizacionSucursales();
   });
-  $("#impresora-estado")?.addEventListener("click", cargarEstadoImpresion);
+  $("#toast-cerrar")?.addEventListener("click", cerrarToast);
   $$('[data-salir-mesero]').forEach(boton => boton.addEventListener("click", salirModoMesero));
   $("#pantalla-completa")?.addEventListener("click", alternarPantallaCompleta);
   $("#salir-tableta")?.addEventListener("click", salirModoTableta);
@@ -1673,6 +1714,15 @@
     const boton = evento.target.closest(".producto");
     if (boton) await seleccionarProducto(boton.dataset.id);
   });
+  $("#productos").addEventListener("error", evento => {
+    const imagen = evento.target.closest?.(".producto-imagen img");
+    if (!imagen) return;
+    const contenedor = imagen.closest(".producto-imagen");
+    const abreviatura = contenedor.dataset.abreviatura || "Producto";
+    contenedor.classList.add("producto-imagen-vacia");
+    contenedor.setAttribute("aria-hidden", "true");
+    contenedor.innerHTML = `<span><b>${escapar(abreviatura)}</b><small>Sin foto</small></span>`;
+  }, true);
   $("#menu-productos").addEventListener("click", async () => cambiarModoMenu("productos"));
   $("#comanda-preview").addEventListener("click", async evento => {
     const partidaSucursal = evento.target.closest("[data-partida-sucursal]");
@@ -1831,5 +1881,4 @@
   renderPersonas();
   renderMenu();
   cargarEstado();
-  cargarEstadoImpresion();
 })();

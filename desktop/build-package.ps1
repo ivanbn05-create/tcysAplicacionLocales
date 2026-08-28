@@ -1,5 +1,6 @@
 param(
-    [string]$ServerUrl = "http://192.168.0.30:8000"
+    [string]$ServerUrl = "http://192.168.0.30:8000",
+    [switch]$AllowInsecureHttp
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,12 +14,19 @@ $installer = Join-Path $release "Instalador-LosTocayosPOS.exe"
 $installerSource = Join-Path $desktop "InstallerBootstrap.cs"
 $compiler = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 
+$ServerUrl = $ServerUrl.TrimEnd("/")
 $uri = $null
 if (-not [Uri]::TryCreate($ServerUrl, [UriKind]::Absolute, [ref]$uri) -or
-    $uri.Scheme -notin @("http", "https")) {
-    throw "ServerUrl debe ser una URL HTTP o HTTPS válida."
+    $uri.Scheme -notin @("http", "https") -or
+    -not [string]::IsNullOrEmpty($uri.UserInfo) -or
+    $uri.AbsolutePath -ne "/" -or
+    -not [string]::IsNullOrEmpty($uri.Query) -or
+    -not [string]::IsNullOrEmpty($uri.Fragment)) {
+    throw "ServerUrl debe ser sólo el origen HTTP(S), sin credenciales, ruta, consulta ni fragmento."
 }
-$ServerUrl = $ServerUrl.TrimEnd("/")
+if ($uri.Scheme -eq "http" -and -not $AllowInsecureHttp) {
+    throw "Empaquetar un servidor HTTP requiere -AllowInsecureHttp; prefiere una URL HTTPS."
+}
 
 function Assert-ChildPath {
     param([string]$Parent, [string]$Child)

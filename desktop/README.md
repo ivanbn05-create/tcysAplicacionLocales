@@ -22,9 +22,10 @@ muestra pestañas ni barra de direcciones y no requiere instalar un runtime adic
 .\desktop\dist\TocayosPOS.exe
 ```
 
-Si Django no está activo, el programa aplica las migraciones pendientes e inicia el
-servidor local en el puerto 8000. La primera instalación de dependencias todavía se hace
-una sola vez con `iniciar-local.ps1`.
+Si la dirección configurada es local y el servidor no responde, el programa solicita a
+Windows iniciar el servicio `LosTocayosPOS`. No ejecuta migraciones ni crea un proceso
+`runserver`/Waitress fuera del servicio. La instalación inicial del servidor se hace
+una vez, como administrador, con `instalar-servicio-lan.ps1` desde la raíz del proyecto.
 
 Para abrir directamente la interfaz táctil a pantalla completa:
 
@@ -32,7 +33,7 @@ Para abrir directamente la interfaz táctil a pantalla completa:
 .\desktop\dist\TocayosPOS.exe --tableta
 ```
 
-Para iniciar únicamente el servicio de la sucursal:
+Para solicitar el inicio del servicio y comprobarlo sin abrir la interfaz:
 
 ```powershell
 .\desktop\dist\TocayosPOS.exe --solo-servidor
@@ -51,11 +52,13 @@ $env:TOCAYOS_SERVER_URL = "http://192.168.0.30:8000"
 
 El cliente también lee `servidor.txt` junto al ejecutable. Este archivo es el mecanismo
 usado por el paquete distribuible y evita configurar variables de entorno manualmente.
+Por seguridad sólo se acepta un origen `http://host:puerto` o `https://host:puerto`, sin
+credenciales, ruta, consulta ni fragmento.
 
 ## Paquete para otras computadoras
 
 ```powershell
-.\desktop\build-package.ps1 -ServerUrl "http://192.168.0.30:8000"
+.\desktop\build-package.ps1 -ServerUrl "https://pos.tocayos.local"
 ```
 
 Genera en `desktop\release\` un ZIP, un instalador autoextraíble y sus sumas SHA-256.
@@ -63,6 +66,12 @@ La instalación se realiza por usuario, no requiere permisos de administrador, c
 accesos directos y registra un desinstalador en Windows. La dirección puede modificarse
 desde **Menú Inicio > Los Tocayos POS > Configurar servidor**.
 
-Para la entrega final a sucursales se debe sustituir el servidor de desarrollo por un
-servicio de Windows, PostgreSQL, copias de seguridad y un instalador firmado. El shell
-de escritorio y toda la aplicación web se conservan sin reescritura.
+Si durante una transición se empaqueta una URL HTTP, debe declararse de forma
+consciente con `-AllowInsecureHttp`. Además, el instalador y el configurador exigirán
+escribir `HTTP LAN` antes de guardar una URL sin cifrar; no basta con aceptar el valor
+predeterminado.
+
+En la computadora principal, el servicio usa Waitress, cuenta `LocalService`, ACL
+restringidas y recuperación automática. El paquete de clientes no contiene la base ni
+credenciales del servidor. Sigue siendo recomendable firmar el instalador y usar un
+origen HTTPS antes de distribuirlo fuera de una LAN controlada.

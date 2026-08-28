@@ -1,12 +1,36 @@
 .env
+.env.*
+!.env.example
 .venv/
 __pycache__/
 *.py[cod]
 *.sqlite3
-media/impresiones/
+*.sqlite3-shm
+*.sqlite3-wal
+*.sqlite3-journal
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+secrets/
+backups/
+media/
 staticfiles/
 .pytest_cache/
+.coverage
+htmlcov/
 desktop/logs/
 desktop/build/
 desktop/dist/
 desktop/release/
+logs/
+runtime/
+tmp/
+*.tmp
+*.bak
+
+# impeccable-ignore-start: generated working artifacts
+.impeccable/tmp/
+.impeccable/review/
+# impeccable-ignore-end

@@ -1,0 +1,11 @@
+{
+  "approved": true,
+  "promptFile": "pos-pase-cocina-b-hibrida.prompt.txt",
+  "references": [
+    ".impeccable/mocks/pos-pase-cocina-b.png",
+    ".impeccable/mocks/pos-pase-cocina-c.png",
+    "ventas/static/ventas/brand/logoactual.jpeg",
+    "MANUAL DE IDENTIDAD TOCAYOS.pdf, página 7"
+  ],
+  "decision": "Aprobada explícitamente por el usuario: composición 2, iconos de canal de la 3 y números verdes para libre / rojos para orden abierta o procesada, con etiqueta textual."
+}

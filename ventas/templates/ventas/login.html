@@ -1,0 +1,32 @@
+{% load static %}
+<!doctype html>
+<html lang="es-MX">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Acceso · Los Tocayos POS</title>
+  <link rel="icon" href="{% static 'ventas/brand/logoactual.jpeg' %}" type="image/jpeg">
+  <link rel="stylesheet" href="{% static 'ventas/login.css' %}">
+</head>
+<body>
+  <main class="login-card">
+    <img src="{% static 'ventas/brand/logoactual.jpeg' %}" alt="Los Tocayos">
+    <p class="eyebrow">Punto de venta local</p>
+    <h1>Iniciar sesión</h1>
+    <p class="ayuda">Usa la cuenta asignada para operar esta sucursal.</p>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    <form method="post" autocomplete="on">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ next }}">
+      <label>Usuario
+        <input name="username" value="{{ username }}" maxlength="150" autocomplete="username" required autofocus>
+      </label>
+      <label>Contraseña
+        <input name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <button type="submit">Entrar</button>
+    </form>
+  </main>
+</body>
+</html>

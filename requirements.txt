@@ -1,5 +1,8 @@
 Django>=5.2,<5.3
 gunicorn>=23,<24
 openpyxl>=3.1,<4
-Pillow>=11,<12
+Pillow>=12.3,<13
 psycopg[binary]>=3.2,<4
+waitress>=3.0,<4
+whitenoise>=6.9,<7
+pywin32>=311,<312; sys_platform == "win32"

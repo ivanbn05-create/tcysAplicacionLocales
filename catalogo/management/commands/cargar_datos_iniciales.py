@@ -78,10 +78,15 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         sucursal, _ = Sucursal.objects.get_or_create(clave="ARBOLEDAS", defaults={"nombre": "Arboledas"})
-        rol, _ = Rol.objects.get_or_create(
+        rol, _ = Rol.objects.update_or_create(
             sucursal=sucursal,
             nombre="Encargado",
-            defaults={"puede_cobrar": True, "puede_reimprimir": True},
+            defaults={
+                "puede_cobrar": True,
+                "puede_reimprimir": True,
+                "puede_cancelar": True,
+                "puede_sincronizar": True,
+            },
         )
         UsuarioPOS.objects.get_or_create(sucursal=sucursal, clave="CAJA", defaults={"nombre": "Caja", "rol": rol})
 

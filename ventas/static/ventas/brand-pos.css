@@ -1,0 +1,877 @@
+@font-face {
+  font-family: "Montserrat Tocayos";
+  src: url("fonts/Montserrat-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Bebas Neue Tocayos";
+  src: url("fonts/BebasNeue-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  --amarillo: #ffed00;
+  --amarillo-suave: #fff9b8;
+  --amarillo-estado: #f2c500;
+  --amarillo-estado-claro: #fff7c8;
+  --amarillo-estado-oscuro: #795a00;
+  --verde: #4aa736;
+  --verde-oscuro: #2f7a26;
+  --verde-claro: #e9f5e6;
+  --rojo: #e42522;
+  --rojo-claro: #fde9e8;
+  --carbon: #353436;
+  --carbon-suave: #535154;
+  --riel: #242629;
+  --tinta: #353436;
+  --muted: #625f62;
+  --papel: #f8f7f5;
+  --fondo: #e9e7e1;
+  --borde: #353436;
+  --foco: #0066cc;
+  --sombra: 0 12px 28px rgba(36, 38, 41, .16);
+  color-scheme: light;
+}
+
+* {
+  scrollbar-color: var(--rojo) #ddd9d0;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: #ddd9d0; }
+*::-webkit-scrollbar-thumb { border: 2px solid #ddd9d0; background: var(--rojo); }
+*::selection { color: var(--carbon); background: var(--amarillo); }
+
+html, body { background: var(--fondo); }
+body {
+  background: var(--fondo);
+  accent-color: var(--rojo);
+}
+
+button, input, textarea, select { border-radius: 2px; }
+button { position: relative; }
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid var(--foco);
+  outline-offset: 3px;
+  box-shadow: none;
+}
+button:disabled { cursor: not-allowed; }
+.switch-operacion input,
+.interruptor-terminal input,
+.opcion-pago input {
+  width: 1px;
+  height: 1px;
+  margin: 0;
+}
+.switch-operacion input:focus-visible + span,
+.interruptor-terminal input:focus-visible + span,
+.opcion-pago input:focus-visible + span {
+  outline: 3px solid var(--foco);
+  outline-offset: 3px;
+  box-shadow: none;
+}
+button.operando { color: transparent !important; }
+button.operando > * { visibility: hidden; }
+button.operando::after {
+  content: attr(data-texto-carga);
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 6px;
+  color: var(--carbon);
+  font-weight: 900;
+}
+
+.toast {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 2px solid var(--carbon);
+  border-radius: 2px;
+  box-shadow: 0 10px 26px rgba(36, 38, 41, .24);
+}
+.toast-cerrar {
+  display: none;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 1px solid currentColor;
+  border-radius: 0;
+  color: #fff;
+  background: transparent;
+  font: 700 1.4rem/1 "Montserrat Tocayos", Montserrat, system-ui, sans-serif;
+}
+.toast.persistente { pointer-events: auto; }
+.toast.persistente .toast-cerrar { display: grid; place-items: center; }
+
+.eyebrow,
+.etiqueta-sistema {
+  margin: 0 0 3px;
+  color: var(--muted);
+  font-size: .75rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.topbar {
+  position: relative;
+  top: auto;
+  z-index: 12;
+  min-height: 62px;
+  padding: 5px clamp(14px, 2.4vw, 34px);
+  grid-template-columns: minmax(190px, 260px) minmax(140px, 1fr);
+  gap: clamp(12px, 2vw, 28px);
+  border: 0;
+  border-bottom: 3px solid var(--carbon);
+  color: var(--carbon);
+  background: var(--amarillo);
+  box-shadow: none;
+}
+.marca { position: relative; width: min(218px, 100%); height: 47px; overflow: hidden; }
+.marca img {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 270px;
+  max-width: none;
+  height: 270px;
+  object-fit: contain;
+  transform: translate(-40px, -115px);
+}
+.sucursal { min-width: 0; text-align: right; }
+.sucursal .etiqueta-sistema { color: #565100; }
+.sucursal strong {
+  display: block;
+  overflow: hidden;
+  font-size: clamp(.9rem, 1.6vw, 1.15rem);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pantalla-acceso {
+  height: auto;
+  min-height: 0;
+  flex: 1;
+  grid-template-rows: minmax(0, 1fr);
+  background: var(--papel);
+}
+.acceso-contenido { width: min(880px, calc(100% - 32px)); }
+.perfiles-acceso { gap: 0; border: 2px solid var(--carbon); }
+.perfil-acceso {
+  min-height: 176px;
+  padding: 26px;
+  border: 0;
+  border-radius: 0;
+  color: var(--carbon);
+  background: var(--papel);
+  box-shadow: none;
+}
+.perfil-acceso + .perfil-acceso { border-left: 2px solid var(--carbon); }
+.perfil-acceso > span {
+  width: 58px;
+  height: 58px;
+  border: 2px solid var(--carbon);
+  border-radius: 0;
+  background: var(--amarillo);
+}
+.perfil-acceso strong {
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: 2rem;
+  font-weight: 400;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+.perfil-acceso small { color: var(--carbon); font-size: .8rem; }
+.perfil-acceso.mesero:hover { transform: none; border-color: transparent; background: var(--amarillo); }
+.perfil-acceso.administrador {
+  color: #6d696b;
+  background: #dedbd4;
+  box-shadow: none;
+}
+.perfil-acceso.administrador > span { background: transparent; }
+
+main,
+body.en-operacion main,
+.modo-tableta main {
+  width: 100%;
+  padding: 9px;
+  background: var(--fondo);
+}
+.vista-posiciones { grid-template-rows: auto minmax(0, 1fr); }
+.canales-fila {
+  min-height: 84px;
+  padding: 8px 8px 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  align-items: stretch;
+  background: var(--riel);
+}
+.canales,
+.canales-fila .canales {
+  height: 100%;
+  margin: 0;
+  gap: 10px;
+  align-items: end;
+}
+.canal {
+  min-height: 70px;
+  padding: 10px clamp(24px, 2.5vw, 34px) 10px clamp(15px, 2vw, 24px);
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-radius: 0;
+  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 50%, calc(100% - 16px) 100%, 0 100%);
+  color: var(--carbon);
+  background: #eeece8;
+  box-shadow: none;
+  text-align: left;
+  transform: none;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+.canal::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 16px;
+  width: 24px;
+  height: 8px;
+  border: 2px solid var(--carbon);
+  border-top: 0;
+  background: #b9b7b2;
+}
+.canal::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 6px;
+  background: transparent;
+}
+.canal:hover { color: var(--carbon); border-color: transparent; background: #fff; transform: none; }
+.canal.activo { color: var(--carbon); border-color: transparent; background: #fff; box-shadow: none; }
+.canal.activo::before { background: var(--amarillo); }
+.canal.activo::after { background: var(--rojo); }
+.canal-icono,
+.canal span.canal-icono {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  color: var(--carbon);
+  background: transparent;
+}
+.canal-icono svg {
+  width: 36px;
+  height: 36px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.canal-texto,
+.canal span.canal-texto {
+  width: auto;
+  height: auto;
+  display: block;
+  place-items: initial;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+  min-width: 0;
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: clamp(1.25rem, 2vw, 1.7rem);
+  font-weight: 400;
+  letter-spacing: .02em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.estacion-posiciones {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  border: 2px solid var(--carbon);
+  border-top: 0;
+  background: var(--papel);
+  overflow: hidden;
+}
+.rejilla-posiciones {
+  grid-template-columns: repeat(6, minmax(112px, 1fr));
+  gap: 10px;
+  padding: 12px;
+  background: var(--papel);
+}
+.rejilla-posiciones.rejilla-dividida {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+}
+.grupo-posiciones {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+}
+.grupo-principal { grid-column: span 6; }
+.grupo-auxiliar { grid-column: span 1; padding-left: 0; border-left: 0; }
+.grupo-posiciones > header {
+  min-height: 36px;
+  padding: 0 2px 6px;
+  border-bottom: 2px solid var(--carbon);
+}
+.grupo-posiciones > header,
+.grupo-posiciones > div { grid-column: 1 / -1; }
+.grupo-posiciones > header strong {
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: 1.25rem;
+  font-weight: 400;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+.grupo-posiciones > header small { color: var(--muted); font-size: .75rem; }
+.grupo-posiciones > div { grid-template-columns: subgrid; gap: 9px; }
+.grupo-auxiliar > header { border-color: var(--carbon); }
+.grupo-auxiliar > header strong { color: var(--carbon); }
+
+.posicion,
+.grupo-auxiliar .posicion,
+.columna-sucursal .posicion {
+  min-height: 118px;
+  padding: 10px 12px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 2px;
+  border: 1px solid #77736f;
+  border-radius: 2px;
+  color: var(--carbon);
+  background: #fff;
+  box-shadow: none;
+  overflow: hidden;
+}
+.posicion::after { display: none; }
+.posicion:hover {
+  filter: none;
+  transform: none;
+  border-color: var(--carbon);
+  background: #fffeef;
+  box-shadow: inset 0 0 0 2px var(--amarillo);
+}
+.posicion.ocupada {
+  color: var(--carbon);
+  border-color: #a87f00;
+  background: var(--amarillo-estado-claro);
+  box-shadow: inset 0 5px 0 var(--amarillo-estado);
+}
+.posicion.procesada { color: var(--carbon); border-color: var(--rojo); background: #fff; }
+.posicion-estado {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--verde-oscuro);
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: 1rem;
+  letter-spacing: .035em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.posicion-estado i {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  background: var(--verde);
+}
+.ocupada .posicion-estado { color: var(--amarillo-estado-oscuro); }
+.procesada .posicion-estado { color: var(--rojo); }
+.ocupada .posicion-estado i,
+.procesada .posicion-estado i { border-radius: 0; background: transparent; }
+.ocupada .posicion-estado i::after {
+  content: "";
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  left: 2px;
+  height: 2px;
+  background: currentColor;
+  box-shadow: 0 -3px 0 currentColor;
+}
+.procesada .posicion-estado i::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 1px;
+  width: 6px;
+  height: 3px;
+  border-left: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+}
+.posicion strong {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 6px;
+  color: inherit;
+  line-height: 1;
+}
+.posicion-tipo {
+  overflow: hidden;
+  color: inherit;
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: 1.15rem;
+  font-weight: 400;
+  letter-spacing: .02em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.posicion-numero {
+  color: var(--verde);
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: clamp(2.8rem, 5vw, 3.8rem);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .01em;
+  line-height: .82;
+}
+.ocupada .posicion-numero { color: var(--amarillo-estado-oscuro); }
+.procesada .posicion-numero { color: var(--rojo); }
+.posicion small {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  color: var(--carbon);
+  font-size: .7rem;
+  font-weight: 700;
+  opacity: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barra-estado-posiciones {
+  min-height: 62px;
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) minmax(180px, auto) minmax(200px, auto);
+  align-items: stretch;
+  color: #fff;
+  background: var(--riel);
+  border-top: 2px solid var(--carbon);
+}
+.leyenda {
+  min-width: 0;
+  margin: 0;
+  padding: 10px 14px;
+  gap: 18px;
+  align-items: center;
+  color: #fff;
+  font-size: .75rem;
+}
+.leyenda span { gap: 7px; }
+.leyenda i { position: relative; width: 13px; height: 13px; border-radius: 0; }
+.leyenda .libre { border: 2px solid #fff; border-radius: 50%; background: var(--verde); }
+.leyenda .ocupada { border: 2px solid #fff; background: var(--amarillo-estado); }
+.leyenda .ocupada::after { content: ""; position: absolute; inset: 3px 2px auto; height: 2px; background: var(--carbon); box-shadow: 0 3px 0 var(--carbon); }
+.leyenda .procesada { border: 2px solid var(--rojo); background: transparent; }
+.leyenda .procesada::after { content: ""; position: absolute; left: 2px; top: 1px; width: 6px; height: 3px; border-left: 2px solid var(--rojo); border-bottom: 2px solid var(--rojo); transform: rotate(-45deg); }
+.sesion-operativa,
+.admin-futuro {
+  min-width: 0;
+  padding: 9px 14px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-left: 1px solid #5e6062;
+}
+.sesion-operativa > span:last-child,
+.admin-futuro > span:last-child { min-width: 0; display: grid; gap: 1px; }
+.sesion-operativa small,
+.admin-futuro small { color: #d2d2ce; font-size: .65rem; text-transform: uppercase; }
+.sesion-operativa strong,
+.admin-futuro strong { overflow: hidden; font-size: .75rem; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.sesion-icono,
+.admin-futuro > span:first-child { width: 30px; height: 30px; flex: 0 0 30px; }
+.sesion-operativa svg,
+.admin-futuro svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.admin-futuro { color: #aeadab; }
+.admin-futuro strong { color: var(--amarillo); }
+
+.rejilla-posiciones.rejilla-sucursales {
+  padding: 12px;
+  gap: 9px;
+  background: var(--papel);
+}
+.columna-sucursal { grid-template-rows: 44px minmax(0, 1fr); }
+.columna-sucursal > header {
+  border-bottom: 2px solid var(--carbon);
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: .78rem;
+  font-weight: 400;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+.columna-sucursal .posicion-estado { font-size: .78rem; }
+.columna-sucursal .posicion-tipo { font-size: .86rem; line-height: 1; white-space: normal; }
+.columna-sucursal .posicion-numero { font-size: 2.35rem; }
+.columna-sucursal .posicion small { font-size: .6rem; }
+
+.controles-tableta { top: 9px; right: 12px; gap: 6px; }
+body.en-operacion .topbar { padding-right: 306px; }
+.modo-tableta .topbar { padding-right: 238px; }
+.controles-tableta .control-operacion {
+  min-width: 44px;
+  min-height: 44px;
+  border: 2px solid var(--carbon);
+  border-radius: 0;
+  color: var(--carbon);
+  background: var(--papel);
+}
+.controles-tableta .control-operacion:hover { color: var(--carbon); background: var(--amarillo); }
+.controles-tableta .salir-mesero-cabecera {
+  width: auto;
+  padding: 7px 11px;
+  grid-template-columns: auto auto;
+  gap: 6px;
+  color: #fff;
+  border-color: var(--carbon);
+  background: var(--carbon);
+}
+.controles-tableta .salir-mesero-cabecera span { font-size: .68rem; font-weight: 900; }
+body.en-ticket .salir-mesero-cabecera { display: none; }
+
+.ticket-top {
+  min-height: 54px;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  gap: 10px;
+  color: #fff;
+  background: var(--riel);
+  border-bottom: 4px solid var(--rojo);
+}
+.ticket-top h1 {
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: clamp(1.65rem, 2.5vw, 2.25rem);
+  font-weight: 400;
+  letter-spacing: .02em;
+}
+.ticket-top h1 small { color: #ecebe6; font-family: "Montserrat Tocayos", sans-serif; font-size: .45em; }
+.ticket-top .boton.icono,
+.ticket-top .salir-mesero {
+  min-height: 44px;
+  border: 1px solid #77797b;
+  border-radius: 0;
+  color: #fff;
+  background: transparent;
+}
+.flujo-ticket {
+  border: 2px solid var(--carbon);
+  border-radius: 0;
+  background: var(--papel);
+  box-shadow: none;
+}
+.panel-personas,
+.panel-productos,
+.panel-orden { background: var(--papel); }
+.panel-personas { border-right: 2px solid var(--carbon); background: #e7e4dc; }
+.panel-orden { border-left: 2px solid var(--carbon); }
+.menu-encabezado,
+.orden-encabezado { border-bottom: 2px solid var(--carbon); }
+.menu-encabezado strong,
+.orden-encabezado strong { font-size: .875rem; }
+.persona {
+  min-height: 44px;
+  border: 1px solid #8a8781;
+  border-radius: 0;
+  color: var(--carbon);
+  background: #fff;
+}
+.persona.activa { color: #fff; border-color: var(--rojo); background: var(--rojo); box-shadow: none; }
+
+.segmento-menu { gap: 7px; }
+.segmento-menu h3 { margin: 5px 0 2px; color: var(--carbon); font-size: .75rem; }
+.segmento-menu h3::before,
+.segmento-menu h3::after { height: 1px; background: var(--carbon); }
+.segmento-productos {
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 7px;
+}
+.productos:not(.modo-calculadora) { gap: 9px; }
+.producto-menu,
+.segmento-productos .producto-menu {
+  min-height: 82px;
+  height: 82px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: 1fr;
+  gap: 0;
+  align-items: stretch;
+  justify-content: stretch;
+  border: 1px solid #77736f;
+  border-radius: 2px;
+  color: var(--carbon);
+  background: #fff;
+  box-shadow: none;
+  overflow: hidden;
+  text-align: left;
+}
+.producto-menu:hover {
+  border-color: var(--carbon);
+  background: #fff;
+  box-shadow: inset 0 0 0 2px var(--amarillo);
+  transform: none;
+}
+.producto-imagen {
+  min-width: 0;
+  min-height: 80px;
+  display: block;
+  border-right: 1px solid var(--carbon);
+  background: #e4e1da;
+  overflow: hidden;
+}
+.producto-imagen img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.producto-imagen-vacia {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: #e4e1da;
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: .9rem;
+  letter-spacing: .08em;
+  line-height: 1.05;
+  text-align: center;
+  text-transform: uppercase;
+}
+.producto-imagen-vacia > span { display: grid; gap: 2px; }
+.producto-imagen-vacia b { color: var(--carbon); font-size: 1.2rem; font-weight: 400; }
+.producto-imagen-vacia small { color: var(--muted); font: 700 .62rem "Montserrat Tocayos", sans-serif; letter-spacing: .05em; }
+
+.termino,
+.calculadora-producto,
+.pantalla-cantidad,
+.teclado-cantidad button,
+.confirmar-edicion {
+  border-radius: 2px;
+  box-shadow: none;
+}
+.termino.activo,
+.teclado-cantidad button:active,
+.teclado-cantidad .eliminar,
+.confirmar-edicion,
+.confirmar-edicion:active {
+  box-shadow: none;
+  transform: none;
+}
+.producto-copy {
+  min-width: 0;
+  padding: 8px;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+}
+.producto-menu .producto-copy small {
+  color: var(--rojo);
+  font-size: .7rem;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-align: left;
+}
+.producto-menu .producto-copy strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: .75rem;
+  line-height: 1.15;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.producto-menu:disabled .producto-imagen { filter: grayscale(1); }
+
+.producto,
+.opcion-preparacion,
+.selector-entrega-tipos button,
+.prefijos-salsas button,
+.opciones-salsas button,
+.tiempos-aproximados button,
+.teclado-hora-programada button,
+.selector-entrega,
+.interruptor-terminal span,
+.datos-servicio-directo,
+.pedido-sucursal-lista,
+.grupo-formulario,
+.cliente-resultado,
+.cliente-seleccionado,
+input,
+textarea {
+  border-radius: 2px;
+  box-shadow: none;
+}
+.switch-operacion > span,
+.switch-operacion input:checked + span {
+  border-color: #c6c2ba;
+  background: #c6c2ba;
+  box-shadow: none;
+}
+.switch-operacion input:checked + span { border-color: var(--amarillo); background: var(--amarillo); }
+
+/* La comanda virtual conserva deliberadamente el lenguaje de la impresión térmica. */
+.comanda-preview { background: #e7e4dc; }
+.comanda-papel,
+.comanda-papel button {
+  color: #111;
+  background: #fff;
+  font-family: Arial, Helvetica, sans-serif;
+}
+.comanda-papel {
+  border: 1px solid #111;
+  border-radius: 0;
+  box-shadow: 0 6px 16px rgba(36, 38, 41, .12);
+}
+.comanda-matriz,
+.comanda-matriz-nombres { border-top-color: #111; border-left-color: #111; }
+.comanda-matriz > *,
+.comanda-matriz-nombres > * { border-color: #111; border-radius: 0; }
+
+.boton {
+  min-height: 44px;
+  border-radius: 2px;
+  text-transform: none;
+}
+.accion-procesar,
+.boton.cobro,
+.confirmar-edicion {
+  color: var(--carbon);
+  background: var(--amarillo);
+  border: 2px solid var(--carbon);
+  box-shadow: none;
+}
+.accion-cancelar { color: #fff; background: var(--rojo); border: 2px solid var(--rojo); }
+.boton.enlace { color: #8c1715; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+
+dialog {
+  border: 2px solid var(--carbon);
+  border-radius: 2px;
+  box-shadow: 0 22px 54px rgba(0, 0, 0, .28);
+}
+dialog::backdrop { background: rgba(36, 38, 41, .76); backdrop-filter: none; }
+
+@media (max-width: 1180px) {
+  .topbar { grid-template-columns: minmax(160px, 210px) minmax(110px, 1fr); }
+  .canal { grid-template-columns: 36px minmax(0, 1fr); padding-inline: 14px 24px; }
+  .canal-icono, .canal span.canal-icono { width: 36px; height: 36px; }
+  .canal-icono svg { width: 36px; height: 36px; }
+  .rejilla-posiciones.rejilla-dividida { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .grupo-principal { grid-column: span 4; }
+  .grupo-auxiliar { grid-column: span 1; }
+  .grupo-posiciones > div { grid-template-columns: subgrid; }
+  .segmento-productos { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+}
+
+@media (max-width: 900px) {
+  .topbar { min-height: 60px; padding: 5px 10px; grid-template-columns: 176px minmax(80px, 1fr); gap: 8px; }
+  .marca { width: 176px; height: 45px; }
+  .marca img { width: 260px; height: 260px; transform: translate(-38px, -111px); }
+  body.en-operacion .topbar { padding-right: 212px; }
+  .modo-tableta .topbar { padding-right: 170px; }
+  .controles-tableta .cerrar-sesion span { display: none; }
+  .canales-fila { min-height: 78px; padding: 7px 7px 0; }
+  .canal { min-height: 64px; grid-template-columns: 34px minmax(0, 1fr); gap: 8px; padding: 8px 21px 8px 10px; }
+  .canal-icono, .canal span.canal-icono { width: 34px; height: 34px; }
+  .canal-icono svg { width: 31px; height: 31px; }
+  .canal-texto { font-size: 1.18rem; }
+  .barra-estado-posiciones { grid-template-columns: minmax(0, 1fr) auto; }
+  .admin-futuro { display: none; }
+  .leyenda { gap: 11px; }
+  .rejilla-posiciones.rejilla-dividida { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .grupo-principal { grid-column: span 4; }
+  .grupo-auxiliar { grid-column: span 1; }
+  .grupo-posiciones > div { grid-template-columns: subgrid; }
+  .posicion, .grupo-auxiliar .posicion, .columna-sucursal .posicion { min-height: 102px; padding: 8px 9px; }
+  .posicion-numero { font-size: 2.7rem; }
+  .segmento-productos { grid-template-columns: repeat(auto-fill, minmax(155px, 1fr)); }
+  .producto-menu, .segmento-productos .producto-menu { height: 76px; min-height: 76px; }
+  .producto-imagen { min-height: 74px; }
+}
+
+@media (max-width: 700px) {
+  html { height: auto; min-height: 100%; overflow-x: hidden; overflow-y: auto; overscroll-behavior: auto; }
+  body { width: 100%; height: auto; min-height: 100dvh; display: block; overflow-x: hidden; overflow-y: auto; overscroll-behavior: auto; }
+  body.modo-tableta { position: static; height: auto; min-height: 100dvh; overflow-x: hidden; overflow-y: auto; }
+  .pantalla-acceso { min-height: calc(100dvh - 60px); }
+  .topbar { position: sticky; top: 0; min-height: 60px; grid-template-columns: minmax(118px, 1fr); }
+  .sucursal { display: none; }
+  body.en-operacion .topbar { padding-right: 176px; }
+  .modo-tableta .topbar { padding-right: 128px; }
+  .controles-tableta { top: 8px; right: 8px; }
+  .controles-tableta .cerrar-sesion span,
+  .controles-tableta .salir-tableta span { display: none; }
+  main, body.en-operacion main, .modo-tableta main { height: auto; min-height: calc(100dvh - 60px); flex: none; overflow: visible; }
+  .vista-posiciones, .vista-ticket { height: auto; min-height: calc(100dvh - 84px); }
+  .canales-fila { min-height: auto; grid-template-columns: minmax(0, 1fr); padding: 6px; }
+  .canales { gap: 5px; }
+  .canal { min-height: 58px; grid-template-columns: 1fr; justify-items: center; gap: 2px; padding: 7px 17px 5px 5px; text-align: center; }
+  .canal-icono, .canal span.canal-icono { width: 28px; height: 28px; }
+  .canal-icono svg { width: 27px; height: 27px; }
+  .canal-texto { font-size: 1rem; }
+  .estacion-posiciones { overflow: visible; }
+  .rejilla-posiciones { grid-template-columns: 1fr; overflow: visible; }
+  .rejilla-posiciones.rejilla-dividida { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grupo-principal,
+  .grupo-auxiliar { grid-column: span 2; }
+  .grupo-posiciones > div { grid-template-columns: subgrid; }
+  .grupo-auxiliar { padding-top: 10px; border-top: 1px solid var(--carbon); }
+  .barra-estado-posiciones { grid-template-columns: 1fr; }
+  .leyenda { justify-content: center; }
+  .sesion-operativa { border-top: 1px solid #5e6062; border-left: 0; }
+  .ticket-top { position: sticky; top: 60px; z-index: 8; grid-template-columns: auto minmax(0, 1fr) auto; }
+  .flujo-ticket,
+  .modo-tableta .flujo-ticket {
+    height: auto;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+    overflow: visible;
+  }
+  .panel-personas { max-height: none; border-right: 0; border-bottom: 2px solid var(--carbon); }
+  .panel-productos { min-height: 420px; }
+  .panel-orden { min-height: 520px; border-top: 2px solid var(--carbon); border-left: 0; }
+  .segmento-productos { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .producto-menu, .segmento-productos .producto-menu { height: 78px; }
+  .comanda-preview { overflow: visible; }
+  .termino,
+  .pantalla-cantidad,
+  .teclado-cantidad button,
+  .confirmar-edicion { min-height: 44px; }
+  .teclado-cantidad { grid-template-rows: repeat(4, minmax(44px, 1fr)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

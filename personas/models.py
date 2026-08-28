@@ -1,5 +1,6 @@
 import uuid
 
+from django.conf import settings
 from django.db import models
 
 
@@ -24,6 +25,8 @@ class Rol(models.Model):
     nombre = models.CharField(max_length=60)
     puede_cobrar = models.BooleanField(default=False)
     puede_reimprimir = models.BooleanField(default=False)
+    puede_cancelar = models.BooleanField(default=False)
+    puede_sincronizar = models.BooleanField(default=False)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["sucursal", "nombre"], name="rol_unico_sucursal")]
@@ -36,6 +39,13 @@ class UsuarioPOS(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sucursal = models.ForeignKey(Sucursal, on_delete=models.CASCADE, related_name="usuarios_pos")
     rol = models.ForeignKey(Rol, on_delete=models.PROTECT, related_name="usuarios")
+    cuenta = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="perfil_pos",
+    )
     nombre = models.CharField(max_length=100)
     clave = models.CharField(max_length=20)
     activo = models.BooleanField(default=True)
