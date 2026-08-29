@@ -1,0 +1,535 @@
+@font-face {
+  font-family: "Montserrat Tocayos";
+  src: url("fonts/Montserrat-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Bebas Neue Tocayos";
+  src: url("fonts/BebasNeue-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  --amarillo: #ffed00;
+  --amarillo-suave: #fff9bd;
+  --verde: #4aa736;
+  --verde-oscuro: #347a27;
+  --rojo: #e42522;
+  --carbon: #353436;
+  --riel: #242426;
+  --papel: #fffefa;
+  --lienzo: #f2f0e9;
+  --borde: #c9c4b8;
+  --muted: #706d66;
+  --azul-foco: #1769ff;
+}
+
+* { box-sizing: border-box; }
+html { min-width: 320px; color-scheme: light; }
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  color: var(--carbon);
+  background: var(--lienzo);
+  font-family: "Montserrat Tocayos", Montserrat, Arial, sans-serif;
+  font-size: 14px;
+}
+button, input, select { font: inherit; }
+button, a { -webkit-tap-highlight-color: transparent; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .52; }
+a { color: inherit; }
+svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+::selection { color: #111; background: var(--amarillo); }
+:focus-visible { outline: 3px solid var(--azul-foco); outline-offset: 2px; }
+* { scrollbar-color: var(--carbon) #ddd8cb; scrollbar-width: thin; }
+
+.csrf-holder { display: none; }
+.admin-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  min-height: 64px;
+  display: grid;
+  grid-template-columns: 280px minmax(180px, 1fr) minmax(220px, auto) auto;
+  align-items: stretch;
+  color: #111;
+  background: var(--amarillo);
+  border-bottom: 4px solid var(--carbon);
+}
+.admin-marca {
+  min-width: 0;
+  padding: 7px 18px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: #111;
+  text-decoration: none;
+}
+.admin-marca img { width: 46px; height: 46px; object-fit: cover; filter: grayscale(1) contrast(1.45); }
+.admin-marca span {
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: 1.58rem;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+.admin-contexto, .admin-turno {
+  min-width: 0;
+  padding: 9px 22px;
+  display: grid;
+  align-content: center;
+  gap: 1px;
+  border-left: 1px solid rgba(0,0,0,.28);
+}
+.admin-contexto span, .admin-turno span { font-size: .61rem; font-weight: 850; letter-spacing: .12em; text-transform: uppercase; }
+.admin-contexto strong, .admin-turno strong { overflow: hidden; font-size: .78rem; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.boton-topbar {
+  min-height: 60px;
+  padding: 8px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #fff;
+  background: var(--carbon);
+  text-decoration: none;
+  font-size: .72rem;
+  font-weight: 900;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.boton-topbar:hover { color: var(--carbon); background: #fff; }
+
+.admin-shell { min-height: calc(100vh - 64px); display: grid; grid-template-columns: 244px minmax(0, 1fr); }
+.admin-rail {
+  position: sticky;
+  top: 64px;
+  align-self: start;
+  height: calc(100vh - 64px);
+  padding: 24px 0 18px;
+  display: grid;
+  grid-template-rows: repeat(7, auto) 1fr auto;
+  align-content: start;
+  color: rgba(255,255,255,.82);
+  background: var(--riel);
+  overflow-y: auto;
+}
+.rail-item {
+  min-height: 56px;
+  padding: 9px 18px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  font-size: .72rem;
+  font-weight: 800;
+}
+.rail-item svg { width: 22px; height: 22px; }
+.rail-item:hover { color: #fff; background: #303033; }
+.rail-item.activo { color: #111; background: var(--amarillo); }
+.rail-item.activo svg { stroke-width: 2.2; }
+.rail-ayuda {
+  margin: 18px 15px 0;
+  padding: 13px;
+  align-self: end;
+  display: grid;
+  gap: 5px;
+  border: 1px dashed rgba(255,255,255,.3);
+}
+.rail-ayuda strong { color: var(--amarillo); font-size: .68rem; text-transform: uppercase; }
+.rail-ayuda span { color: rgba(255,255,255,.6); font-size: .64rem; line-height: 1.45; }
+
+.admin-main { min-width: 0; padding: clamp(22px, 3vw, 42px); }
+.admin-main[aria-busy="true"] { cursor: progress; }
+.admin-panel { max-width: 1540px; margin: 0 auto; }
+.admin-panel[hidden] { display: none; }
+.admin-panel.activo:not([hidden]) { animation: cambio-hoja .2s cubic-bezier(.2,.75,.35,1); }
+@keyframes cambio-hoja {
+  from { opacity: .45; transform: translateX(22px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.panel-titulo {
+  min-height: 80px;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 3px solid var(--carbon);
+}
+.panel-titulo h1 {
+  margin: 0;
+  color: var(--carbon);
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: clamp(2.2rem, 4vw, 4.35rem);
+  font-weight: 400;
+  letter-spacing: .015em;
+  line-height: .92;
+  text-transform: uppercase;
+}
+.panel-titulo p { max-width: 760px; margin: 8px 0 15px; color: var(--muted); font-size: .78rem; font-weight: 650; }
+
+.bandeja-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(290px, 1fr);
+  grid-template-areas:
+    "domicilios cierres"
+    "programados cierres";
+  gap: 18px;
+  align-items: stretch;
+}
+.hoja-domicilios { grid-area: domicilios; }
+.hoja-cierres { grid-area: cierres; }
+.hoja-programados-inicio { grid-area: programados; }
+.dos-columnas { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, 1fr); gap: 18px; align-items: start; }
+.domicilios-layout { grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); }
+.hoja {
+  min-width: 0;
+  padding: 18px;
+  background: var(--papel);
+  border: 1px solid var(--borde);
+  border-top: 5px solid var(--amarillo);
+}
+.hoja-fija { position: sticky; top: 90px; }
+.hoja-operaciones { margin-top: 18px; }
+.hoja-titulo {
+  min-height: 44px;
+  margin: -5px -3px 14px;
+  padding: 0 3px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 2px solid var(--carbon);
+}
+.hoja-titulo > div { min-width: 0; display: flex; align-items: center; gap: 9px; }
+.hoja-titulo span {
+  min-width: 30px;
+  color: var(--rojo);
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: 1.42rem;
+  text-align: center;
+}
+.hoja-titulo h2, .formulario-clave h3 {
+  margin: 0;
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: 1.42rem;
+  font-weight: 400;
+  letter-spacing: .025em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.hoja-titulo > b {
+  min-width: 38px;
+  min-height: 34px;
+  padding: 3px 8px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: var(--carbon);
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: 1.35rem;
+  font-weight: 400;
+}
+.hoja-subtitulo { margin-top: 20px; border-bottom-style: dashed; }
+.hoja hr { margin: 24px 0; border: 0; border-top: 1px dashed var(--borde); }
+
+.tickets-pendientes { min-height: 72px; display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 11px; align-content: start; }
+.tickets-pendientes.compactos { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.ticket-pendiente {
+  position: relative;
+  min-width: 0;
+  min-height: 148px;
+  padding: 14px;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 6px;
+  border: 2px solid var(--carbon);
+  background: #fff;
+}
+.ticket-pendiente::before, .ticket-pendiente::after {
+  content: "";
+  position: absolute;
+  bottom: -2px;
+  width: 11px;
+  height: 11px;
+  background: var(--papel);
+  border-top: 2px solid var(--carbon);
+  transform: rotate(45deg);
+}
+.ticket-pendiente::before { left: 24%; }
+.ticket-pendiente::after { right: 24%; }
+.ticket-pendiente .ticket-cabecera { display: flex; justify-content: space-between; gap: 8px; }
+.ticket-pendiente .ticket-cabecera strong { font-size: .78rem; letter-spacing: .04em; text-transform: uppercase; }
+.ticket-pendiente .ticket-cabecera b { color: var(--rojo); font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.38rem; font-weight: 400; }
+.ticket-pendiente .ticket-cliente { overflow: hidden; font-size: .72rem; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
+.ticket-pendiente address { min-height: 34px; overflow: hidden; color: var(--muted); font-size: .66rem; font-style: normal; line-height: 1.35; }
+.ticket-pie { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; align-items: end; }
+.ticket-pie strong { font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.42rem; font-weight: 400; }
+.ticket-pie time { color: var(--verde-oscuro); font-size: .65rem; font-weight: 900; text-transform: uppercase; }
+.ticket-controles { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.ticket-controles select, .ticket-controles input { min-width: 0; }
+.ticket-pendiente.programado { border-color: #777268; background: #fbfaf6; }
+.ticket-pendiente.programado .ticket-cabecera b { color: var(--verde-oscuro); }
+
+.lista-bloqueos { display: grid; gap: 9px; align-content: start; }
+.bloqueo {
+  min-height: 56px;
+  padding: 11px;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--borde);
+  background: #fff;
+  font-size: .69rem;
+  font-weight: 750;
+  line-height: 1.4;
+}
+.bloqueo::before { content: ""; width: 10px; height: 10px; background: var(--rojo); }
+.bloqueo.resuelto::before { background: var(--verde); }
+.atajos-cierre, .botones-apilados { margin-top: 18px; display: grid; gap: 8px; }
+
+.franja-totales {
+  margin-top: 18px;
+  min-height: 78px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(170px, 1.25fr);
+  color: #fff;
+  background: var(--carbon);
+  border-bottom: 5px solid var(--amarillo);
+}
+.franja-totales > div { min-width: 0; padding: 13px 16px; display: grid; gap: 3px; align-content: center; border-right: 1px solid rgba(255,255,255,.16); }
+.franja-totales span { color: rgba(255,255,255,.67); font-size: .59rem; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; }
+.franja-totales strong { font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.65rem; font-weight: 400; }
+.franja-totales .total-general { color: #111; background: var(--amarillo); }
+.franja-totales .total-general span { color: rgba(0,0,0,.65); }
+.franja-totales + .dos-columnas { margin-top: 18px; }
+
+.pista-herramientas {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 2px solid var(--carbon);
+  background: #fff;
+}
+.pista-herramientas button {
+  min-width: 0;
+  min-height: 58px;
+  padding: 10px 13px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-right: 1px solid var(--borde);
+  color: var(--carbon);
+  background: transparent;
+  text-align: left;
+}
+.pista-herramientas button:last-child { border-right: 0; }
+.pista-herramientas button:hover { background: var(--amarillo-suave); }
+.pista-herramientas span { color: var(--rojo); font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.3rem; }
+.pista-herramientas strong { overflow: hidden; font-size: .65rem; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+
+.boton {
+  min-height: 44px;
+  padding: 9px 14px;
+  border: 2px solid var(--carbon);
+  border-radius: 0;
+  color: var(--carbon);
+  background: #fff;
+  font-size: .68rem;
+  font-weight: 900;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+.boton:hover { background: var(--amarillo-suave); }
+.boton.primario { color: #111; border-color: #111; background: var(--amarillo); }
+.boton.primario:hover { color: #fff; background: var(--carbon); }
+.boton.oscuro { color: #fff; background: var(--carbon); }
+.boton.oscuro:hover { color: #111; background: var(--amarillo); }
+.boton.peligro { color: #fff; border-color: var(--rojo); background: var(--rojo); }
+.boton.mini { min-height: 36px; padding: 6px 10px; font-size: .61rem; }
+
+.formulario-admin { display: grid; gap: 14px; }
+.formulario-admin label { display: grid; gap: 5px; color: var(--muted); font-size: .64rem; font-weight: 850; letter-spacing: .04em; text-transform: uppercase; }
+input, select {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid #a9a398;
+  border-radius: 0;
+  color: var(--carbon);
+  background: #fff;
+  font-size: .78rem;
+  font-weight: 700;
+}
+input:focus, select:focus { border-color: var(--carbon); }
+.casilla { grid-template-columns: 22px minmax(0, 1fr) !important; align-items: center; cursor: pointer; }
+.casilla input { width: 22px; min-height: 22px; accent-color: var(--verde); }
+.ayuda-campo, .formulario-admin > p { margin: -4px 0 0; color: var(--muted); font-size: .65rem; line-height: 1.45; }
+
+.lista-personal, .lista-domicilios, .lista-movimientos, .tabla-operaciones { display: grid; gap: 8px; }
+.fila-persona, .fila-movimiento, .fila-domicilio, .fila-operacion {
+  min-width: 0;
+  min-height: 64px;
+  padding: 10px;
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--borde);
+  background: #fff;
+}
+.fila-persona { grid-template-columns: minmax(0, 1fr) auto auto; }
+.fila-persona.inactivo { background: #f2f0eb; opacity: .72; }
+.fila-persona div, .fila-domicilio div { min-width: 0; display: grid; gap: 2px; }
+.fila-persona strong, .fila-domicilio strong { overflow: hidden; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
+.fila-persona span, .fila-domicilio span, .fila-operacion small { color: var(--muted); font-size: .62rem; }
+.estado-chip { padding: 4px 7px; color: var(--verde-oscuro) !important; border: 1px solid currentColor; font-weight: 900; text-transform: uppercase; }
+.fila-domicilio { grid-template-columns: minmax(180px, 1fr) auto minmax(180px, .7fr) auto; }
+.fila-domicilio.asignado { border-color: #8f8611; background: #fffef0; }
+.fila-domicilio .total-fila { color: var(--carbon); font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.3rem; font-weight: 400; }
+.fila-operacion { grid-template-columns: minmax(135px, 1fr) minmax(160px, 1fr) minmax(120px, .65fr) auto; }
+.grupo-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.fila-movimiento { grid-template-columns: auto minmax(0, 1fr) auto; }
+.fila-movimiento > b:first-child { color: var(--verde-oscuro); }
+.fila-movimiento.salida > b:first-child { color: var(--rojo); }
+.fila-movimiento > b { font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.4rem; font-weight: 400; }
+.fila-movimiento div { display: grid; gap: 2px; }
+.fila-movimiento small { color: var(--muted); font-size: .6rem; }
+
+.totales-reporte { display: grid; border: 2px solid var(--carbon); }
+.totales-reporte > div { min-height: 48px; padding: 9px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--borde); background: #fff; }
+.totales-reporte > div:last-child { border: 0; color: #111; background: var(--amarillo); }
+.totales-reporte span { font-size: .68rem; font-weight: 850; text-transform: uppercase; }
+.totales-reporte strong { font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.45rem; font-weight: 400; }
+.formulario-clave { max-width: 420px; }
+.ultima-impresion { margin-top: 16px; min-height: 44px; padding: 11px 14px; display: inline-flex; align-items: center; color: #fff; background: var(--verde-oscuro); font-size: .68rem; font-weight: 900; text-transform: uppercase; }
+
+.tarjetas-sucursales { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.tarjeta-sucursal { min-height: 190px; padding: 18px; display: grid; grid-template-rows: auto 1fr auto; gap: 16px; border: 2px solid var(--carbon); border-top: 7px solid var(--amarillo); background: #fff; }
+.tarjeta-sucursal header { display: flex; justify-content: space-between; gap: 10px; }
+.tarjeta-sucursal h2 { margin: 0; font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.65rem; font-weight: 400; text-transform: uppercase; }
+.tarjeta-sucursal b { min-width: 42px; min-height: 42px; display: grid; place-items: center; color: #fff; background: var(--rojo); font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.35rem; font-weight: 400; }
+.tarjeta-sucursal p { margin: 0; color: var(--muted); font-size: .68rem; line-height: 1.45; }
+
+.vacio { min-height: 62px; margin: 0; padding: 15px; display: grid; place-items: center start; color: var(--muted); border: 1px dashed var(--borde); background: #faf9f4; font-size: .67rem; line-height: 1.45; }
+
+dialog {
+  width: min(430px, calc(100vw - 28px));
+  margin: auto;
+  padding: 0;
+  border: 3px solid var(--carbon);
+  border-radius: 0;
+  color: var(--carbon);
+  background: #fff;
+}
+dialog::backdrop { background: rgba(20,20,20,.72); }
+.dialogo-clave { position: relative; padding: 30px; display: grid; gap: 14px; border-top: 12px solid var(--amarillo); }
+.dialogo-clave h2 { margin: 0; font-family: "Bebas Neue Tocayos", sans-serif; font-size: 2.15rem; font-weight: 400; text-transform: uppercase; }
+.dialogo-clave > p { margin: -4px 0 4px; color: var(--muted); font-size: .7rem; line-height: 1.45; }
+.dialogo-clave label { display: grid; gap: 5px; color: var(--muted); font-size: .64rem; font-weight: 850; text-transform: uppercase; }
+.dialogo-clave input { font-family: ui-monospace, Consolas, monospace; font-size: 1.5rem; letter-spacing: .45em; text-align: center; }
+.dialogo-sello { width: 38px; height: 38px; color: var(--carbon); }
+.cerrar-dialogo { position: absolute; top: 9px; right: 10px; width: 44px; height: 44px; border: 0; color: var(--carbon); background: transparent; font-size: 1.8rem; }
+.error-clave { padding: 9px !important; color: #fff !important; background: var(--rojo); font-weight: 750; }
+
+.admin-toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 40;
+  max-width: min(430px, calc(100vw - 40px));
+  padding: 13px 16px;
+  color: #fff;
+  background: var(--carbon);
+  border: 2px solid var(--amarillo);
+  font-size: .72rem;
+  font-weight: 750;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(12px);
+  transition: opacity .16s ease, transform .16s ease;
+}
+.admin-toast.visible { opacity: 1; transform: translateY(0); }
+.admin-toast.error { border-color: var(--rojo); }
+
+@media (max-width: 1040px) {
+  .admin-topbar { grid-template-columns: 230px minmax(150px, 1fr) auto; }
+  .admin-turno { display: none; }
+  .admin-shell { grid-template-columns: 82px minmax(0, 1fr); }
+  .admin-rail { padding-top: 15px; }
+  .rail-item { min-height: 62px; padding: 8px; grid-template-columns: 1fr; justify-items: center; gap: 3px; text-align: center; }
+  .rail-item span { font-size: .56rem; line-height: 1.1; }
+  .rail-ayuda { display: none; }
+  .bandeja-grid { grid-template-columns: minmax(0, 1.65fr) minmax(250px, 1fr); }
+  .fila-domicilio { grid-template-columns: minmax(140px, 1fr) auto; }
+  .fila-domicilio .asignacion-control { grid-column: 1 / -1; }
+  .fila-operacion { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 760px) {
+  .admin-topbar { position: static; min-height: 58px; grid-template-columns: minmax(0, 1fr) auto; border-bottom-width: 3px; }
+  .admin-marca { padding: 6px 10px; }
+  .admin-marca img { width: 40px; height: 40px; }
+  .admin-marca span { font-size: 1.26rem; }
+  .admin-contexto { display: none; }
+  .boton-topbar { min-height: 55px; padding: 7px 11px; }
+  .boton-topbar span { display: none; }
+  .admin-shell { display: block; }
+  .admin-rail {
+    position: sticky;
+    top: 0;
+    z-index: 18;
+    width: 100%;
+    height: auto;
+    padding: 0;
+    grid-template-columns: repeat(7, minmax(70px, 1fr));
+    grid-template-rows: auto;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .rail-item { min-width: 70px; min-height: 58px; border: 0; }
+  .admin-main { padding: 18px 12px 34px; }
+  .panel-titulo { min-height: 66px; margin-bottom: 14px; align-items: start; }
+  .panel-titulo h1 { font-size: 2.55rem; }
+  .panel-titulo p { margin-bottom: 10px; }
+  .panel-titulo .boton { flex: 0 0 auto; }
+  .bandeja-grid {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "domicilios"
+      "cierres"
+      "programados";
+  }
+  .dos-columnas, .domicilios-layout { grid-template-columns: 1fr; }
+  .hoja { padding: 13px; }
+  .hoja-fija { position: static; }
+  .tickets-pendientes { grid-template-columns: 1fr; }
+  .ticket-pendiente { min-height: 140px; }
+  .franja-totales { grid-template-columns: repeat(2, 1fr); }
+  .franja-totales .total-general { grid-column: 1 / -1; }
+  .pista-herramientas { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pista-herramientas button { border-bottom: 1px solid var(--borde); }
+  .pista-herramientas button:nth-child(2n) { border-right: 0; }
+  .pista-herramientas button:nth-last-child(-n + 2) { border-bottom: 0; }
+  .fila-domicilio, .fila-operacion { grid-template-columns: 1fr; }
+  .fila-domicilio .asignacion-control { grid-column: auto; }
+  .tarjetas-sucursales { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+  .admin-panel.activo:not([hidden]) { animation: none; }
+}

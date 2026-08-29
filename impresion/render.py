@@ -773,9 +773,126 @@ def render_sucursal(ticket):
     return imagen.crop((0, 0, ANCHO, min(y, imagen.height))).convert("1")
 
 
+def render_reporte_administrativo(reporte):
+    datos = reporte.datos or {}
+    imagen = Image.new("L", (ANCHO, 5000), 255)
+    draw = ImageDraw.Draw(imagen)
+    f_titulo = fuente(31, negrita=True)
+    f_subtitulo = fuente(23, negrita=True)
+    f_normal = fuente(20)
+    f_bold = fuente(20, negrita=True)
+    f_total = fuente(28, negrita=True)
+    y = 22
+    logo = _logo_actual()
+    if logo:
+        imagen.paste(logo, ((ANCHO - logo.width) // 2, y))
+        y += logo.height + 10
+    _centrado(draw, y, datos.get("titulo", reporte.get_tipo_display()).upper(), f_titulo)
+    y += 42
+    _centrado(draw, y, reporte.sucursal.nombre.upper(), f_bold)
+    y += 32
+    _centrado(draw, y, timezone.localtime(reporte.creado_en).strftime("%d/%m/%Y %H:%M"), f_normal)
+    y += 36
+    draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
+    y += 18
+
+    def fila(etiqueta, valor, *, total=False):
+        nonlocal y
+        font = f_total if total else f_bold
+        draw.text((MARGEN, y), str(etiqueta), font=font, fill=0)
+        _derecha(draw, y, str(valor), font)
+        y += 43 if total else 32
+
+    tipo = reporte.tipo
+    if tipo == "liquidacion":
+        _centrado(draw, y, str(datos.get("repartidor", "")).upper(), f_subtitulo)
+        y += 38
+        for pedido in datos.get("pedidos", []):
+            draw.text((MARGEN, y), f"TICKET {pedido.get('folio')}", font=f_bold, fill=0)
+            _derecha(draw, y, f"${Decimal(str(pedido.get('total', 0))):,.2f}", f_bold)
+            y += 29
+            forma = "TERMINAL" if pedido.get("terminal") else "EFECTIVO"
+            draw.text((MARGEN, y), forma, font=f_normal, fill=0)
+            y += 27
+            for linea in _ajustar(draw, pedido.get("domicilio", ""), f_normal, ANCHO - 2 * MARGEN):
+                draw.text((MARGEN, y), linea, font=f_normal, fill=0)
+                y += 25
+            draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=1)
+            y += 12
+        fila("PEDIDOS", datos.get("cantidad_pedidos", 0))
+        fila("EFECTIVO", f"${Decimal(str(datos.get('total_efectivo', 0))):,.2f}")
+        fila("TERMINAL", f"${Decimal(str(datos.get('total_terminal', 0))):,.2f}")
+        fila("FONDO", f"${Decimal(str(datos.get('fondo', 0))):,.2f}")
+        fila("A ENTREGAR", f"${Decimal(str(datos.get('total_a_entregar', 0))):,.2f}", total=True)
+    elif tipo in {"parcial", "corte_caja"}:
+        etiquetas = {
+            "comedor": "COMEDOR",
+            "llevar": "LLEVAR",
+            "domicilio": "DOMICILIO",
+            "recoger": "RECOGER",
+        }
+        for canal, etiqueta in etiquetas.items():
+            valor = Decimal(str(datos.get("canales", {}).get(canal, 0)))
+            fila(etiqueta, f"${valor:,.2f}")
+        if tipo == "corte_caja":
+            y += 5
+            draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
+            y += 15
+            fila("VENTAS", f"${Decimal(str(datos.get('total_ventas', 0))):,.2f}")
+            fila("ENTRADAS", f"${Decimal(str(datos.get('entradas', 0))):,.2f}")
+            fila("SALIDAS", f"${Decimal(str(datos.get('salidas', 0))):,.2f}")
+            movimientos = datos.get("movimientos", [])
+            if movimientos:
+                y += 8
+                draw.text((MARGEN, y), "MOVIMIENTOS", font=f_subtitulo, fill=0)
+                y += 34
+                for movimiento in movimientos:
+                    signo = "+" if movimiento.get("tipo") == "entrada" else "-"
+                    for linea in _ajustar(draw, movimiento.get("concepto", ""), f_normal, 360):
+                        draw.text((MARGEN, y), linea, font=f_normal, fill=0)
+                        y += 25
+                    _derecha(
+                        draw,
+                        y - 25,
+                        f"{signo}${Decimal(str(movimiento.get('importe', 0))):,.2f}",
+                        f_bold,
+                    )
+            fila("TOTAL CAJA", f"${Decimal(str(datos.get('total_caja', 0))):,.2f}", total=True)
+        else:
+            fila("TOTAL", f"${Decimal(str(datos.get('total', 0))):,.2f}", total=True)
+    elif tipo == "corte_sucursal":
+        _centrado(draw, y, str(datos.get("sucursal_cliente", "")).upper(), f_subtitulo)
+        y += 39
+        for partida in datos.get("partidas", []):
+            cantidad = Decimal(str(partida.get("cantidad", 0)))
+            concepto = f"{_cantidad_matriz(cantidad)}  {partida.get('nombre', '')}"
+            for linea in _ajustar(draw, concepto, f_normal, 365):
+                draw.text((MARGEN, y), linea, font=f_normal, fill=0)
+                y += 25
+            _derecha(draw, y - 25, f"${Decimal(str(partida.get('importe', 0))):,.2f}", f_bold)
+            y += 6
+        fila("TOTAL", f"${Decimal(str(datos.get('total', 0))):,.2f}", total=True)
+
+    y += 8
+    draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
+    y += 24
+    _centrado(draw, y, "LOS TOCAYOS", f_bold)
+    y += 46
+    return imagen.crop((0, 0, ANCHO, min(y, imagen.height))).convert("1")
+
+
 def guardar_png(imagen, ticket, formato, destino):
     fecha = timezone.localdate().isoformat()
     relativo = Path("impresiones") / fecha / f"ticket-{ticket.folio}-{formato}-{destino}-{datetime.now().strftime('%H%M%S%f')}.png"
+    absoluto = Path(settings.MEDIA_ROOT) / relativo
+    absoluto.parent.mkdir(parents=True, exist_ok=True)
+    imagen.save(absoluto, format="PNG", optimize=True)
+    return relativo.as_posix(), absoluto
+
+
+def guardar_png_reporte(imagen, reporte, formato, destino):
+    fecha = timezone.localdate().isoformat()
+    relativo = Path("impresiones") / fecha / f"reporte-{reporte.id}-{formato}-{destino}-{datetime.now().strftime('%H%M%S%f')}.png"
     absoluto = Path(settings.MEDIA_ROOT) / relativo
     absoluto.parent.mkdir(parents=True, exist_ok=True)
     imagen.save(absoluto, format="PNG", optimize=True)

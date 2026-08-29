@@ -197,11 +197,14 @@ button.operando::after {
 .perfil-acceso small { color: var(--carbon); font-size: .8rem; }
 .perfil-acceso.mesero:hover { transform: none; border-color: transparent; background: var(--amarillo); }
 .perfil-acceso.administrador {
-  color: #6d696b;
-  background: #dedbd4;
+  color: #fff;
+  background: var(--carbon);
   box-shadow: none;
 }
-.perfil-acceso.administrador > span { background: transparent; }
+.perfil-acceso.administrador > span { color: #111; background: var(--amarillo); }
+.perfil-acceso.administrador small { color: rgba(255,255,255,.78); }
+.perfil-acceso.administrador:hover { color: #111; background: var(--amarillo); }
+.perfil-acceso.administrador:hover small { color: var(--carbon); }
 
 main,
 body.en-operacion main,
@@ -518,6 +521,82 @@ body.en-operacion .topbar { padding-right: 306px; }
 .controles-tableta .salir-mesero-cabecera span { font-size: .68rem; font-weight: 900; }
 body.en-ticket .salir-mesero-cabecera { display: none; }
 body.en-ticket .salir-tableta { display: none; }
+
+/* Flujo de sucursales por pantalla y agenda visible al fondo de Domicilio. */
+.rejilla-posiciones.rejilla-sucursales {
+  display: block;
+  overflow: auto;
+}
+.selector-sucursales { min-height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
+.selector-sucursales > header, .pantalla-sucursal-cabecera {
+  min-height: 54px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 3px solid var(--carbon);
+}
+.selector-sucursales > header strong, .pantalla-sucursal-cabecera strong {
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: 1.65rem;
+  font-weight: 400;
+  text-transform: uppercase;
+}
+.selector-sucursales > header small, .pantalla-sucursal-cabecera small { color: var(--muted); font-size: .65rem; font-weight: 800; }
+.selector-sucursales > div { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); align-content: start; gap: 10px; }
+.tarjeta-sucursal-pos {
+  min-height: 190px;
+  padding: 15px;
+  display: grid;
+  grid-template-rows: auto minmax(48px, auto) 1fr auto;
+  gap: 10px;
+  border: 2px solid var(--carbon);
+  border-top: 7px solid var(--amarillo);
+  border-radius: 0;
+  color: var(--carbon);
+  background: #fff;
+  text-align: left;
+}
+.tarjeta-sucursal-pos:hover { border-top-color: var(--rojo); background: var(--amarillo-suave); }
+.sucursal-pos-estado { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: .6rem; font-weight: 900; text-transform: uppercase; }
+.sucursal-pos-estado i { width: 8px; height: 8px; background: var(--verde); }
+.tarjeta-sucursal-pos strong { font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.65rem; font-weight: 400; line-height: 1; text-transform: uppercase; }
+.sucursal-pos-conteo { display: grid; grid-template-columns: auto 1fr; align-items: end; gap: 8px; }
+.sucursal-pos-conteo b { color: var(--rojo); font-family: "Bebas Neue Tocayos", sans-serif; font-size: 3.4rem; font-weight: 400; line-height: .8; }
+.sucursal-pos-conteo small { color: var(--muted); font-size: .63rem; font-weight: 850; text-transform: uppercase; }
+.sucursal-pos-accion { padding-top: 8px; border-top: 1px solid var(--carbon); font-size: .65rem; font-weight: 900; text-transform: uppercase; }
+.pantalla-sucursal { min-height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 10px; }
+.pantalla-sucursal-cabecera { justify-content: flex-start; }
+.pantalla-sucursal-cabecera > div { min-width: 0; display: grid; gap: 2px; }
+.volver-sucursales { min-height: 42px; }
+.casillas-sucursal { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); grid-auto-rows: minmax(104px, auto); align-content: start; gap: 8px; overflow-y: auto; }
+
+.pedidos-programados-pos { grid-column: 1 / -1; margin-top: 12px; padding-top: 12px; border-top: 3px dashed var(--carbon); }
+.pedidos-programados-pos > header { min-height: 40px; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.pedidos-programados-pos > header strong { font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.35rem; font-weight: 400; text-transform: uppercase; }
+.pedidos-programados-pos > header small { color: var(--muted); font-size: .61rem; font-weight: 750; }
+.pedidos-programados-pos > div { display: grid; grid-template-columns: repeat(auto-fill, minmax(175px, 1fr)); gap: 7px; }
+.programado-pos { min-height: 94px; padding: 9px; display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; border: 1px solid #8f8a80; background: #f7f5ee; }
+.programado-pos > span { grid-column: 1 / -1; color: var(--verde-oscuro); font-size: .57rem; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+.programado-pos strong { overflow: hidden; font-size: .67rem; text-overflow: ellipsis; white-space: nowrap; }
+.programado-pos small { color: var(--muted); font-size: .58rem; }
+.programado-pos b { grid-column: 2; grid-row: 2 / 4; align-self: end; font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.25rem; font-weight: 400; }
+
+.dialogo-clave-pos { border-top: 10px solid var(--amarillo); border-radius: 0; }
+.dialogo-clave-pos h2 { margin: 2px 0 0; font-family: "Bebas Neue Tocayos", sans-serif; font-size: 2.15rem; font-weight: 400; text-transform: uppercase; }
+.clave-pos-sello { width: 42px; height: 42px; display: grid; place-items: center; border: 2px solid var(--carbon); color: var(--carbon); background: var(--amarillo); }
+.clave-pos-sello svg { width: 27px; height: 27px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.clave-pos-ayuda { margin: -7px 0 0; color: var(--muted); font-size: .72rem; line-height: 1.45; }
+.dialogo-clave-pos input { min-height: 54px; font-family: ui-monospace, Consolas, monospace; font-size: 1.55rem; letter-spacing: .45em; text-align: center; }
+.error-clave-pos { margin: -5px 0 0; padding: 9px; color: #fff; background: var(--rojo); font-size: .68rem; font-weight: 800; }
+
+@media (max-width: 700px) {
+  .selector-sucursales > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tarjeta-sucursal-pos { min-height: 155px; }
+  .casillas-sucursal { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .pedidos-programados-pos > header small { display: none; }
+}
 
 .ticket-top {
   min-height: 54px;

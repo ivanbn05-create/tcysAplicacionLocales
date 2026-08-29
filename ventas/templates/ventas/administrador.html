@@ -1,0 +1,238 @@
+{% load static %}
+<!doctype html>
+<html lang="es-MX">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#ffed00">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Administrador · Los Tocayos</title>
+  <link rel="icon" href="{% static 'ventas/brand/logoactual.jpeg' %}" type="image/jpeg">
+  <link rel="stylesheet" href="{% static 'ventas/admin.css' %}?v={{ asset_version }}">
+</head>
+<body><!--
+THESIS: Administrador es una bandeja de decisiones del turno; rehúsa el dashboard de módulos y métricas sin prioridad.
+OWN-WORLD: Cabecera amarilla, riel carbón, tickets de papel, reglas finas, Bebas Neue y Montserrat conservan el pase de cocina de Los Tocayos.
+STORY: Validar clave → resolver domicilios y programados → gestionar personal y movimientos → imprimir reportes y cerrar el turno.
+FIRST VIEWPORT: Cabecera de 62 px, riel lateral estable y bandeja 2:1; domicilios sin repartidor dominan la izquierda y bloqueos de cierre la derecha.
+FORM: Bandeja de pendientes, candidato 5 de 7, semilla 63e84054; comp `.impeccable/mocks/decision/admin-bandeja-pendientes.png` aprobado.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+-->
+  <form class="csrf-holder" aria-hidden="true">{% csrf_token %}</form>
+
+  <header class="admin-topbar">
+    <a class="admin-marca" href="{% url 'ventas:inicio' %}" aria-label="Volver al punto de venta">
+      <img src="{% static 'ventas/brand/logoactual.jpeg' %}" alt="">
+      <span>Administrador</span>
+    </a>
+    <div class="admin-contexto">
+      <span>Sucursal</span>
+      <strong>{{ sucursal.nombre }}</strong>
+    </div>
+    <div class="admin-turno">
+      <span>Turno en servicio</span>
+      <strong id="turno-inicio">Cargando…</strong>
+    </div>
+    <a class="boton-topbar" href="{% url 'ventas:inicio' %}" aria-label="Volver al POS">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></svg>
+      <span>Volver al POS</span>
+    </a>
+  </header>
+
+  <div class="admin-shell">
+    <nav class="admin-rail" aria-label="Secciones de administrador">
+      <button class="rail-item activo" data-panel="inicio" type="button" aria-current="page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg><span>Inicio</span>
+      </button>
+      <button class="rail-item" data-panel="personal" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M2.5 20a5.5 5.5 0 0 1 11 0M13 20a4 4 0 0 1 8 0"/></svg><span>Personal</span>
+      </button>
+      <button class="rail-item" data-panel="domicilios" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 16h11l3-6h-6L8 7H5M6 16a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zm10 0a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM18 3c-1.7 0-3 1.3-3 3 0 2.3 3 4.7 3 4.7S21 8.3 21 6c0-1.7-1.3-3-3-3z"/></svg><span>Domicilios</span>
+      </button>
+      <button class="rail-item" data-panel="programados" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="1"/><path d="M7 2v6M17 2v6M3 10h18M8 14h3M13 14h3M8 18h3"/></svg><span>Programados</span>
+      </button>
+      <button class="rail-item" data-panel="movimientos" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h14M14 3l4 4-4 4M20 17H6M10 13l-4 4 4 4"/></svg><span>Entradas / salidas</span>
+      </button>
+      <button class="rail-item" data-panel="reportes" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5zM15 3v4h4M8 11h8M8 15h8M8 19h5"/></svg><span>Reportes y corte</span>
+      </button>
+      <button class="rail-item" data-panel="sucursales" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h18v12H3zM2 5h20l-2 4H4zM6 21v-7h5v7M15 13h3v4h-3M4 9c1.3 2 2.7 2 4 0 1.3 2 2.7 2 4 0 1.3 2 2.7 2 4 0 1.3 2 2.7 2 4 0"/></svg><span>Sucursales</span>
+      </button>
+      <div class="rail-ayuda">
+        <strong>Clave por acción</strong>
+        <span>La autorización no se conserva en pantalla.</span>
+      </div>
+    </nav>
+
+    <main class="admin-main" id="administrador-app" aria-busy="false">
+      <section class="admin-panel activo" data-admin-panel="inicio">
+        <header class="panel-titulo">
+          <div><h1>Bandeja de pendientes</h1><p>Resuelve lo que necesita una decisión antes del corte.</p></div>
+          <button class="boton secundario" id="actualizar-resumen" type="button">Actualizar</button>
+        </header>
+
+        <div class="bandeja-grid">
+          <section class="hoja hoja-principal hoja-domicilios">
+            <header class="hoja-titulo"><div><span>01</span><h2>Domicilios sin repartidor</h2></div><b id="conteo-domicilios">0</b></header>
+            <div id="inicio-domicilios" class="tickets-pendientes"></div>
+          </section>
+
+          <aside class="hoja hoja-cierres">
+            <header class="hoja-titulo"><div><span>02</span><h2>Cierres pendientes</h2></div></header>
+            <div id="inicio-bloqueos" class="lista-bloqueos"></div>
+            <div class="atajos-cierre">
+              <button class="boton primario" data-accion="reporte-parcial" type="button">Imprimir reporte parcial</button>
+              <button class="boton oscuro" data-panel-ir="reportes" type="button">Revisar corte de caja</button>
+            </div>
+          </aside>
+
+          <section class="hoja hoja-programados-inicio">
+            <header class="hoja-titulo"><div><span>03</span><h2>Pedidos programados</h2></div><b id="conteo-programados">0</b></header>
+            <div id="inicio-programados" class="tickets-pendientes compactos"></div>
+          </section>
+        </div>
+
+        <nav class="pista-herramientas" aria-label="Herramientas administrativas">
+          <button data-panel-ir="personal" type="button"><span>01</span><strong>Personal operativo</strong></button>
+          <button data-panel-ir="domicilios" type="button"><span>02</span><strong>Control de domicilios</strong></button>
+          <button data-panel-ir="movimientos" type="button"><span>03</span><strong>Entradas y salidas</strong></button>
+          <button data-panel-ir="sucursales" type="button"><span>04</span><strong>Corte de sucursales</strong></button>
+        </nav>
+      </section>
+
+      <section class="admin-panel" data-admin-panel="personal" hidden>
+        <header class="panel-titulo"><div><h1>Personal operativo</h1><p>Meseros para identificar comandas y repartidores para liquidar domicilios.</p></div></header>
+        <div class="dos-columnas">
+          <section class="hoja">
+            <header class="hoja-titulo"><div><span>01</span><h2>Usuarios registrados</h2></div><button class="boton mini" id="nuevo-usuario" type="button">Nuevo</button></header>
+            <div id="lista-usuarios" class="lista-personal"></div>
+          </section>
+          <section class="hoja">
+            <header class="hoja-titulo"><div><span>02</span><h2 id="titulo-form-usuario">Nuevo usuario</h2></div></header>
+            <form id="form-usuario" class="formulario-admin">
+              <input id="usuario-id" type="hidden">
+              <label>Nombre<input id="usuario-nombre" maxlength="100" autocomplete="off" required></label>
+              <label>Función<select id="usuario-tipo" required><option value="mesero">Mesero</option><option value="repartidor">Repartidor</option></select></label>
+              <label>Código de 4 dígitos<input id="usuario-clave" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="new-password" required></label>
+              <label class="casilla"><input id="usuario-activo" type="checkbox" checked><span>Usuario activo</span></label>
+              <p class="ayuda-campo">Al editar, deja el código vacío para conservar el actual.</p>
+              <button class="boton primario" type="submit">Guardar usuario</button>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section class="admin-panel" data-admin-panel="domicilios" hidden>
+        <header class="panel-titulo"><div><h1>Control de domicilios</h1><p>Asigna pedidos procesados y genera el total de cada repartidor.</p></div></header>
+        <div class="dos-columnas domicilios-layout">
+          <section class="hoja">
+            <header class="hoja-titulo"><div><span>01</span><h2>Pedidos del turno</h2></div></header>
+            <div id="lista-domicilios" class="lista-domicilios"></div>
+          </section>
+          <section class="hoja hoja-fija">
+            <header class="hoja-titulo"><div><span>02</span><h2>Total de repartidor</h2></div></header>
+            <form id="form-liquidacion" class="formulario-admin">
+              <label>Repartidor<select id="liquidacion-repartidor" required></select></label>
+              <label>Fondo de cambio, opcional<input id="liquidacion-fondo" type="number" min="0" step="0.01" value="0" inputmode="decimal"></label>
+              <p>Incluye todos sus domicilios pendientes y separa efectivo de terminal.</p>
+              <button class="boton primario" type="submit">Imprimir total</button>
+            </form>
+          </section>
+        </div>
+        <section class="hoja hoja-operaciones">
+          <header class="hoja-titulo"><div><span>03</span><h2>Reasignar, descontar o cancelar</h2></div></header>
+          <div id="lista-operaciones-ticket" class="tabla-operaciones"></div>
+        </section>
+      </section>
+
+      <section class="admin-panel" data-admin-panel="programados" hidden>
+        <header class="panel-titulo"><div><h1>Pedidos programados</h1><p>Se activan por fecha, al abrir el programa ese día, en la primera casilla de domicilio libre.</p></div></header>
+        <div class="dos-columnas">
+          <section class="hoja">
+            <header class="hoja-titulo"><div><span>01</span><h2>Domicilios procesados</h2></div></header>
+            <div id="lista-programables" class="tickets-pendientes"></div>
+          </section>
+          <section class="hoja">
+            <header class="hoja-titulo"><div><span>02</span><h2>Agenda futura</h2></div></header>
+            <div id="lista-programados" class="tickets-pendientes"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="admin-panel" data-admin-panel="movimientos" hidden>
+        <header class="panel-titulo"><div><h1>Entradas y salidas</h1><p>Registra movimientos de efectivo que formarán parte del siguiente corte.</p></div></header>
+        <div class="dos-columnas">
+          <section class="hoja">
+            <header class="hoja-titulo"><div><span>01</span><h2>Nuevo movimiento</h2></div></header>
+            <form id="form-movimiento" class="formulario-admin">
+              <label>Tipo<select id="movimiento-tipo" required><option value="entrada">Entrada +</option><option value="salida">Salida −</option></select></label>
+              <label>Concepto<input id="movimiento-concepto" maxlength="180" required placeholder="Ej. Cambio inicial"></label>
+              <label>Importe<input id="movimiento-importe" type="number" min="0.01" step="0.01" inputmode="decimal" required></label>
+              <button class="boton primario" type="submit">Registrar movimiento</button>
+            </form>
+          </section>
+          <section class="hoja">
+            <header class="hoja-titulo"><div><span>02</span><h2>Movimientos del turno</h2></div></header>
+            <div id="lista-movimientos" class="lista-movimientos"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="admin-panel" data-admin-panel="reportes" hidden>
+        <header class="panel-titulo"><div><h1>Reportes y corte de caja</h1><p>Comprueba que no queden cobros, asignaciones ni liquidaciones pendientes.</p></div></header>
+        <section class="franja-totales" aria-label="Totales de venta del turno">
+          <div><span>Comedor</span><strong id="total-comedor">$0.00</strong></div>
+          <div><span>Llevar</span><strong id="total-llevar">$0.00</strong></div>
+          <div><span>Domicilio</span><strong id="total-domicilio">$0.00</strong></div>
+          <div><span>Recoger</span><strong id="total-recoger">$0.00</strong></div>
+          <div class="total-general"><span>Total</span><strong id="total-general">$0.00</strong></div>
+        </section>
+        <div class="dos-columnas">
+          <section class="hoja">
+            <header class="hoja-titulo"><div><span>01</span><h2>Acciones de cierre</h2></div></header>
+            <div class="botones-apilados">
+              <button class="boton primario" data-accion="reporte-parcial" type="button">Imprimir reporte parcial</button>
+              <button class="boton oscuro" data-accion="corte-caja" type="button">Realizar corte de caja</button>
+            </div>
+          </section>
+          <section class="hoja">
+            <header class="hoja-titulo"><div><span>02</span><h2>Requisitos del corte</h2></div></header>
+            <div id="bloqueos-reporte" class="lista-bloqueos"></div>
+            <hr>
+            <form id="form-clave" class="formulario-admin formulario-clave">
+              <h3>Cambiar clave de administrador</h3>
+              <label>Nueva clave<input id="nueva-clave" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="new-password" required></label>
+              <button class="boton secundario" type="submit">Cambiar clave</button>
+            </form>
+          </section>
+        </div>
+        <a id="ultima-impresion" class="ultima-impresion" href="#" target="_blank" rel="noopener" hidden>Ver la última vista previa generada</a>
+      </section>
+
+      <section class="admin-panel" data-admin-panel="sucursales" hidden>
+        <header class="panel-titulo"><div><h1>Corte de sucursales</h1><p>Agrupa todas las partidas procesadas de una sucursal y las da por cobradas.</p></div></header>
+        <div id="lista-sucursales" class="tarjetas-sucursales"></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="dialogo-clave" aria-labelledby="dialogo-clave-titulo">
+    <form id="form-dialogo-clave" class="dialogo-clave">
+      <button class="cerrar-dialogo" id="cancelar-clave" type="button" aria-label="Cancelar">×</button>
+      <svg class="dialogo-sello" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1"/><circle cx="16" cy="8" r="1"/><circle cx="8" cy="16" r="1"/><circle cx="16" cy="16" r="1"/></svg>
+      <h2 id="dialogo-clave-titulo">Autorizar acción</h2>
+      <p id="dialogo-clave-ayuda">Ingresa la clave de administrador.</p>
+      <label>Clave de 4 dígitos<input id="clave-administrador" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" required></label>
+      <p id="error-clave" class="error-clave" role="alert" hidden></p>
+      <button class="boton primario" type="submit">Confirmar</button>
+    </form>
+  </dialog>
+
+  <div id="admin-toast" class="admin-toast" role="status" aria-live="polite" aria-atomic="true"></div>
+  <script src="{% static 'ventas/admin.js' %}?v={{ asset_version }}" defer></script>
+</body>
+</html>

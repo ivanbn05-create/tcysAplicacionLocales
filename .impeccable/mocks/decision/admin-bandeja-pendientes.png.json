@@ -1,0 +1,10 @@
+{
+  "approved": true,
+  "approved_at": "2026-08-28",
+  "seed": "63e84054",
+  "scope": "surface",
+  "mode": "operate",
+  "option_id": "bandeja-pendientes",
+  "prompt_file": "admin-bandeja-pendientes.prompt.txt",
+  "reference": "../pos-pase-cocina-b-hibrida.png"
+}

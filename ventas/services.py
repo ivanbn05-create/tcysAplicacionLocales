@@ -608,6 +608,8 @@ def procesar_ticket(ticket):
 @transaction.atomic
 def cobrar_ticket(ticket, forma_pago, importe_recibido=None):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    if ticket.canal == Mesa.Canal.DOMICILIO:
+        raise ErrorVenta("Los domicilios se liquidan mediante su repartidor desde Administrador.")
     if ticket.estado not in [Ticket.Estado.PROCESADO, Ticket.Estado.COBRAR]:
         raise ErrorVenta("Primero procesa la orden.")
     if forma_pago not in Ticket.FormaPago.values:
@@ -657,22 +659,33 @@ def completar_ticket_sucursal(ticket):
 
 
 @transaction.atomic
-def cancelar_ticket(ticket):
+def cancelar_ticket(ticket, permitir_procesado=False):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
-    if ticket.estado != Ticket.Estado.ABIERTO:
-        raise ErrorVenta("Sólo se puede cancelar una orden que todavía está abierta.")
-    ticket.partidas.all().delete()
-    ticket.modificadores.all().delete()
-    _limpiar_cliente_ticket(ticket)
-    ticket.comentario_general = ""
-    ticket.comentarios_generales = []
-    ticket.salsas_verduras = []
-    ticket.tipo_entrega = Ticket.TipoEntrega.APROXIMADA
-    ticket.entrega_aproximada = None
-    ticket.terminal = False
-    ticket.paga_con = None
-    ticket.captura_por_nombres = False
-    ticket.nombres_comensales = {}
+    estados_permitidos = [Ticket.Estado.ABIERTO]
+    if permitir_procesado:
+        estados_permitidos.extend([Ticket.Estado.PROCESADO, Ticket.Estado.COBRAR, Ticket.Estado.PROGRAMADO])
+    if ticket.estado not in estados_permitidos:
+        raise ErrorVenta("El pedido ya no puede cancelarse.")
+    # Una orden abierta aún no es un comprobante operativo: se limpia como antes.
+    # Una orden procesada conserva sus partidas para auditoría, aunque queda fuera
+    # de reportes y cortes por su estado cancelado.
+    if ticket.estado == Ticket.Estado.ABIERTO:
+        ticket.partidas.all().delete()
+        ticket.modificadores.all().delete()
+        _limpiar_cliente_ticket(ticket)
+        ticket.comentario_general = ""
+        ticket.comentarios_generales = []
+        ticket.salsas_verduras = []
+        ticket.tipo_entrega = Ticket.TipoEntrega.APROXIMADA
+        ticket.entrega_aproximada = None
+        ticket.terminal = False
+        ticket.paga_con = None
+        ticket.captura_por_nombres = False
+        ticket.nombres_comensales = {}
+        ticket.fecha_programada = None
+        ticket.repartidor = None
+    ticket.fecha_programada = None
+    ticket.repartidor = None
     ticket.estado = Ticket.Estado.CANCELADO
     ticket.cancelado_en = timezone.now()
     ticket.save(
@@ -693,6 +706,8 @@ def cancelar_ticket(ticket):
             "entrega_aproximada",
             "terminal",
             "paga_con",
+            "fecha_programada",
+            "repartidor",
             "captura_por_nombres",
             "nombres_comensales",
             "estado",

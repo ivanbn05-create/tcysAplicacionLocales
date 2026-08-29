@@ -54,7 +54,11 @@
     colaEdicion: Promise.resolve(),
     errorEdicion: null,
     tickets: {},
+    programados: [],
     ticket: null,
+    operador: null,
+    sucursalSeleccionada: null,
+    resolucionClave: null,
     operando: false,
     resultadosClientes: [],
     temporizadorCliente: null,
@@ -121,6 +125,64 @@
     if (!error) toast.temporizador = setTimeout(cerrarToast, 3300);
   }
 
+  function pedirClavePos(titulo, ayuda) {
+    const dialogo = $("#dialogo-clave-pos");
+    $("#titulo-clave-pos").textContent = titulo;
+    $("#ayuda-clave-pos").textContent = ayuda;
+    $("#clave-pos").value = "";
+    $("#error-clave-pos").hidden = true;
+    dialogo.showModal();
+    setTimeout(() => $("#clave-pos").focus(), 40);
+    return new Promise(resolve => { estado.resolucionClave = resolve; });
+  }
+
+  function resolverClavePos(clave) {
+    const dialogo = $("#dialogo-clave-pos");
+    if (dialogo.open) dialogo.close();
+    const resolver = estado.resolucionClave;
+    estado.resolucionClave = null;
+    resolver?.(clave);
+  }
+
+  async function entrarComoMesero({ mostrarPantalla = true } = {}) {
+    const clave = await pedirClavePos("Código de mesero", "Ingresa el código de 4 dígitos asignado a tu nombre.");
+    if (!clave) return false;
+    try {
+      const datos = await api("/api/operador/identificar/", {
+        method: "POST",
+        body: JSON.stringify({ clave }),
+      });
+      estado.operador = datos.operador;
+      if (mostrarPantalla) {
+        $("#pantalla-acceso")?.classList.add("oculto");
+        $("main").classList.remove("oculto");
+        document.body.classList.add("en-operacion");
+        document.body.classList.remove("en-ticket");
+        await cargarEstado(estado.canal === "sucursales");
+        programarSincronizacionSucursales();
+      }
+      toast(`Turno identificado: ${datos.operador.nombre}.`);
+      return true;
+    } catch (error) {
+      toast(error.message, true);
+      return false;
+    }
+  }
+
+  async function abrirAdministrador() {
+    const clave = await pedirClavePos("Clave de administrador", "Autoriza el acceso a la gestión del turno de esta sucursal.");
+    if (!clave) return;
+    try {
+      const datos = await api("/api/administrador/acceso/", {
+        method: "POST",
+        body: JSON.stringify({ clave_administrador: clave }),
+      });
+      window.location.assign(datos.destino || "/administrador/");
+    } catch (error) {
+      toast(error.message, true);
+    }
+  }
+
   function bloquear(valor) {
     estado.operando = valor;
     document.body.setAttribute("aria-busy", String(valor));
@@ -151,7 +213,6 @@
       estado.botonOperacion = null;
     }
     $$("button").forEach(boton => boton.disabled = valor);
-    $(".perfil-acceso.administrador")?.setAttribute("disabled", "");
     if (!valor && estado.ticket) {
       renderMenu();
       renderComanda();
@@ -166,6 +227,7 @@
       }
       const datos = await api("/api/estado/");
       estado.tickets = datos.tickets;
+      estado.programados = datos.programados || [];
       renderPosiciones();
     } catch (error) {
       toast(error.message, true);
@@ -210,11 +272,32 @@
         grupos.get(posicion.cliente_sucursal_id).posiciones.push(posicion);
       }
       contenedor.className = "rejilla-posiciones rejilla-sucursales";
-      contenedor.innerHTML = [...grupos.values()].map(grupo => `
-        <section class="columna-sucursal">
-          <header title="${escapar(grupo.nombre)}">${escapar(grupo.nombre)}</header>
-          <div>${grupo.posiciones.map(posicion => renderTarjeta(posicion, { tipoVisible: "Pedido" })).join("")}</div>
-        </section>`).join("") || '<p class="vacio">No hay sucursales configuradas.</p>';
+      const grupoSeleccionado = estado.sucursalSeleccionada ? grupos.get(estado.sucursalSeleccionada) : null;
+      if (grupoSeleccionado) {
+        const ocupadas = grupoSeleccionado.posiciones.filter(posicion => estado.tickets[posicion.id]).length;
+        contenedor.innerHTML = `<section class="pantalla-sucursal">
+          <header class="pantalla-sucursal-cabecera">
+            <button class="boton volver-sucursales" data-volver-sucursales type="button">← Sucursales</button>
+            <div><strong>${escapar(grupoSeleccionado.nombre)}</strong><small>${ocupadas} pedido${ocupadas === 1 ? "" : "s"} activo${ocupadas === 1 ? "" : "s"} · ${grupoSeleccionado.posiciones.length} casillas</small></div>
+          </header>
+          <div class="casillas-sucursal">${grupoSeleccionado.posiciones.map(posicion => renderTarjeta(posicion, { tipoVisible: "Pedido" })).join("")}</div>
+        </section>`;
+      } else {
+        estado.sucursalSeleccionada = null;
+        contenedor.innerHTML = `<section class="selector-sucursales">
+          <header><strong>Sucursales</strong><small>Selecciona una para abrir sus casillas</small></header>
+          <div>${[...grupos.entries()].map(([id, grupo]) => {
+            const ocupadas = grupo.posiciones.filter(posicion => estado.tickets[posicion.id]).length;
+            const procesadas = grupo.posiciones.filter(posicion => ["procesado", "cobrar"].includes(estado.tickets[posicion.id]?.estado)).length;
+            return `<button class="tarjeta-sucursal-pos" data-sucursal-id="${id}" type="button" aria-label="Abrir ${escapar(grupo.nombre)}. ${ocupadas} pedidos activos.">
+              <span class="sucursal-pos-estado"><i aria-hidden="true"></i>${procesadas ? `${procesadas} por cerrar` : "Sin cierres urgentes"}</span>
+              <strong>${escapar(grupo.nombre)}</strong>
+              <span class="sucursal-pos-conteo"><b>${ocupadas}</b><small>Pedidos activos</small></span>
+              <span class="sucursal-pos-accion">Ver ${grupo.posiciones.length} casillas →</span>
+            </button>`;
+          }).join("")}</div>
+        </section>` || '<p class="vacio">No hay sucursales configuradas.</p>';
+      }
       return;
     }
     const secundario = estado.canal === "comedor" ? "llevar" : (estado.canal === "domicilio" ? "recoger" : "");
@@ -226,10 +309,19 @@
     }
     const auxiliares = renderTarjetas(secundario);
     contenedor.className = "rejilla-posiciones rejilla-dividida";
+    const programados = estado.canal === "domicilio" && estado.programados.length
+      ? `<section class="pedidos-programados-pos">
+          <header><strong>Programados</strong><small>Se activarán por fecha en la primera casilla libre</small></header>
+          <div>${estado.programados.map(ticket => `<article class="programado-pos">
+            <span>Programado</span><strong>#${escapar(ticket.folio)} · ${escapar(ticket.cliente_nombre || "Cliente")}</strong>
+            <small>${escapar(ticket.fecha_programada)}${ticket.entrega_aproximada ? ` · ${escapar(ticket.entrega_aproximada)}` : ""}</small><b>${dinero(ticket.total)}</b>
+          </article>`).join("")}</div>
+        </section>`
+      : "";
     contenedor.innerHTML = `
       <section class="grupo-posiciones grupo-principal">
         <header><strong>${escapar(nombresCanal[estado.canal])}</strong><small>Pedidos activos y posiciones disponibles</small></header>
-        <div>${principales || '<p class="vacio">No hay posiciones configuradas.</p>'}</div>
+        <div>${principales || '<p class="vacio">No hay posiciones configuradas.</p>'}</div>${programados}
       </section>
       <section class="grupo-posiciones grupo-auxiliar">
         <header><strong>${escapar(nombresCanal[secundario])}</strong><small>${secundario === "recoger" ? "Nombre y celular" : "Nombre del cliente"}</small></header>
@@ -249,6 +341,7 @@
 
   async function cambiarCanal(canal) {
     estado.canal = canal;
+    estado.sucursalSeleccionada = null;
     $$(".canal").forEach(b => {
       const activo = b.dataset.canal === canal;
       b.classList.toggle("activo", activo);
@@ -261,6 +354,10 @@
 
   async function abrirPosicion(mesaId) {
     if (estado.operando) return;
+    if (!estado.operador) {
+      const identificado = await entrarComoMesero({ mostrarPantalla: false });
+      if (!identificado) return;
+    }
     bloquear(true);
     try {
       const datos = await api("/api/tickets/abrir/", { method: "POST", body: JSON.stringify({ mesa_id: mesaId }) });
@@ -1059,12 +1156,13 @@
     const abierto = estado.ticket.estado === "abierto";
     const cobrable = ["procesado", "cobrar"].includes(estado.ticket.estado);
     const esSucursal = estado.ticket.canal === "sucursales";
+    const esDomicilio = estado.ticket.canal === "domicilio";
     $("#procesar").textContent = esSucursal ? "Procesar e imprimir" : "Procesar orden";
     $("#cobrar").textContent = esSucursal ? "Completar pedido" : "Cobrar";
     $("#procesar").classList.toggle("oculto", !abierto);
-    $("#cancelar-orden").classList.toggle("oculto", !abierto || !permisos.cancelar);
-    $("#cobrar").classList.toggle("oculto", !cobrable || !permisos.cobrar);
-    $("#reimprimir").classList.toggle("oculto", abierto || !permisos.reimprimir);
+    $("#cancelar-orden").classList.toggle("oculto", !abierto && !cobrable);
+    $("#cobrar").classList.toggle("oculto", !cobrable || esDomicilio);
+    $("#reimprimir").classList.toggle("oculto", abierto);
     $$(".persona, .opcion-preparacion, .comanda-papel button, .producto, .fila-partida-sucursal").forEach(b => {
       b.disabled = !abierto || b.classList.contains("no-disponible-hoy");
     });
@@ -1544,7 +1642,7 @@
     finally { bloquear(false); }
   }
 
-  async function cobrar(formaPago, importeRecibido, imprimirTicket) {
+  async function cobrar(formaPago, importeRecibido, imprimirTicket, claveAdministrador) {
     bloquear(true);
     try {
       const datos = await api(`/api/tickets/${estado.ticket.id}/cobrar/`, {
@@ -1552,10 +1650,10 @@
           forma_pago: formaPago,
           importe_recibido: importeRecibido,
           imprimir_ticket: imprimirTicket,
+          clave_administrador: claveAdministrador,
         }),
       });
       estado.ticket = datos.ticket;
-      $("#dialogo-cobro").close();
       resumirImpresiones(datos.impresiones, imprimirTicket ? "Cobro registrado." : "Cobro registrado sin imprimir ticket.");
       await volver(true);
     } catch (error) { toast(error.message, true); }
@@ -1563,9 +1661,14 @@
   }
 
   async function completarSucursal() {
+    const claveAdministrador = await pedirClavePos("Completar pedido de sucursal", "Confirma con la clave de administrador que el pedido puede cerrarse.");
+    if (!claveAdministrador) return;
     bloquear(true);
     try {
-      await api(`/api/tickets/${estado.ticket.id}/completar-sucursal/`, { method: "POST", body: "{}" });
+      await api(`/api/tickets/${estado.ticket.id}/completar-sucursal/`, {
+        method: "POST",
+        body: JSON.stringify({ clave_administrador: claveAdministrador }),
+      });
       toast("Pedido de sucursal completado; la posición quedó disponible.");
       await volver(true);
     } catch (error) { toast(error.message, true); }
@@ -1602,10 +1705,18 @@
 
   async function cancelarOrden() {
     if (!estado.ticket || !window.confirm("¿Cancelar esta orden? Se borrarán todos los productos y la posición quedará disponible.")) return;
+    let claveAdministrador = "";
+    if (estado.ticket.estado !== "abierto") {
+      claveAdministrador = await pedirClavePos("Cancelar pedido procesado", "Sólo el administrador puede cancelar un pedido después de imprimirlo.");
+      if (!claveAdministrador) return;
+    }
     clearTimeout(estado.temporizadorNombre);
     bloquear(true);
     try {
-      await api(`/api/tickets/${estado.ticket.id}/cancelar/`, { method: "POST", body: "{}" });
+      await api(`/api/tickets/${estado.ticket.id}/cancelar/`, {
+        method: "POST",
+        body: JSON.stringify({ clave_administrador: claveAdministrador }),
+      });
       toast("Orden cancelada; la posición quedó disponible.");
       await volver(true);
     } catch (error) {
@@ -1636,6 +1747,9 @@
     document.body.classList.remove("en-operacion");
     clearInterval(estado.temporizadorSucursales);
     estado.temporizadorSucursales = null;
+    estado.operador = null;
+    try { await api("/api/operador/salir/", { method: "POST", body: "{}" }); }
+    catch (error) { toast(error.message, true); }
   }
 
   async function salirModoTableta() {
@@ -1668,19 +1782,39 @@
   }
 
   $$(".canal").forEach(boton => boton.addEventListener("click", () => cambiarCanal(boton.dataset.canal)));
-  $("#entrar-mesero")?.addEventListener("click", () => {
-    $("#pantalla-acceso").classList.add("oculto");
-    $("main").classList.remove("oculto");
-    document.body.classList.add("en-operacion");
-    document.body.classList.remove("en-ticket");
-    cargarEstado(estado.canal === "sucursales");
-    programarSincronizacionSucursales();
+  $("#entrar-mesero")?.addEventListener("click", () => entrarComoMesero());
+  $("#entrar-administrador")?.addEventListener("click", abrirAdministrador);
+  $("#form-clave-pos")?.addEventListener("submit", evento => {
+    evento.preventDefault();
+    const clave = $("#clave-pos").value.trim();
+    if (!/^\d{4}$/.test(clave)) {
+      $("#error-clave-pos").textContent = "El código debe contener exactamente 4 dígitos.";
+      $("#error-clave-pos").hidden = false;
+      return;
+    }
+    resolverClavePos(clave);
+  });
+  $("#cancelar-clave-pos")?.addEventListener("click", () => resolverClavePos(null));
+  $("#dialogo-clave-pos")?.addEventListener("cancel", evento => {
+    evento.preventDefault();
+    resolverClavePos(null);
   });
   $("#toast-cerrar")?.addEventListener("click", cerrarToast);
   $$('[data-salir-mesero]').forEach(boton => boton.addEventListener("click", salirModoMesero));
   $("#pantalla-completa")?.addEventListener("click", alternarPantallaCompleta);
   $("#salir-tableta")?.addEventListener("click", salirModoTableta);
   $("#rejilla-posiciones").addEventListener("click", evento => {
+    const sucursal = evento.target.closest("[data-sucursal-id]");
+    if (sucursal) {
+      estado.sucursalSeleccionada = sucursal.dataset.sucursalId;
+      renderPosiciones();
+      return;
+    }
+    if (evento.target.closest("[data-volver-sucursales]")) {
+      estado.sucursalSeleccionada = null;
+      renderPosiciones();
+      return;
+    }
     const boton = evento.target.closest(".posicion");
     if (boton) abrirPosicion(boton.dataset.id);
   });
@@ -1913,14 +2047,24 @@
     if (soloComanda) $("#opciones-impresion input[value='no']").checked = true;
     $("#dialogo-cobro").showModal();
   });
-  $("#form-cobro").addEventListener("submit", evento => {
+  $("#form-cobro").addEventListener("submit", async evento => {
     evento.preventDefault();
     if (evento.submitter?.value === "cancel") { $("#dialogo-cobro").close(); return; }
     const formulario = new FormData(evento.currentTarget);
+    const formaPago = formulario.get("forma_pago");
+    const importe = $("#importe-recibido").value;
+    const imprimir = formulario.get("imprimir_ticket") === "si";
+    $("#dialogo-cobro").close();
+    const claveAdministrador = await pedirClavePos("Autorizar cobro", "Marcar el pedido como cobrado requiere la clave de administrador.");
+    if (!claveAdministrador) {
+      $("#dialogo-cobro").showModal();
+      return;
+    }
     cobrar(
-      formulario.get("forma_pago"),
-      $("#importe-recibido").value,
-      formulario.get("imprimir_ticket") === "si",
+      formaPago,
+      importe,
+      imprimir,
+      claveAdministrador,
     );
   });
   $("#reimprimir").addEventListener("click", reimprimir);

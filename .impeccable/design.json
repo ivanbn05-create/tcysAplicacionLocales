@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-28T07:13:55.0985733-06:00",
+  "generatedAt": "2026-08-29T00:06:22.5669518-06:00",
   "title": "Design System: Los Tocayos · Punto de venta",
   "extensions": {
     "colorMeta": {
@@ -120,11 +120,14 @@
     ],
     "motion": [
       { "name": "channel-state", "value": "background-color 150ms ease-out, color 150ms ease-out", "purpose": "Confirma selección o paso del puntero sin desplazar la geometría del ticket." },
+      { "name": "admin-sheet-change", "value": "cambio-hoja 200ms cubic-bezier(0.2, 0.75, 0.35, 1)", "purpose": "Desplaza el panel administrativo 22 px desde la derecha como un único cambio horizontal de hoja." },
       { "name": "reduced-motion", "value": "0.01ms", "purpose": "Reduce animaciones y transiciones a un cambio prácticamente inmediato cuando el sistema lo solicita." }
     ],
     "breakpoints": [
       { "name": "compact-desktop", "value": "1180px" },
+      { "name": "admin-compact-rail", "value": "1040px" },
       { "name": "tablet", "value": "900px" },
+      { "name": "admin-mobile", "value": "760px" },
       { "name": "mobile", "value": "700px" }
     ]
   },
@@ -141,9 +144,9 @@
       "name": "Acción primaria",
       "kind": "button",
       "refersTo": "action-primary",
-      "description": "Acción operativa principal, táctil y frontal, para avanzar o confirmar.",
-      "html": "<button class=\"ds-action-primary\" type=\"button\">PROCESAR ORDEN</button>",
-      "css": ".ds-action-primary { min-height: 44px; padding: 8px 14px; border: 2px solid #353436; border-radius: 2px; color: #353436; background: #ffed00; font: 800 .75rem/1.15 \"Montserrat Tocayos\", Montserrat, system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; transition: background-color 150ms ease-out; } .ds-action-primary:hover { background: #fff9b8; } .ds-action-primary:active { background: #f2c500; } .ds-action-primary:focus-visible { outline: 3px solid #0066cc; outline-offset: 3px; } .ds-action-primary:disabled { color: #625f62; background: #e9e7e1; cursor: not-allowed; }"
+      "description": "Acción operativa principal, táctil y frontal; durante una petición conserva texto de espera, deshabilitado y aria-busy.",
+      "html": "<button class=\"ds-action-primary\" type=\"button\" aria-busy=\"false\">PROCESAR ORDEN</button>",
+      "css": ".ds-action-primary { min-height: 44px; padding: 8px 14px; border: 2px solid #353436; border-radius: 2px; color: #353436; background: #ffed00; font: 800 .75rem/1.15 \"Montserrat Tocayos\", Montserrat, system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; transition: background-color 150ms ease-out; } .ds-action-primary:hover { background: #fff9b8; } .ds-action-primary:active { background: #f2c500; } .ds-action-primary:focus-visible { outline: 3px solid #0066cc; outline-offset: 3px; } .ds-action-primary:disabled { color: #625f62; background: #e9e7e1; cursor: not-allowed; } .ds-action-primary[aria-busy=\"true\"] { cursor: progress; }"
     },
     {
       "name": "Campo de texto",
@@ -200,14 +203,23 @@
       "description": "Hoja digital que conserva jerarquía, cuadrícula y sobriedad de la comanda impresa.",
       "html": "<article class=\"ds-comanda\"><header><em>LOS TOCAYOS</em><div><span>MESA 08</span><span>TICKET 24</span></div><b>COMENSAL 1</b></header><div class=\"ds-comanda-grid\"><strong>PRODUCTO</strong><strong>CANT.</strong><button type=\"button\">Taco barbacoa</button><b>3</b><button type=\"button\">Consomé vaso</button><b>1</b></div><p>NOTA: SIN CEBOLLA</p></article>",
       "css": ".ds-comanda { width: min(360px, 100%); padding: 11px; border: 1px solid #111; border-radius: 0; color: #111; background: #fff; box-shadow: 0 6px 16px rgba(36, 38, 41, .12); font-family: Arial, Helvetica, sans-serif; } .ds-comanda header { display: grid; gap: 5px; margin-bottom: 9px; font-size: .68rem; } .ds-comanda header em { justify-self: center; padding-bottom: 4px; border-bottom: 1px solid #111; font-size: .82rem; } .ds-comanda header div { display: flex; justify-content: space-between; gap: 10px; } .ds-comanda header b { justify-self: end; font-size: 1rem; } .ds-comanda-grid { display: grid; grid-template-columns: minmax(96px, 1.55fr) 64px; border-top: 2px solid #111; border-left: 1px solid #111; font-size: .84rem; } .ds-comanda-grid > * { min-height: 42px; padding: 5px; display: grid; place-items: center; border: 0; border-right: 1px solid #111; border-bottom: 1px solid #111; border-radius: 0; color: #111; background: #fff; font: inherit; } .ds-comanda-grid > :nth-child(odd) { justify-items: start; text-align: left; } .ds-comanda p { margin: 8px 0 0; padding-top: 7px; border-top: 1px solid #111; font-size: .72rem; font-weight: 800; text-align: center; } .ds-comanda-grid button:hover { background: #fff9b8; } .ds-comanda-grid button:active { background: #ffed00; } .ds-comanda-grid button:focus-visible { position: relative; outline: 3px solid #0066cc; outline-offset: -3px; }"
+    },
+    {
+      "name": "Ticket administrativo pendiente",
+      "kind": "card",
+      "refersTo": "pending-ticket",
+      "description": "Ticket de decisión para un domicilio sin repartidor o un pedido programado, sin métricas de venta agregadas.",
+      "html": "<article class=\"ds-pending-ticket\"><header><strong>DOMICILIO</strong><b>#184</b></header><span>María · Centro</span><address>Av. Principal 120</address><footer><time>SIN ASIGNAR</time><button type=\"button\">ASIGNAR</button></footer></article>",
+      "css": ".ds-pending-ticket { position: relative; min-height: 148px; padding: 14px; display: grid; grid-template-rows: auto auto 1fr auto; gap: 6px; border: 2px solid #353436; border-radius: 0; color: #353436; background: #fff; font-family: \"Montserrat Tocayos\", Montserrat, system-ui, sans-serif; } .ds-pending-ticket::before, .ds-pending-ticket::after { content: \"\"; position: absolute; bottom: -2px; width: 11px; height: 11px; border-top: 2px solid #353436; background: #f8f7f5; transform: rotate(45deg); } .ds-pending-ticket::before { left: 24%; } .ds-pending-ticket::after { right: 24%; } .ds-pending-ticket header { display: flex; justify-content: space-between; gap: 8px; } .ds-pending-ticket header strong { font-size: .78rem; letter-spacing: .04em; text-transform: uppercase; } .ds-pending-ticket header b { color: #e42522; font: 400 1.38rem/1 \"Bebas Neue Tocayos\", \"Arial Narrow\", sans-serif; } .ds-pending-ticket > span { overflow: hidden; font-size: .72rem; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; } .ds-pending-ticket address { min-height: 34px; color: #625f62; font-size: .66rem; font-style: normal; line-height: 1.35; } .ds-pending-ticket footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; } .ds-pending-ticket time { color: #2f7a26; font-size: .65rem; font-weight: 900; } .ds-pending-ticket button { min-height: 44px; padding: 8px 14px; border: 2px solid #353436; border-radius: 0; color: #353436; background: #ffed00; font-weight: 800; } .ds-pending-ticket button:hover { background: #fff9b8; } .ds-pending-ticket button:focus-visible { outline: 3px solid #0066cc; outline-offset: 3px; }"
     }
   ],
   "narrative": {
     "northStar": "El pase de cocina digital",
-    "overview": "La interfaz traduce el trabajo físico del restaurante —pase, tickets, clips, papel térmico y marcadores de estado— a una superficie operativa de alta densidad. Debe sentirse propia de Los Tocayos: enérgica, franca y táctil; la marca vive en la estructura amarilla, la tipografía condensada, las reglas de carbón y las decisiones de color, no en efectos decorativos.\n\nLa referencia de composición aprobada es `.impeccable/mocks/pos-pase-cocina-b-hibrida.png`. El contenido y las capacidades siempre provienen del producto real. La comanda virtual conserva la topología y la sobriedad de la comanda impresa; el resto de la pantalla puede evolucionar dentro de este sistema.",
+    "overview": "La interfaz traduce el trabajo físico del restaurante —pase, tickets, clips, papel térmico y marcadores de estado— a una superficie operativa de alta densidad. Debe sentirse propia de Los Tocayos: enérgica, franca y táctil; la marca vive en la estructura amarilla, la tipografía condensada, las reglas de carbón y las decisiones de color, no en efectos decorativos.\n\nLa referencia de composición aprobada del POS es `.impeccable/mocks/pos-pase-cocina-b-hibrida.png`; la del Administrador local es `.impeccable/mocks/decision/admin-bandeja-pendientes.png`. El Administrador no reemplaza ni convierte el POS en un dashboard: extiende el mismo mundo con una estación separada de bandejas, tickets y herramientas. La comanda virtual conserva la topología y la sobriedad de la comanda impresa; el resto de cada superficie puede evolucionar dentro de este sistema y de su brief.",
     "keyCharacteristics": [
       "Pase de cocina, no dashboard genérico.",
       "Cabecera amarilla compacta y riel carbón con etiquetas de canal tipo ticket/clipboard.",
+      "Administración separada como bandeja de pendientes, con riel propio y papel operativo.",
       "Densidad táctil, lectura inmediata y objetivos principales de al menos 44 CSS px.",
       "Estado siempre expresado con color, texto y marca visual.",
       "Recursos, fuentes y miniaturas disponibles sin internet."
@@ -221,13 +233,19 @@
     "dos": [
       "Do revisar `PRODUCT.md`, este archivo y el brief de superficie antes de crear o modificar una pantalla.",
       "Do preservar la igualdad geométrica entre posiciones principales y auxiliares mediante la misma retícula.",
+      "Do mantener el reparto 5+2 de posiciones y 60/40 de catálogo/comanda en el formato horizontal de operación.",
       "Do mantener color, etiqueta y símbolo en todos los estados operativos.",
+      "Do conservar en móvil la prioridad administrativa Domicilios → Cierres → Programados y mantener las herramientas secundarias después de la bandeja.",
+      "Do pedir el PIN de cuatro dígitos en cada acción administrativa protegida y marcar el control iniciador con texto de espera, deshabilitado y `aria-busy`.",
       "Do conservar la comanda virtual alineada con `impresion/render.py::render_comanda` y con una impresión real.",
       "Do servir tipografías, iconos e imágenes desde el proyecto y registrar la procedencia de todo raster nuevo.",
-      "Do aplicar este lenguaje al futuro Administrador, pero con navegación separada y funciones sólo después de confirmar alcance y permisos."
+      "Do mantener el Administrador local dentro de este lenguaje, con navegación separada y funciones confirmadas por su brief."
     ],
     "donts": [
       "Don't devolver Orden abierta al rojo; amarillo es su semántica aprobada.",
+      "Don't reintroducir un footer de estado: esa información debe vivir en las posiciones y acciones que representa.",
+      "Don't convertir la bandeja administrativa en un dashboard de métricas ni mostrar totales fuera de Reportes y corte de caja.",
+      "Don't conservar el PIN como autorización de sesión para mutaciones posteriores.",
       "Don't mostrar `Salir` durante la captura ni reintroducir estados pasivos de conexión o impresora en la cabecera.",
       "Don't crear tarjetas flotantes genéricas, glassmorphism, gradientes decorativos, halos, texturas de papel o sombras duras.",
       "Don't deformar el logotipo ni usar Bebas Neue para instrucciones, datos de cliente o errores extensos.",

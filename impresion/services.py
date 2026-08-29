@@ -10,7 +10,16 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import TrabajoImpresion
-from .render import enviar_tcp, guardar_png, render_comanda, render_cuenta, render_domicilio, render_sucursal
+from .render import (
+    enviar_tcp,
+    guardar_png,
+    guardar_png_reporte,
+    render_comanda,
+    render_cuenta,
+    render_domicilio,
+    render_reporte_administrativo,
+    render_sucursal,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -91,6 +100,25 @@ def encolar_impresiones(ticket, formato):
     return trabajos
 
 
+def encolar_reporte(reporte):
+    formatos = {
+        "liquidacion": TrabajoImpresion.Formato.LIQUIDACION,
+        "parcial": TrabajoImpresion.Formato.PARCIAL,
+        "corte_caja": TrabajoImpresion.Formato.CORTE_CAJA,
+        "corte_sucursal": TrabajoImpresion.Formato.CORTE_SUCURSAL,
+    }
+    formato = formatos[reporte.tipo]
+    trabajo = TrabajoImpresion.objects.create(
+        sucursal=reporte.sucursal,
+        reporte=reporte,
+        formato=formato,
+        destino=TrabajoImpresion.Destino.CAJA,
+    )
+    if settings.PRINT_SYNC:
+        procesar_trabajo(trabajo)
+    return [trabajo]
+
+
 def estado_impresora(destino="caja"):
     host = settings.PRINTER_HOSTS[destino]
     if settings.PRINT_BACKEND != "tcp":
@@ -144,7 +172,9 @@ def procesar_trabajo(trabajo):
             trabajo.intentos = 1
         trabajo.save(update_fields=["estado", "intentos"])
         ticket = trabajo.ticket
-        if trabajo.formato == TrabajoImpresion.Formato.CUENTA:
+        if trabajo.reporte_id:
+            imagen = render_reporte_administrativo(trabajo.reporte)
+        elif trabajo.formato == TrabajoImpresion.Formato.CUENTA:
             imagen = render_cuenta(ticket)
         elif trabajo.formato == TrabajoImpresion.Formato.DOMICILIO:
             imagen = render_domicilio(ticket)
@@ -152,7 +182,15 @@ def procesar_trabajo(trabajo):
             imagen = render_sucursal(ticket)
         else:
             imagen = render_comanda(ticket, trabajo.destino)
-        relativo, _ = guardar_png(imagen, ticket, trabajo.formato, trabajo.destino)
+        if trabajo.reporte_id:
+            relativo, _ = guardar_png_reporte(
+                imagen,
+                trabajo.reporte,
+                trabajo.formato,
+                trabajo.destino,
+            )
+        else:
+            relativo, _ = guardar_png(imagen, ticket, trabajo.formato, trabajo.destino)
         trabajo.archivo = relativo
         trabajo.save(update_fields=["archivo"])
         if settings.PRINT_BACKEND == "tcp":

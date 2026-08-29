@@ -236,12 +236,27 @@ class DomicilioCliente(models.Model):
         return f"{self.cliente.nombre} · {self.texto_completo}"
 
 
+class ConfiguracionSucursal(models.Model):
+    sucursal = models.OneToOneField(
+        Sucursal,
+        primary_key=True,
+        on_delete=models.CASCADE,
+        related_name="configuracion_pos",
+    )
+    clave_administrador = models.CharField(max_length=128)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Configuración · {self.sucursal.nombre}"
+
+
 class Ticket(models.Model):
     class Estado(models.TextChoices):
         ABIERTO = "abierto", "Abierto"
         PROCESADO = "procesado", "Procesado"
         COBRAR = "cobrar", "Por cobrar"
         PAGADO = "pagado", "Pagado"
+        PROGRAMADO = "programado", "Programado"
         CANCELADO = "cancelado", "Cancelado"
 
     class FormaPago(models.TextChoices):
@@ -269,6 +284,13 @@ class Ticket(models.Model):
     contacto_pedido_nombre = models.CharField(max_length=180, blank=True)
     contacto_pedido_telefono = models.CharField(max_length=30, blank=True)
     atendio = models.ForeignKey(UsuarioPOS, null=True, blank=True, on_delete=models.PROTECT, related_name="tickets")
+    repartidor = models.ForeignKey(
+        UsuarioPOS,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="tickets_repartidos",
+    )
     folio = models.PositiveIntegerField()
     canal = models.CharField(max_length=15, choices=Mesa.Canal.choices)
     estado = models.CharField(max_length=15, choices=Estado.choices, default=Estado.ABIERTO)
@@ -283,6 +305,14 @@ class Ticket(models.Model):
     entrega_aproximada = models.TimeField(null=True, blank=True)
     terminal = models.BooleanField(default=False)
     paga_con = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    fecha_programada = models.DateField(null=True, blank=True)
+    activado_programado_en = models.DateTimeField(null=True, blank=True)
+    descuento_porcentaje = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        validators=[MinValueValidator(Decimal("0.00")), MaxValueValidator(Decimal("100.00"))],
+    )
     captura_por_nombres = models.BooleanField(default=False)
     nombres_comensales = models.JSONField(default=dict, blank=True)
     forma_pago = models.CharField(max_length=12, choices=FormaPago.choices, blank=True)
@@ -302,14 +332,25 @@ class Ticket(models.Model):
                 condition=Q(estado__in=["abierto", "procesado", "cobrar"]),
                 name="ticket_activo_unico_mesa",
             ),
+            models.CheckConstraint(
+                condition=Q(descuento_porcentaje__gte=0, descuento_porcentaje__lte=100),
+                name="ticket_descuento_valido",
+            ),
         ]
 
     def __str__(self):
         return f"Ticket {self.folio} - {self.mesa.nombre}"
 
     @property
-    def total(self):
+    def subtotal(self):
         return sum((partida.importe for partida in self.partidas.all()), Decimal("0.00"))
+
+    @property
+    def total(self):
+        descuento = (self.subtotal * self.descuento_porcentaje / Decimal("100")).quantize(
+            Decimal("0.01")
+        )
+        return self.subtotal - descuento
 
 
 class Partida(models.Model):
@@ -412,3 +453,110 @@ class PedidoSucursalImportado(models.Model):
 
     def __str__(self):
         return f"{self.origen} #{self.origen_id} → {self.ticket.folio}"
+
+
+class MovimientoCaja(models.Model):
+    class Tipo(models.TextChoices):
+        ENTRADA = "entrada", "Entrada"
+        SALIDA = "salida", "Salida"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="movimientos_caja")
+    tipo = models.CharField(max_length=8, choices=Tipo.choices)
+    concepto = models.CharField(max_length=180)
+    importe = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-creado_en"]
+
+
+class ReporteAdministrativo(models.Model):
+    class Tipo(models.TextChoices):
+        LIQUIDACION_REPARTIDOR = "liquidacion", "Total de repartidor"
+        PARCIAL = "parcial", "Reporte parcial"
+        CORTE_CAJA = "corte_caja", "Corte de caja"
+        CORTE_SUCURSAL = "corte_sucursal", "Corte de sucursal"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="reportes_administrativos")
+    tipo = models.CharField(max_length=16, choices=Tipo.choices)
+    datos = models.JSONField(default=dict)
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-creado_en"]
+
+
+class LiquidacionRepartidor(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="liquidaciones_repartidor")
+    repartidor = models.ForeignKey(
+        UsuarioPOS,
+        on_delete=models.PROTECT,
+        related_name="liquidaciones_repartidor",
+    )
+    tickets = models.ManyToManyField(Ticket, related_name="liquidaciones_repartidor")
+    reporte = models.OneToOneField(
+        ReporteAdministrativo,
+        on_delete=models.PROTECT,
+        related_name="liquidacion_repartidor",
+    )
+    fondo = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0.00"))
+    total_efectivo = models.DecimalField(max_digits=12, decimal_places=2)
+    total_terminal = models.DecimalField(max_digits=12, decimal_places=2)
+    total_pedidos = models.DecimalField(max_digits=12, decimal_places=2)
+    total_a_entregar = models.DecimalField(max_digits=12, decimal_places=2)
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-creado_en"]
+
+
+class CorteCaja(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="cortes_caja")
+    inicio = models.DateTimeField()
+    fin = models.DateTimeField()
+    tickets = models.ManyToManyField(Ticket, related_name="cortes_caja")
+    movimientos = models.ManyToManyField(MovimientoCaja, related_name="cortes_caja")
+    reporte = models.OneToOneField(
+        ReporteAdministrativo,
+        on_delete=models.PROTECT,
+        related_name="corte_caja",
+    )
+    totales_canales = models.JSONField(default=dict)
+    total_ventas = models.DecimalField(max_digits=12, decimal_places=2)
+    total_entradas = models.DecimalField(max_digits=12, decimal_places=2)
+    total_salidas = models.DecimalField(max_digits=12, decimal_places=2)
+    total_caja = models.DecimalField(max_digits=12, decimal_places=2)
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-fin"]
+
+
+class CorteSucursal(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="cortes_sucursal")
+    cliente_sucursal = models.ForeignKey(
+        SucursalPedido,
+        on_delete=models.PROTECT,
+        related_name="cortes",
+    )
+    tickets = models.ManyToManyField(Ticket, related_name="cortes_sucursal")
+    reporte = models.OneToOneField(
+        ReporteAdministrativo,
+        on_delete=models.PROTECT,
+        related_name="corte_sucursal",
+    )
+    partidas = models.JSONField(default=list)
+    total = models.DecimalField(max_digits=12, decimal_places=2)
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-creado_en"]

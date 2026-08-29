@@ -100,6 +100,24 @@ components:
     height: "44px"
     padding: "8px 14px"
     rounded: "{rounded.crisp}"
+  admin-rail:
+    backgroundColor: "{colors.rail}"
+    textColor: "{colors.paper}"
+    width: "244px"
+    padding: "24px 0 18px"
+    rounded: "{rounded.none}"
+  pending-ticket:
+    backgroundColor: "#ffffff"
+    textColor: "{colors.charcoal}"
+    typography: "{typography.title}"
+    padding: "14px"
+    rounded: "{rounded.none}"
+  admin-tool-track:
+    backgroundColor: "#ffffff"
+    textColor: "{colors.charcoal}"
+    height: "58px"
+    padding: "10px 13px"
+    rounded: "{rounded.none}"
 ---
 
 # Design System: Los Tocayos · Punto de venta
@@ -110,12 +128,13 @@ components:
 
 La interfaz traduce el trabajo físico del restaurante —pase, tickets, clips, papel térmico y marcadores de estado— a una superficie operativa de alta densidad. Debe sentirse propia de Los Tocayos: enérgica, franca y táctil; la marca vive en la estructura amarilla, la tipografía condensada, las reglas de carbón y las decisiones de color, no en efectos decorativos.
 
-La referencia de composición aprobada es `.impeccable/mocks/pos-pase-cocina-b-hibrida.png`. El contenido y las capacidades siempre provienen del producto real. La comanda virtual conserva la topología y la sobriedad de la comanda impresa; el resto de la pantalla puede evolucionar dentro de este sistema.
+La referencia de composición aprobada del POS es `.impeccable/mocks/pos-pase-cocina-b-hibrida.png`; la del Administrador local es `.impeccable/mocks/decision/admin-bandeja-pendientes.png`. El Administrador no reemplaza ni convierte el POS en un dashboard: extiende el mismo mundo con una estación separada de bandejas, tickets y herramientas. La comanda virtual conserva la topología y la sobriedad de la comanda impresa; el resto de cada superficie puede evolucionar dentro de este sistema y de su brief.
 
 **Key Characteristics:**
 
 - Pase de cocina, no dashboard genérico.
 - Cabecera amarilla compacta y riel carbón con etiquetas de canal tipo ticket/clipboard.
+- Administración separada como bandeja de pendientes, con riel propio y papel operativo.
 - Densidad táctil, lectura inmediata y objetivos principales de al menos 44 CSS px.
 - Estado siempre expresado con color, texto y marca visual.
 - Recursos, fuentes y miniaturas disponibles sin internet.
@@ -173,6 +192,10 @@ Las sucursales se organizan como columnas desplazables; sus encabezados y textos
 
 El catálogo usa tarjetas horizontales de dos mitades exactas. La izquierda muestra un WebP local con `object-fit: cover`; la derecha contiene abreviatura y nombre. En PC de operación hasta 1180 px y en `/tabletas` se muestran dos productos por fila. El encabezado del menú completo ofrece siete atajos numerados, en el mismo orden del catálogo, que desplazan el panel a Taco, Promoción, Consomé y Barbacoa, Lonches, Gringas y Quesadillas, Bebidas y Postre. La imagen administrada en `Producto.imagen` tiene prioridad. Si no existe, se consulta el mapa estático de 25 WebP en `ventas/static/ventas/menu/`; un código sin asignación usa `mainlogo.webp`. Los 25 recursos forman parte del precache del service worker para operación offline.
 
+El Administrador local mantiene la cabecera de marca y abre una estación independiente: riel carbón fijo de 244 px y contenido de papel. Su inicio es una bandeja 2:1, con Domicilios sin repartidor y Programados en la columna principal, Cierres pendientes en la secundaria y una pista de herramientas no urgentes después de la bandeja. La pista pertenece al contenido de Inicio; no es un footer operativo persistente. Los totales monetarios del turno aparecen únicamente en Reportes y corte de caja, nunca en Inicio, el riel o los tickets de pendiente.
+
+A 1040 px o menos el riel administrativo se compacta a iconos y etiquetas breves. A 760 px o menos se vuelve una pista horizontal desplazable y la bandeja se apila en el orden de decisión **Domicilios → Cierres → Programados**; la pista inferior pasa de cuatro a dos columnas. Este orden de lectura se conserva con zoom y en toda presentación de una sola columna.
+
 ## Elevation & Depth
 
 El sistema es plano por defecto. La separación proviene de campos tonales, reglas de uno o dos píxeles, cortes de ticket y contraste entre papel y riel. Las sombras sólo aparecen en capas que realmente se elevan —diálogos, avisos persistentes y la hoja de comanda sobre su bandeja— y nunca convierten cada elemento en una tarjeta flotante.
@@ -187,7 +210,7 @@ El sistema es plano por defecto. La separación proviene de campos tonales, regl
 
 ## Shapes
 
-Predominan esquinas rectas o apenas suavizadas. Campos y tarjetas operativas usan radios discretos; la comanda permanece rectangular. Los canales incorporan un corte triangular hacia la derecha y un clip superior construido con CSS. Reglas de carbón, subrayados y bordes discontinuos evocan impresión y papelería sin usar texturas raster.
+Predominan esquinas rectas o apenas suavizadas. Campos y tarjetas operativas usan radios discretos; la comanda y los tickets administrativos permanecen rectangulares. Los canales incorporan un corte triangular hacia la derecha y un clip superior construido con CSS; los tickets de pendiente usan borde carbón y pequeños cortes inferiores. Reglas de carbón, subrayados y bordes discontinuos evocan impresión y papelería sin usar texturas raster.
 
 El logotipo se muestra completo, proporcional y sin recoloración, rotación, contornos, relieve ni sombras. Los iconos son SVG de línea, con trazo uniforme, remates redondos y texto visible cuando funcionan como navegación.
 
@@ -198,13 +221,14 @@ El logotipo se muestra completo, proporcional y sin recoloración, rotación, co
 - **Shape:** rectos y táctiles, con radio mínimo y altura operativa no menor a 44 CSS px.
 - **Primary:** amarillo de marca con tinta carbón; la selección activa puede usar rojo sólo cuando no represente estado de orden.
 - **Hover / Focus:** cambio tonal breve, sin salto; foco azul de tres píxeles con separación exterior.
-- **Loading / Disabled:** texto de espera explícito, `aria-busy` y contraste suficiente; nunca aparenta estar congelado.
+- **Loading / Disabled:** toda acción asíncrona conserva el control que la inició, cambia a texto de espera explícito, se deshabilita y expone `aria-busy="true"`; el contenedor puede reflejar actividad agregada sin sustituir ese estado local. Al terminar restaura etiqueta y disponibilidad, con contraste suficiente; nunca aparenta estar congelada.
 
 ### Cards / Containers
 
 - **Position cards:** misma geometría para Comedor/Domicilio y Recoger/Llevar. Libre usa número verde; Orden abierta, amarillo con tinta oscura; Procesada, rojo con marca de verificación.
 - **Branch cards:** conservan la misma gramática pero reducen título, estado, número y metadatos para que nombres largos no saturen la columna.
 - **Product cards:** 50 % fotografía y 50 % texto, altura compacta y nombre real de hasta tres líneas; no inventan precio ni descriptor.
+- **Pending tickets:** papel blanco, borde carbón de dos píxeles, cortes inferiores y folio prominente; presentan la decisión y su acción sin mezclar métricas de venta.
 - **Containers:** papel plano, borde carbón y sin elevación salvo las excepciones definidas arriba.
 
 ### Inputs / Fields
@@ -215,7 +239,17 @@ El logotipo se muestra completo, proporcional y sin recoloración, rotación, co
 
 ### Navigation
 
-El riel de canales usa tres tickets tipo clipboard orientados a la derecha. El seleccionado expone `aria-pressed`, papel blanco, clip amarillo y una única regla roja inferior. Los siete atajos del catálogo son botones con nombre accesible y destino explícito; el desplazamiento respeta movimiento reducido y nunca cambia el orden de categorías. `Salir` vive en la cabecera sólo mientras se muestran posiciones; dentro de una orden se oculta para evitar abandonar accidentalmente la captura.
+El riel de canales del POS usa tres tickets tipo clipboard orientados a la derecha. El seleccionado expone `aria-pressed`, papel blanco, clip amarillo y una única regla roja inferior. Los siete atajos del catálogo son botones con nombre accesible y destino explícito; el desplazamiento respeta movimiento reducido y nunca cambia el orden de categorías. `Salir` vive en la cabecera sólo mientras se muestran posiciones; dentro de una orden se oculta para evitar abandonar accidentalmente la captura.
+
+El Administrador usa un riel carbón separado con Inicio, Personal, Domicilios, Programados, Movimientos, Reportes y Sucursales. El destino activo cambia a amarillo y expone `aria-current="page"`; en móvil conserva el mismo orden como pista horizontal. La pista inferior de Inicio ofrece herramientas secundarias después de los pendientes y no suplanta el riel ni eleva Reportes por encima de una urgencia operativa.
+
+### Protected Administrative Actions
+
+Entrar al Administrador exige una clave de cuatro dígitos, pero no crea una autorización persistente. Cada mutación o impresión protegida vuelve a pedir el PIN en un diálogo modal, devuelve el foco al flujo y presenta errores accionables sin revelar la clave. Mientras la petición corre, el control iniciador se bloquea con etiqueta de progreso y `aria-busy`; no se permiten dos mutaciones simultáneas.
+
+### Administrative Page Change
+
+El cambio de sección usa un único gesto de hoja horizontal, breve y sin rebote: el panel entra desde la derecha con 22 px de desplazamiento y 200 ms. Con `prefers-reduced-motion: reduce`, no hay animación y el desplazamiento al inicio es inmediato.
 
 ### Virtual Comanda
 
@@ -233,14 +267,18 @@ La resolución sigue una sola prioridad: `Producto.imagen` mediante endpoint aut
 - **Do** preservar la igualdad geométrica entre posiciones principales y auxiliares mediante la misma retícula.
 - **Do** mantener el reparto 5+2 de posiciones y 60/40 de catálogo/comanda en el formato horizontal de operación.
 - **Do** mantener color, etiqueta y símbolo en todos los estados operativos.
+- **Do** conservar en móvil la prioridad administrativa Domicilios → Cierres → Programados y mantener las herramientas secundarias después de la bandeja.
+- **Do** pedir el PIN de cuatro dígitos en cada acción administrativa protegida y marcar el control iniciador con texto de espera, deshabilitado y `aria-busy`.
 - **Do** conservar la comanda virtual alineada con `impresion/render.py::render_comanda` y con una impresión real.
 - **Do** servir tipografías, iconos e imágenes desde el proyecto y registrar la procedencia de todo raster nuevo.
-- **Do** aplicar este lenguaje al futuro Administrador, pero con navegación separada y funciones sólo después de confirmar alcance y permisos.
+- **Do** mantener el Administrador local dentro de este lenguaje, con navegación separada y funciones confirmadas por su brief.
 
 ### Don't:
 
 - **Don't** devolver Orden abierta al rojo; amarillo es su semántica aprobada.
 - **Don't** reintroducir un footer de estado: esa información debe vivir en las posiciones y acciones que representa.
+- **Don't** convertir la bandeja administrativa en un dashboard de métricas ni mostrar totales fuera de Reportes y corte de caja.
+- **Don't** conservar el PIN como autorización de sesión para mutaciones posteriores.
 - **Don't** mostrar `Salir` durante la captura ni reintroducir estados pasivos de conexión o impresora en la cabecera.
 - **Don't** crear tarjetas flotantes genéricas, glassmorphism, gradientes decorativos, halos, texturas de papel o sombras duras.
 - **Don't** deformar el logotipo ni usar Bebas Neue para instrucciones, datos de cliente o errores extensos.

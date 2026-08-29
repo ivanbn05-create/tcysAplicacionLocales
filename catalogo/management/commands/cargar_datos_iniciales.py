@@ -82,13 +82,31 @@ class Command(BaseCommand):
             sucursal=sucursal,
             nombre="Encargado",
             defaults={
+                "tipo": Rol.Tipo.ENCARGADO,
                 "puede_cobrar": True,
                 "puede_reimprimir": True,
                 "puede_cancelar": True,
                 "puede_sincronizar": True,
             },
         )
-        UsuarioPOS.objects.get_or_create(sucursal=sucursal, clave="CAJA", defaults={"nombre": "Caja", "rol": rol})
+        operador = UsuarioPOS.objects.filter(sucursal=sucursal, nombre="Caja").first()
+        if operador is None:
+            operador = UsuarioPOS(sucursal=sucursal, nombre="Caja", rol=rol)
+            operador.set_clave("1111")
+            operador.save()
+        elif operador.rol_id != rol.id:
+            operador.rol = rol
+            operador.save(update_fields=["rol"])
+        Rol.objects.get_or_create(
+            sucursal=sucursal,
+            tipo=Rol.Tipo.MESERO,
+            defaults={"nombre": "Mesero"},
+        )
+        Rol.objects.get_or_create(
+            sucursal=sucursal,
+            tipo=Rol.Tipo.REPARTIDOR,
+            defaults={"nombre": "Repartidor"},
+        )
 
         categorias = {}
         for orden, nombre in enumerate(CATEGORIAS, 1):
@@ -151,7 +169,7 @@ class Command(BaseCommand):
                     defaults={"nombre": f"{etiqueta} {numero}", "orden": numero},
                 )
         # El catálogo de sucursales conserva los ids del sistema web externo.
-        # Cada cliente dispone de once folios visibles, como en el sistema legado.
+        # Cada cliente dispone de una pantalla propia con holgura para todo el turno.
         clientes_sucursal = {}
         for origen_id, nombre, tipo in SUCURSALES_PEDIDO:
             cliente_sucursal, _ = SucursalPedido.objects.update_or_create(
@@ -170,7 +188,7 @@ class Command(BaseCommand):
             cliente_sucursal__isnull=True,
         ).update(activa=False)
         for origen_id, cliente_sucursal in clientes_sucursal.items():
-            for numero in range(1, 12):
+            for numero in range(1, 25):
                 Mesa.objects.update_or_create(
                     sucursal=sucursal,
                     clave=f"SUC-{origen_id}-{numero}",

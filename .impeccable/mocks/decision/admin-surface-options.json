@@ -1,0 +1,45 @@
+{
+  "title": "Estructura de Administrador",
+  "question": "Elige cómo organizar el trabajo administrativo del turno. Las tres opciones conservan la identidad del POS y las mismas funciones.",
+  "options": [
+    {
+      "id": "bandeja-pendientes",
+      "label": "Bandeja de pendientes",
+      "kicker": "THE ROLL",
+      "thesis": "La pantalla prioriza lo que necesita una decisión ahora, no un menú de módulos.",
+      "palette": ["#ffed00", "#242629", "#f8f7f5", "#4aa736", "#e42522"],
+      "materials": ["tickets de papel", "rieles de carbón", "reglas de corte"],
+      "viewport": "Cabecera amarilla compacta, índice lateral y una gran bandeja central con domicilios sin repartidor, pedidos programados y cierres pendientes; las herramientas menos urgentes quedan en una segunda pista.",
+      "risk": "Puede sentirse densa cuando coinciden muchos pendientes; los filtros y contadores deben ser muy claros.",
+      "comp": ".impeccable/mocks/decision/admin-bandeja-pendientes.png"
+    },
+    {
+      "id": "libro-turno",
+      "label": "Libro de turno",
+      "thesis": "Cada función es una hoja de un mismo libro operativo y conserva su contexto al cambiar de sección.",
+      "palette": ["#ffed00", "#353436", "#f8f7f5", "#fff7c8", "#4aa736"],
+      "materials": ["hojas térmicas", "pestañas de archivo", "sellos de estado"],
+      "viewport": "Una columna izquierda de pestañas abre Usuarios, Repartidores, Ventas, Movimientos, Programados y Sucursales; el centro muestra lista y detalle, y una tira superior resume el turno.",
+      "risk": "La navegación es muy predecible, pero la portada puede ocultar cuáles tareas son urgentes.",
+      "comp": ".impeccable/mocks/decision/admin-libro-turno.png"
+    },
+    {
+      "id": "mesa-conciliacion",
+      "label": "Mesa de conciliación",
+      "thesis": "El administrador ve el turno como cuatro canales que convergen en una sola caja.",
+      "palette": ["#ffed00", "#242629", "#ffffff", "#f2c500", "#e42522"],
+      "materials": ["columnas de tickets", "marcas de conteo", "banda de totales"],
+      "viewport": "Cuatro columnas para Comedor, Llevar, Domicilio y Recoger ocupan el centro; una banda inferior concentra reportes y cortes, mientras un cajón lateral abre personal, descuentos y movimientos.",
+      "risk": "Explica muy bien los totales, pero las funciones de personal quedan un nivel más lejos.",
+      "comp": ".impeccable/mocks/decision/admin-mesa-conciliacion.png"
+    }
+  ],
+  "reroll": {
+    "registers": ["safer", "bolder"]
+  },
+  "buildPath": {
+    "value": "comp",
+    "toggle": true
+  },
+  "steer": true
+}

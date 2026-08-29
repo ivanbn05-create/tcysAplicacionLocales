@@ -39,10 +39,10 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
               <svg viewBox="0 0 24 24"><circle cx="12" cy="7" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg>
             </span><strong>Mesero</strong><small>Comedor, domicilio y sucursales</small>
           </button>
-          <button class="perfil-acceso administrador" type="button" disabled>
+          <button id="entrar-administrador" class="perfil-acceso administrador" type="button">
             <span class="perfil-icono" aria-hidden="true">
               <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 11.6-4"/><circle cx="17.5" cy="17.5" r="3.5"/><path d="M17.5 12.5v2M17.5 20.5v2M12.5 17.5h2M20.5 17.5h2"/></svg>
-            </span><strong>Administrador</strong><small>Próximamente · acceso con contraseña</small>
+            </span><strong>Administrador</strong><small>Gestión del turno · acceso con clave</small>
           </button>
         </div>
       </div>
@@ -246,6 +246,24 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
         <button id="descartar-cliente" class="boton secundario" type="button">Cancelar</button>
         <button class="boton cobro" id="guardar-cliente" type="submit">Guardar y seleccionar</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="dialogo-clave-pos" aria-labelledby="titulo-clave-pos">
+    <form id="form-clave-pos" class="dialogo-contenido dialogo-clave-pos">
+      <button id="cancelar-clave-pos" class="cerrar-dialogo" type="button" aria-label="Cancelar">×</button>
+      <span class="clave-pos-sello" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1"/><circle cx="16" cy="8" r="1"/><circle cx="8" cy="16" r="1"/><circle cx="16" cy="16" r="1"/></svg>
+      </span>
+      <div>
+        <h2 id="titulo-clave-pos">Código de mesero</h2>
+      </div>
+      <p id="ayuda-clave-pos" class="clave-pos-ayuda">Ingresa tu código de 4 dígitos.</p>
+      <label>Código de 4 dígitos
+        <input id="clave-pos" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" required>
+      </label>
+      <p id="error-clave-pos" class="error-clave-pos" role="alert" hidden></p>
+      <button class="boton cobro" type="submit">Confirmar</button>
     </form>
   </dialog>
 
