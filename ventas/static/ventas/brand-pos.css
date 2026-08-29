@@ -185,9 +185,9 @@ button.operando::after {
   padding-left: clamp(8px, 1.5vw, 18px);
   display: grid;
   align-content: center;
-  justify-items: end;
+  justify-items: center;
   border-left: 1px solid rgba(53, 52, 54, .3);
-  text-align: right;
+  text-align: center;
 }
 .operador-actual[hidden] { display: none; }
 .operador-actual .etiqueta-sistema { color: var(--amarillo-estado-oscuro); }
@@ -694,7 +694,7 @@ body.en-ticket .salir-tableta { display: none; }
 }
 .flujo-ticket,
 .modo-tableta .flujo-ticket {
-  grid-template-columns: 62px minmax(0, 3fr) minmax(390px, 2fr);
+  grid-template-columns: 62px minmax(0, 1fr) minmax(390px, 45%);
   border: 2px solid var(--carbon);
   border-radius: 0;
   background: var(--papel);
@@ -788,7 +788,7 @@ body.en-ticket .salir-tableta { display: none; }
   overflow: hidden;
 }
 .modo-tableta .ticket-sucursal .flujo-ticket {
-  grid-template-columns: minmax(470px, 3fr) minmax(390px, 2fr);
+  grid-template-columns: minmax(470px, 55%) minmax(390px, 45%);
 }
 .producto-imagen img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .producto-imagen-vacia {

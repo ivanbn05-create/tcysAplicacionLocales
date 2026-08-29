@@ -197,11 +197,11 @@ La paleta combina identidad cálida con papel y carbón; los colores de estado s
 
 ## Layout
 
-La aplicación sigue una secuencia vertical: cabecera de marca compacta, riel de canales y estación de posiciones. No usa un pie de página operativo: cada posición comunica su estado dentro de la propia tarjeta, con texto, símbolo y color. La cabecera no aloja telemetría pasiva de conexión o impresora. Entre la sucursal y los controles muestra al mesero realmente identificado por PIN; el bloque se oculta al cerrar su modo de operación y nunca sustituye ese nombre por la cuenta técnica de Django. En la vista de posiciones reserva las acciones de ventana y `Salir`; al entrar a captura, `Salir` desaparece y la navegación vuelve a depender de la acción contextual `Volver`.
+La aplicación sigue una secuencia vertical: cabecera de marca compacta, riel de canales y estación de posiciones. No usa un pie de página operativo: cada posición comunica su estado dentro de la propia tarjeta, con texto, símbolo y color. La cabecera no aloja telemetría pasiva de conexión o impresora. Entre la sucursal y los controles muestra al mesero realmente identificado por PIN, con su nombre centrado justo debajo de `Usuario activo`; el bloque se oculta al cerrar su modo de operación y nunca sustituye ese nombre por la cuenta técnica de Django. En la vista de posiciones reserva las acciones de ventana y `Salir`; al entrar a captura, `Salir` desaparece y la navegación vuelve a depender de la acción contextual `Volver`.
 
 Las etiquetas Comedor, Domicilio y Sucursales son tickets/clipboards horizontales de papel con esquinas superiores cortadas, agrupados a la derecha del riel y sin ocupar todo su ancho en escritorio. Cada uno usa un icono SVG Tabler a la izquierda y un clip centrado; el seleccionado vuelve rojo el clip y añade una regla inferior roja cuya muesca triangular apunta hacia el contenido. La estación usa una rejilla de siete columnas entre 701 px y escritorio: la zona principal ocupa cinco y Recoger/Llevar dos. Ambas heredan el mismo `subgrid`, por lo que toda tarjeta principal y auxiliar tiene exactamente el mismo ancho, alto, separación y padding. Bajo 700 px ambas zonas ocupan dos columnas y se apilan sin deformar las tarjetas.
 
-Las sucursales se organizan como columnas desplazables; sus encabezados y textos internos usan una escala compacta para evitar saturación. El flujo de captura mantiene tres zonas funcionales —comensal, catálogo y comanda—: el riel de comensales conserva 62 px y, en disposición horizontal, el espacio restante se reparte aproximadamente 60 % para catálogo y 40 % para comanda. La comanda puede compactar sus pistas, pero nunca alterar el orden ni el lenguaje de la impresión térmica. Bajo 700 px las tres zonas se apilan sin ocultar funciones.
+Las sucursales se organizan como columnas desplazables; sus encabezados y textos internos usan una escala compacta para evitar saturación. El flujo de captura mantiene tres zonas funcionales —comensal, catálogo y comanda—: el riel normal conserva 62 px y, en disposición horizontal, la comanda ocupa aproximadamente 45 % del ancho total visible mientras el catálogo recibe el espacio restante. En captura Por nombres, el riel crece sólo hasta 112 px, mantiene la altura táctil de sus controles y aplica elipsis a nombres excepcionales; la columna de nombres de la comanda se compacta a 92 px para evitar desplazamiento horizontal. La comanda puede compactar sus pistas, pero nunca alterar el orden ni el lenguaje de la impresión térmica. Bajo 700 px las tres zonas se apilan sin ocultar funciones.
 
 El catálogo usa tarjetas horizontales de dos mitades exactas. La izquierda muestra un WebP local con `object-fit: cover`; la derecha contiene abreviatura y nombre. En PC de operación hasta 1180 px y en `/tabletas` se muestran dos productos por fila. El encabezado del menú completo ofrece siete atajos numerados, en el mismo orden del catálogo, que desplazan el panel a Taco, Promoción, Consomé y Barbacoa, Lonches, Gringas y Quesadillas, Bebidas y Postre. La imagen administrada en `Producto.imagen` tiene prioridad. Si no existe, se consulta el mapa estático de 25 WebP en `ventas/static/ventas/menu/`; un código sin asignación usa `mainlogo.webp`. Los 25 recursos forman parte del precache del service worker para operación offline.
 
@@ -266,7 +266,7 @@ El cambio de sección usa un único gesto de hoja horizontal, breve y sin rebote
 
 ### Virtual Comanda
 
-La comanda virtual conserva deliberadamente el aspecto y el orden de la impresión térmica: encabezado, folio/contexto, comensales, preparación, productos, contacto, comentarios, bebidas, salsas y terminal. Sus celdas siguen siendo controles accesibles, pero no se rediseñan como tarjetas de aplicación.
+La comanda virtual conserva deliberadamente el aspecto y el orden de la impresión térmica: encabezado, folio/contexto, comensales, preparación, productos, contacto, comentarios, bebidas, salsas y terminal. En disposición horizontal ocupa aproximadamente 45 % del flujo completo. En captura Por nombres, la primera columna mide 92 px y los encabezados se compactan sin desbordar; los nombres excepcionales usan elipsis. Sus celdas siguen siendo controles accesibles, pero no se rediseñan como tarjetas de aplicación.
 
 ### Product Image Resolver
 
@@ -278,7 +278,7 @@ La resolución sigue una sola prioridad: `Producto.imagen` mediante endpoint aut
 
 - **Do** revisar `PRODUCT.md`, este archivo y el brief de superficie antes de crear o modificar una pantalla.
 - **Do** preservar la igualdad geométrica entre posiciones principales y auxiliares mediante la misma retícula.
-- **Do** mantener el reparto 5+2 de posiciones y 60/40 de catálogo/comanda en el formato horizontal de operación.
+- **Do** mantener el reparto 5+2 de posiciones y reservar aproximadamente 45 % del ancho horizontal total a la comanda.
 - **Do** mantener color, etiqueta y símbolo en todos los estados operativos.
 - **Do** conservar en móvil la prioridad administrativa Domicilios → Cierres → Programados y mantener las herramientas secundarias después de la bandeja.
 - **Do** pedir el PIN de cuatro dígitos en cada acción administrativa protegida y marcar el control iniciador con texto de espera, deshabilitado y `aria-busy`.

@@ -21,7 +21,7 @@ related_targets: ["ventas/static/ventas/app.css","ventas/static/ventas/brand-pos
 - La captura real no implementa “Nuevo ticket” ni nombres inventados de la maqueta; la cabecera omite telemetría pasiva y reserva los avisos persistentes para fallos accionables.
 - En el flujo de ticket se conserva la topología funcional de tres pasos y se aplica la misma gramática material.
 - La estación horizontal usa siete pistas: cinco posiciones principales y dos auxiliares; no incluye footer.
-- En captura horizontal el riel de comensales conserva su ancho y catálogo/comanda reparten aproximadamente 60/40. PC operativo hasta 1180 px y `/tabletas` muestran dos productos por fila.
+- En captura horizontal el riel normal conserva 62 px y la comanda ocupa aproximadamente 45 % del ancho total visible; el catálogo recibe el espacio restante. En modo Por nombres, el riel se compacta a 112 px sin reducir la altura táctil; la primera columna de la comanda se reduce a 92 px, admite el nombre con elipsis y no fuerza desplazamiento horizontal. PC operativo hasta 1180 px y `/tabletas` muestran dos productos por fila.
 - El menú completo ofrece siete atajos numerados que siguen el orden real de categorías y desplazan sólo el catálogo.
 
 ## Inventario y medio

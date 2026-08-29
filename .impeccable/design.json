@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-29T00:06:22.5669518-06:00",
+  "generatedAt": "2026-08-29T10:54:50.1971371-06:00",
   "title": "Design System: Los Tocayos · Punto de venta",
   "extensions": {
     "colorMeta": {
@@ -200,7 +200,7 @@
       "name": "Comanda virtual térmica",
       "kind": "custom",
       "refersTo": "virtual-comanda",
-      "description": "Hoja digital que conserva jerarquía, cuadrícula y sobriedad de la comanda impresa.",
+      "description": "Hoja digital que conserva jerarquía, cuadrícula y sobriedad de la comanda impresa; ocupa cerca de 45 % del flujo horizontal y compacta la columna de nombres a 92 px sin desbordar.",
       "html": "<article class=\"ds-comanda\"><header><em>LOS TOCAYOS</em><div><span>MESA 08</span><span>TICKET 24</span></div><b>COMENSAL 1</b></header><div class=\"ds-comanda-grid\"><strong>PRODUCTO</strong><strong>CANT.</strong><button type=\"button\">Taco barbacoa</button><b>3</b><button type=\"button\">Consomé vaso</button><b>1</b></div><p>NOTA: SIN CEBOLLA</p></article>",
       "css": ".ds-comanda { width: min(360px, 100%); padding: 11px; border: 1px solid #111; border-radius: 0; color: #111; background: #fff; box-shadow: 0 6px 16px rgba(36, 38, 41, .12); font-family: Arial, Helvetica, sans-serif; } .ds-comanda header { display: grid; gap: 5px; margin-bottom: 9px; font-size: .68rem; } .ds-comanda header em { justify-self: center; padding-bottom: 4px; border-bottom: 1px solid #111; font-size: .82rem; } .ds-comanda header div { display: flex; justify-content: space-between; gap: 10px; } .ds-comanda header b { justify-self: end; font-size: 1rem; } .ds-comanda-grid { display: grid; grid-template-columns: minmax(96px, 1.55fr) 64px; border-top: 2px solid #111; border-left: 1px solid #111; font-size: .84rem; } .ds-comanda-grid > * { min-height: 42px; padding: 5px; display: grid; place-items: center; border: 0; border-right: 1px solid #111; border-bottom: 1px solid #111; border-radius: 0; color: #111; background: #fff; font: inherit; } .ds-comanda-grid > :nth-child(odd) { justify-items: start; text-align: left; } .ds-comanda p { margin: 8px 0 0; padding-top: 7px; border-top: 1px solid #111; font-size: .72rem; font-weight: 800; text-align: center; } .ds-comanda-grid button:hover { background: #fff9b8; } .ds-comanda-grid button:active { background: #ffed00; } .ds-comanda-grid button:focus-visible { position: relative; outline: 3px solid #0066cc; outline-offset: -3px; }"
     },
@@ -215,7 +215,7 @@
   ],
   "narrative": {
     "northStar": "El pase de cocina digital",
-    "overview": "La interfaz traduce el trabajo físico del restaurante —pase, tickets, clips, papel térmico y marcadores de estado— a una superficie operativa de alta densidad. Debe sentirse propia de Los Tocayos: enérgica, franca y táctil; la marca vive en la estructura amarilla, la tipografía condensada, las reglas de carbón y las decisiones de color, no en efectos decorativos.\n\nLa referencia de composición aprobada del POS es `.impeccable/mocks/pos-pase-cocina-b-hibrida.png`; la del Administrador local es `.impeccable/mocks/decision/admin-bandeja-pendientes.png`. El Administrador no reemplaza ni convierte el POS en un dashboard: extiende el mismo mundo con una estación separada de bandejas, tickets y herramientas. La comanda virtual conserva la topología y la sobriedad de la comanda impresa; el resto de cada superficie puede evolucionar dentro de este sistema y de su brief.",
+    "overview": "La interfaz traduce el trabajo físico del restaurante —pase, tickets, clips, papel térmico y marcadores de estado— a una superficie operativa de alta densidad. Debe sentirse propia de Los Tocayos: enérgica, franca y táctil; la marca vive en la estructura amarilla, la firma tipográfica bicolor, la tipografía condensada, las reglas de carbón y las decisiones de color, no en efectos decorativos.\n\nLa referencia de composición aprobada del POS es `.impeccable/mocks/pos-pase-cocina-b-hibrida.png`; la del Administrador local es `.impeccable/mocks/decision/admin-bandeja-pendientes.png`. El Administrador no reemplaza ni convierte el POS en un dashboard: extiende el mismo mundo con una estación separada de bandejas, tickets y herramientas. La comanda virtual conserva la topología y la sobriedad de la comanda impresa; el resto de cada superficie puede evolucionar dentro de este sistema y de su brief.",
     "keyCharacteristics": [
       "Pase de cocina, no dashboard genérico.",
       "Cabecera amarilla compacta y riel carbón con etiquetas de canal tipo ticket/clipboard.",
@@ -233,7 +233,7 @@
     "dos": [
       "Do revisar `PRODUCT.md`, este archivo y el brief de superficie antes de crear o modificar una pantalla.",
       "Do preservar la igualdad geométrica entre posiciones principales y auxiliares mediante la misma retícula.",
-      "Do mantener el reparto 5+2 de posiciones y 60/40 de catálogo/comanda en el formato horizontal de operación.",
+      "Do mantener el reparto 5+2 de posiciones y reservar aproximadamente 45 % del ancho horizontal total a la comanda.",
       "Do mantener color, etiqueta y símbolo en todos los estados operativos.",
       "Do conservar en móvil la prioridad administrativa Domicilios → Cierres → Programados y mantener las herramientas secundarias después de la bandeja.",
       "Do pedir el PIN de cuatro dígitos en cada acción administrativa protegida y marcar el control iniciador con texto de espera, deshabilitado y `aria-busy`.",
