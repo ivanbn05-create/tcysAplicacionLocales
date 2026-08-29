@@ -71,7 +71,9 @@ from .orden import ordenar_partidas
 from .promociones import configuracion_promocion, promocion_disponible, promociones_pendientes
 from .services import (
     ErrorVenta,
+    TicketBloqueado,
     abrir_ticket,
+    asegurar_bloqueo_ticket,
     asegurar_modificador,
     ajustar_grupo_partidas,
     actualizar_partida,
@@ -82,11 +84,15 @@ from .services import (
     alternar_modificador,
     cobrar_ticket,
     cancelar_ticket,
+    liberar_bloqueo_ticket,
+    bloqueo_ticket_payload,
     completar_ticket_sucursal,
     convertir_tipo_ticket,
+    guardar_ticket,
     procesar_ticket,
     registrar_evento,
     validar_limite_productos_por_nombre,
+    validar_version_entidad,
 )
 
 
@@ -119,7 +125,7 @@ COMENTARIOS_GENERALES_PERMITIDOS = {
 
 # Cambiar este valor obliga a las terminales y tabletas instaladas a descargar
 # los recursos de interfaz de esta entrega, incluso si conservan una caché PWA.
-ASSET_VERSION = "20260829-nombres-1"
+ASSET_VERSION = "20260829-locks-1"
 PWA_CACHE = f"tocayos-pos-{ASSET_VERSION}"
 
 
@@ -209,10 +215,62 @@ def _json(request):
     return data
 
 
+def _device_id(request, datos=None):
+    valor = request.headers.get("X-POS-Device-ID") or (datos or {}).get("device_id") or ""
+    device_id = str(valor).strip()
+    if not device_id:
+        return ""
+    if len(device_id) > 128 or any(ord(caracter) < 32 for caracter in device_id):
+        raise ErrorSolicitudJSON("El identificador del dispositivo no es válido.")
+    return device_id
+
+
+def _operador_actual_pos(request, sucursal):
+    perfil_id = request.session.get("mesero_pos_id")
+    if perfil_id:
+        return UsuarioPOS.objects.select_related("rol").filter(
+            pk=perfil_id,
+            sucursal=sucursal,
+            activo=True,
+            rol__tipo__in=[Rol.Tipo.MESERO, Rol.Tipo.ENCARGADO],
+        ).first()
+    if not getattr(settings, "POS_REQUIRE_AUTH", True):
+        return UsuarioPOS.objects.filter(sucursal=sucursal, activo=True).first()
+    return None
+
+
+def _respuesta_error_venta(error, device_id=""):
+    status = getattr(error, "status_code", 400)
+    payload = {"error": str(error)}
+    ticket = getattr(error, "ticket", None)
+    if ticket is not None:
+        payload["ticket"] = _ticket_payload(ticket, device_id)
+        payload["bloqueo"] = payload["ticket"]["bloqueo"]
+    return JsonResponse(payload, status=status)
+
+
+def _asegurar_edicion_ticket(request, ticket, datos=None, validar_version=True):
+    datos = datos or {}
+    device_id = _device_id(request, datos)
+    operador = _operador_actual_pos(request, ticket.sucursal)
+    ticket = asegurar_bloqueo_ticket(ticket, device_id, operador=operador)
+    if validar_version and device_id and "version_entidad" not in datos:
+        raise ErrorSolicitudJSON("La versión de la orden es obligatoria.")
+    if validar_version:
+        validar_version_entidad(ticket, datos.get("version_entidad"), device_id)
+    return ticket, device_id
+
+
 def _ticket(ticket_id):
     try:
         return Ticket.objects.select_related(
-            "mesa__cliente_sucursal", "cliente", "telefono_cliente", "domicilio_cliente", "atendio", "sucursal"
+            "mesa__cliente_sucursal",
+            "cliente",
+            "telefono_cliente",
+            "domicilio_cliente",
+            "atendio",
+            "sucursal",
+            "bloqueo_operador",
         ).get(pk=ticket_id, sucursal=_sucursal())
     except Ticket.DoesNotExist as exc:
         raise Http404("Ticket no encontrado") from exc
@@ -267,7 +325,7 @@ def _catalogo_sucursal_payload(ticket):
     return resultado
 
 
-def _ticket_payload(ticket):
+def _ticket_payload(ticket, device_id=""):
     partidas = []
     es_sucursal = ticket.canal == Mesa.Canal.SUCURSALES
     if es_sucursal:
@@ -349,6 +407,8 @@ def _ticket_payload(ticket):
         "folio": ticket.folio,
         "estado": ticket.estado,
         "canal": ticket.canal,
+        "version_entidad": ticket.version_entidad,
+        "bloqueo": bloqueo_ticket_payload(ticket, device_id),
         "mesa_id": str(ticket.mesa_id),
         "mesa": ticket.mesa.nombre,
         "posicion_numero": ticket.mesa.orden,
@@ -479,6 +539,10 @@ def salud(request):
 @require_GET
 def api_estado(request):
     sucursal = _sucursal()
+    try:
+        device_id = _device_id(request)
+    except ErrorSolicitudJSON:
+        device_id = ""
     activar_programados(sucursal)
     integracion = {
         "activa": settings.PEDIDOS_SUCURSALES_AUTO_SYNC,
@@ -488,13 +552,15 @@ def api_estado(request):
     activos = Ticket.objects.filter(
         sucursal=sucursal,
         estado__in=[Ticket.Estado.ABIERTO, Ticket.Estado.PROCESADO, Ticket.Estado.COBRAR],
-    ).select_related("mesa")
+    ).select_related("mesa", "bloqueo_operador")
     tickets = {
         str(ticket.mesa_id): {
             "ticket_id": str(ticket.id),
             "folio": ticket.folio,
             "estado": ticket.estado,
             "total": str(ticket.total),
+            "version_entidad": ticket.version_entidad,
+            "bloqueo": bloqueo_ticket_payload(ticket, device_id),
         }
         for ticket in activos
     }
@@ -595,142 +661,149 @@ def api_archivo_impresion(request, trabajo_id):
 
 @require_POST
 def api_abrir_ticket(request):
+    device_id = ""
     try:
         datos = _json(request)
         sucursal = _sucursal()
-        mesa = Mesa.objects.get(pk=datos.get("mesa_id"), sucursal=sucursal, activa=True)
-        perfil = None
-        perfil_id = request.session.get("mesero_pos_id")
-        if perfil_id:
-            perfil = UsuarioPOS.objects.select_related("rol").filter(
-                pk=perfil_id,
-                sucursal=sucursal,
-                activo=True,
-                rol__tipo__in=[Rol.Tipo.MESERO, Rol.Tipo.ENCARGADO],
-            ).first()
-        if perfil is None and not getattr(settings, "POS_REQUIRE_AUTH", True):
-            perfil = UsuarioPOS.objects.filter(sucursal=sucursal, activo=True).first()
-        if perfil is None:
-            raise ErrorVenta("Identifícate con tu código antes de tomar una comanda.")
-        ticket, creado = abrir_ticket(mesa, atendio=perfil)
-        return JsonResponse({"creado": creado, "ticket": _ticket_payload(ticket)})
-    except (Mesa.DoesNotExist, ErrorVenta) as exc:
-        return JsonResponse({"error": str(exc) or "Posición no encontrada."}, status=400)
+        device_id = _device_id(request, datos)
+        with transaction.atomic():
+            mesa = Mesa.objects.get(pk=datos.get("mesa_id"), sucursal=sucursal, activa=True)
+            perfil = _operador_actual_pos(request, sucursal)
+            if perfil is None:
+                raise ErrorVenta("Identifícate con tu código antes de tomar una comanda.")
+            ticket, creado = abrir_ticket(mesa, atendio=perfil)
+            ticket = asegurar_bloqueo_ticket(ticket, device_id, operador=perfil)
+        return JsonResponse({"creado": creado, "ticket": _ticket_payload(ticket, device_id)})
+    except Mesa.DoesNotExist:
+        return JsonResponse({"error": "Posición no encontrada."}, status=400)
+    except (TicketBloqueado, ErrorVenta) as exc:
+        return _respuesta_error_venta(exc, device_id)
 
 
 @require_http_methods(["GET", "PATCH"])
-@transaccion_en_metodos("PATCH")
 def api_ticket(request, ticket_id):
     ticket = _ticket(ticket_id)
-    if request.method == "PATCH":
-        ticket = (
-            Ticket.objects.select_for_update()
-            .select_related(
-                "mesa__cliente_sucursal",
-                "cliente",
-                "telefono_cliente",
-                "domicilio_cliente",
-                "atendio",
-                "sucursal",
-            )
-            .get(pk=ticket.pk)
-        )
+    try:
+        device_id = _device_id(request)
+    except ErrorSolicitudJSON as exc:
+        return _respuesta_error_venta(exc)
+
     if request.method == "PATCH":
         try:
             datos = _json(request)
-            if ticket.estado != Ticket.Estado.ABIERTO:
-                raise ErrorVenta("La orden ya fue procesada.")
-            if "comentario_general" in datos:
-                comentario = str(datos["comentario_general"]).strip()
-                if len(comentario) > 500:
-                    raise ErrorVenta("El comentario no puede superar 500 caracteres.")
-                ticket.comentario_general = comentario
-            if "captura_por_nombres" in datos:
-                if ticket.canal not in {
-                    Mesa.Canal.COMEDOR,
-                    Mesa.Canal.LLEVAR,
-                    Mesa.Canal.DOMICILIO,
-                    Mesa.Canal.RECOGER,
-                }:
-                    raise ErrorVenta("Este tipo de orden no admite captura por nombres.")
-                ticket.captura_por_nombres = bool(datos["captura_por_nombres"])
-                validar_limite_productos_por_nombre(ticket)
-            if "nombres_comensales" in datos:
-                nombres = datos["nombres_comensales"]
-                if not isinstance(nombres, dict):
-                    raise ErrorVenta("La lista de nombres no es válida.")
-                if len(nombres) > 24:
-                    raise ErrorVenta("La lista de nombres no puede superar 24 personas.")
-                nombres_limpios = {}
-                for clave, valor in nombres.items():
-                    numero = int(clave)
-                    nombre = str(valor).strip()[:60]
-                    if not 1 <= numero <= 24:
-                        raise ErrorVenta("El número de persona está fuera de rango.")
-                    if nombre:
-                        nombres_limpios[str(numero)] = nombre
-                ticket.nombres_comensales = nombres_limpios
-            if "cliente_nombre" in datos or "cliente_telefono" in datos:
-                if ticket.canal not in {Mesa.Canal.RECOGER, Mesa.Canal.LLEVAR}:
-                    raise ErrorVenta("Los datos directos de cliente sólo aplican a recoger o llevar.")
-                if "cliente_nombre" in datos:
-                    ticket.cliente_nombre = str(datos["cliente_nombre"]).strip()[:180]
-                if "cliente_telefono" in datos:
-                    ticket.cliente_telefono = str(datos["cliente_telefono"]).strip()[:30]
-            if "contacto_pedido_nombre" in datos:
-                ticket.contacto_pedido_nombre = str(datos["contacto_pedido_nombre"]).strip()[:180]
-            if "contacto_pedido_telefono" in datos:
-                ticket.contacto_pedido_telefono = str(datos["contacto_pedido_telefono"]).strip()[:30]
-            if not ticket.cliente_id or not ticket.cliente.comentarios_multiples:
-                ticket.contacto_pedido_nombre = ""
-                ticket.contacto_pedido_telefono = ""
-            if ticket.contacto_pedido_telefono and len(normalizar_telefono(ticket.contacto_pedido_telefono)) < 7:
-                raise ErrorVenta("El teléfono del contacto debe contener al menos 7 dígitos.")
-            if "tipo_entrega" in datos:
-                tipo_entrega = str(datos["tipo_entrega"])
-                if tipo_entrega not in Ticket.TipoEntrega.values:
-                    raise ErrorVenta("El tipo de entrega no es válido.")
-                ticket.tipo_entrega = tipo_entrega
-            if "entrega_aproximada" in datos:
-                entrega = datos.get("entrega_aproximada")
-                ticket.entrega_aproximada = datetime.strptime(entrega, "%H:%M").time() if entrega else None
-            if "terminal" in datos:
-                ticket.terminal = bool(datos["terminal"])
-                if ticket.terminal:
-                    ticket.paga_con = None
-            if "paga_con" in datos:
-                paga_con = datos.get("paga_con")
-                ticket.paga_con = Decimal(str(paga_con)) if paga_con not in (None, "") else None
-                if ticket.paga_con is not None:
-                    if ticket.paga_con != ticket.paga_con.to_integral_value() or ticket.paga_con <= 0:
-                        raise ErrorVenta("Paga con debe ser un número entero natural.")
-                    if ticket.paga_con < ticket.total:
-                        raise ErrorVenta("Paga con no puede ser menor que el total del pedido.")
-                    ticket.terminal = False
-            if "salsas_verduras" in datos:
-                grupos = datos["salsas_verduras"]
-                if not isinstance(grupos, list):
-                    raise ErrorVenta("La selección de salsas y verduras no es válida.")
-                if len(grupos) > len(PREFIJOS_SALSA):
-                    raise ErrorVenta("La selección contiene demasiados grupos.")
-                normalizados = []
-                for grupo in grupos:
-                    if not isinstance(grupo, dict):
+            with transaction.atomic():
+                ticket = (
+                    Ticket.objects.select_for_update()
+                    .select_related(
+                        "mesa__cliente_sucursal",
+                        "cliente",
+                        "telefono_cliente",
+                        "domicilio_cliente",
+                        "atendio",
+                        "sucursal",
+                        "bloqueo_operador",
+                    )
+                    .get(pk=ticket.pk)
+                )
+                ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+                if ticket.estado != Ticket.Estado.ABIERTO:
+                    raise ErrorVenta("La orden ya fue procesada.")
+                if "comentario_general" in datos:
+                    comentario = str(datos["comentario_general"]).strip()
+                    if len(comentario) > 500:
+                        raise ErrorVenta("El comentario no puede superar 500 caracteres.")
+                    ticket.comentario_general = comentario
+                if "captura_por_nombres" in datos:
+                    if ticket.canal not in {
+                        Mesa.Canal.COMEDOR,
+                        Mesa.Canal.LLEVAR,
+                        Mesa.Canal.DOMICILIO,
+                        Mesa.Canal.RECOGER,
+                    }:
+                        raise ErrorVenta("Este tipo de orden no admite captura por nombres.")
+                    ticket.captura_por_nombres = bool(datos["captura_por_nombres"])
+                    validar_limite_productos_por_nombre(ticket)
+                if "nombres_comensales" in datos:
+                    nombres = datos["nombres_comensales"]
+                    if not isinstance(nombres, dict):
+                        raise ErrorVenta("La lista de nombres no es válida.")
+                    if len(nombres) > 24:
+                        raise ErrorVenta("La lista de nombres no puede superar 24 personas.")
+                    nombres_limpios = {}
+                    for clave, valor in nombres.items():
+                        numero = int(clave)
+                        nombre = str(valor).strip()[:60]
+                        if not 1 <= numero <= 24:
+                            raise ErrorVenta("El número de persona está fuera de rango.")
+                        if nombre:
+                            nombres_limpios[str(numero)] = nombre
+                    ticket.nombres_comensales = nombres_limpios
+                if "cliente_nombre" in datos or "cliente_telefono" in datos:
+                    if ticket.canal not in {Mesa.Canal.RECOGER, Mesa.Canal.LLEVAR}:
+                        raise ErrorVenta("Los datos directos de cliente sólo aplican a recoger o llevar.")
+                    if "cliente_nombre" in datos:
+                        ticket.cliente_nombre = str(datos["cliente_nombre"]).strip()[:180]
+                    if "cliente_telefono" in datos:
+                        ticket.cliente_telefono = str(datos["cliente_telefono"]).strip()[:30]
+                if "contacto_pedido_nombre" in datos:
+                    ticket.contacto_pedido_nombre = str(datos["contacto_pedido_nombre"]).strip()[:180]
+                if "contacto_pedido_telefono" in datos:
+                    ticket.contacto_pedido_telefono = str(datos["contacto_pedido_telefono"]).strip()[:30]
+                if not ticket.cliente_id or not ticket.cliente.comentarios_multiples:
+                    ticket.contacto_pedido_nombre = ""
+                    ticket.contacto_pedido_telefono = ""
+                if ticket.contacto_pedido_telefono and len(normalizar_telefono(ticket.contacto_pedido_telefono)) < 7:
+                    raise ErrorVenta("El teléfono del contacto debe contener al menos 7 dígitos.")
+                if "tipo_entrega" in datos:
+                    tipo_entrega = str(datos["tipo_entrega"])
+                    if tipo_entrega not in Ticket.TipoEntrega.values:
+                        raise ErrorVenta("El tipo de entrega no es válido.")
+                    ticket.tipo_entrega = tipo_entrega
+                if "entrega_aproximada" in datos:
+                    entrega = datos.get("entrega_aproximada")
+                    ticket.entrega_aproximada = datetime.strptime(entrega, "%H:%M").time() if entrega else None
+                if "terminal" in datos:
+                    ticket.terminal = bool(datos["terminal"])
+                    if ticket.terminal:
+                        ticket.paga_con = None
+                if "paga_con" in datos:
+                    paga_con = datos.get("paga_con")
+                    ticket.paga_con = Decimal(str(paga_con)) if paga_con not in (None, "") else None
+                    if ticket.paga_con is not None:
+                        if ticket.paga_con != ticket.paga_con.to_integral_value() or ticket.paga_con <= 0:
+                            raise ErrorVenta("Paga con debe ser un número entero natural.")
+                        if ticket.paga_con < ticket.total:
+                            raise ErrorVenta("Paga con no puede ser menor que el total del pedido.")
+                        ticket.terminal = False
+                if "salsas_verduras" in datos:
+                    grupos = datos["salsas_verduras"]
+                    if not isinstance(grupos, list):
                         raise ErrorVenta("La selección de salsas y verduras no es válida.")
-                    prefijo = str(grupo.get("prefijo", ""))
-                    elementos_crudos = grupo.get("elementos", [])
-                    if not isinstance(elementos_crudos, list) or len(elementos_crudos) > len(OPCIONES_SALSA):
-                        raise ErrorVenta("La selección de salsas y verduras no es válida.")
-                    elementos = list(dict.fromkeys(str(item) for item in elementos_crudos))
-                    if prefijo not in PREFIJOS_SALSA or not elementos or any(item not in OPCIONES_SALSA for item in elementos):
-                        raise ErrorVenta("La selección de salsas y verduras contiene una opción no válida.")
-                    normalizados.append({"prefijo": prefijo, "elementos": elementos})
-                ticket.salsas_verduras = normalizados
-            ticket.save()
-            registrar_evento(ticket, "ticket.datos_actualizados", {"canal": ticket.canal})
+                    if len(grupos) > len(PREFIJOS_SALSA):
+                        raise ErrorVenta("La selección contiene demasiados grupos.")
+                    normalizados = []
+                    for grupo in grupos:
+                        if not isinstance(grupo, dict):
+                            raise ErrorVenta("La selección de salsas y verduras no es válida.")
+                        prefijo = str(grupo.get("prefijo", ""))
+                        elementos_crudos = grupo.get("elementos", [])
+                        if not isinstance(elementos_crudos, list) or len(elementos_crudos) > len(OPCIONES_SALSA):
+                            raise ErrorVenta("La selección de salsas y verduras no es válida.")
+                        elementos = list(dict.fromkeys(str(item) for item in elementos_crudos))
+                        if (
+                            prefijo not in PREFIJOS_SALSA
+                            or not elementos
+                            or any(item not in OPCIONES_SALSA for item in elementos)
+                        ):
+                            raise ErrorVenta("La selección de salsas y verduras contiene una opción no válida.")
+                        normalizados.append({"prefijo": prefijo, "elementos": elementos})
+                    ticket.salsas_verduras = normalizados
+                guardar_ticket(ticket)
+                registrar_evento(ticket, "ticket.datos_actualizados", {"canal": ticket.canal})
         except (ErrorVenta, InvalidOperation, ValueError) as exc:
-            return JsonResponse({"error": str(exc)}, status=400)
-    return JsonResponse({"ticket": _ticket_payload(ticket)})
+            return _respuesta_error_venta(exc, device_id)
+
+    return JsonResponse({"ticket": _ticket_payload(ticket, device_id)})
 
 
 @require_POST
@@ -783,243 +856,312 @@ def api_cliente(request, cliente_id):
 
 
 @require_http_methods(["POST", "DELETE"])
-@transaction.atomic
 def api_ticket_cliente(request, ticket_id):
+    device_id = ""
     try:
-        ticket = _ticket(ticket_id)
-        ticket = (
-            Ticket.objects.select_for_update()
-            .select_related(
-                "mesa__cliente_sucursal",
-                "cliente",
-                "telefono_cliente",
-                "domicilio_cliente",
-                "atendio",
-                "sucursal",
-            )
-            .get(pk=ticket.pk)
-        )
-        if ticket.estado != Ticket.Estado.ABIERTO:
-            raise ErrorVenta("La orden ya fue procesada.")
-        if ticket.canal != Mesa.Canal.DOMICILIO:
-            raise ErrorVenta("Sólo los pedidos a domicilio admiten clientes.")
-        if request.method == "DELETE":
-            ticket.cliente = None
-            ticket.telefono_cliente = None
-            ticket.domicilio_cliente = None
-            ticket.cliente_nombre = ""
-            ticket.cliente_telefono = ""
-            ticket.cliente_domicilio = ""
-            ticket.cliente_referencia = ""
-            ticket.contacto_pedido_nombre = ""
-            ticket.contacto_pedido_telefono = ""
-        else:
-            datos = _json(request)
-            cliente = Cliente.objects.get(pk=datos.get("cliente_id"), sucursal=ticket.sucursal, activo=True)
-            telefono = None
-            if datos.get("telefono_id"):
-                telefono = TelefonoCliente.objects.get(
-                    pk=datos.get("telefono_id"), cliente=cliente, sucursal=ticket.sucursal, activo=True
+        datos = _json(request)
+        with transaction.atomic():
+            ticket = _ticket(ticket_id)
+            ticket = (
+                Ticket.objects.select_for_update()
+                .select_related(
+                    "mesa__cliente_sucursal",
+                    "cliente",
+                    "telefono_cliente",
+                    "domicilio_cliente",
+                    "atendio",
+                    "sucursal",
+                    "bloqueo_operador",
                 )
-            if not telefono and not cliente.comentarios_multiples:
-                raise ErrorVenta("Selecciona un teléfono para el cliente.")
-            domicilio = DomicilioCliente.objects.get(
-                pk=datos.get("domicilio_id"), cliente=cliente, sucursal=ticket.sucursal, activo=True
+                .get(pk=ticket.pk)
             )
-            ticket.cliente = cliente
-            ticket.telefono_cliente = telefono
-            ticket.domicilio_cliente = domicilio
-            ticket.cliente_nombre = cliente.nombre
-            ticket.cliente_telefono = telefono.numero if telefono else ""
-            ticket.cliente_domicilio = domicilio.texto_completo
-            ticket.cliente_referencia = domicilio.referencia
-            # El contacto pertenece exclusivamente al pedido actual. Nunca debe
-            # sobrevivir al cambio o a la nueva selección de una empresa.
-            ticket.contacto_pedido_nombre = ""
-            ticket.contacto_pedido_telefono = ""
-        ticket.save()
-        registrar_evento(
-            ticket,
-            "ticket.cliente_asignado",
-            {"cliente_id": str(ticket.cliente_id) if ticket.cliente_id else None},
-        )
-        return JsonResponse({"ticket": _ticket_payload(ticket)})
+            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+            if ticket.estado != Ticket.Estado.ABIERTO:
+                raise ErrorVenta("La orden ya fue procesada.")
+            if ticket.canal != Mesa.Canal.DOMICILIO:
+                raise ErrorVenta("Sólo los pedidos a domicilio admiten clientes.")
+            if request.method == "DELETE":
+                ticket.cliente = None
+                ticket.telefono_cliente = None
+                ticket.domicilio_cliente = None
+                ticket.cliente_nombre = ""
+                ticket.cliente_telefono = ""
+                ticket.cliente_domicilio = ""
+                ticket.cliente_referencia = ""
+                ticket.contacto_pedido_nombre = ""
+                ticket.contacto_pedido_telefono = ""
+            else:
+                cliente = Cliente.objects.get(pk=datos.get("cliente_id"), sucursal=ticket.sucursal, activo=True)
+                telefono = None
+                if datos.get("telefono_id"):
+                    telefono = TelefonoCliente.objects.get(
+                        pk=datos.get("telefono_id"), cliente=cliente, sucursal=ticket.sucursal, activo=True
+                    )
+                if not telefono and not cliente.comentarios_multiples:
+                    raise ErrorVenta("Selecciona un teléfono para el cliente.")
+                domicilio = DomicilioCliente.objects.get(
+                    pk=datos.get("domicilio_id"), cliente=cliente, sucursal=ticket.sucursal, activo=True
+                )
+                ticket.cliente = cliente
+                ticket.telefono_cliente = telefono
+                ticket.domicilio_cliente = domicilio
+                ticket.cliente_nombre = cliente.nombre
+                ticket.cliente_telefono = telefono.numero if telefono else ""
+                ticket.cliente_domicilio = domicilio.texto_completo
+                ticket.cliente_referencia = domicilio.referencia
+                # El contacto pertenece exclusivamente al pedido actual. Nunca debe
+                # sobrevivir al cambio o a la nueva selección de una empresa.
+                ticket.contacto_pedido_nombre = ""
+                ticket.contacto_pedido_telefono = ""
+            guardar_ticket(ticket)
+            registrar_evento(
+                ticket,
+                "ticket.cliente_asignado",
+                {"cliente_id": str(ticket.cliente_id) if ticket.cliente_id else None},
+            )
+        return JsonResponse({"ticket": _ticket_payload(ticket, device_id)})
     except (Cliente.DoesNotExist, TelefonoCliente.DoesNotExist, DomicilioCliente.DoesNotExist):
         return JsonResponse({"error": "El cliente, teléfono o domicilio seleccionado ya no está disponible."}, status=400)
     except ErrorVenta as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
+        return _respuesta_error_venta(exc, device_id)
 
 
 @require_POST
 def api_convertir_ticket(request, ticket_id):
+    device_id = ""
     try:
-        ticket = _ticket(ticket_id)
-        canal_destino = str(_json(request).get("canal", ""))
-        ticket = convertir_tipo_ticket(ticket, canal_destino)
-        return JsonResponse({"ticket": _ticket_payload(ticket)})
+        datos = _json(request)
+        with transaction.atomic():
+            ticket = _ticket(ticket_id)
+            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+            canal_destino = str(datos.get("canal", ""))
+            ticket = convertir_tipo_ticket(ticket, canal_destino)
+        return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
     except ErrorVenta as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
+        return _respuesta_error_venta(exc, device_id)
+
+
+@require_http_methods(["POST", "DELETE"])
+def api_bloqueo_ticket(request, ticket_id):
+    device_id = ""
+    try:
+        datos = _json(request)
+        with transaction.atomic():
+            ticket = _ticket(ticket_id)
+            device_id = _device_id(request, datos)
+            if not device_id:
+                raise ErrorSolicitudJSON("El identificador del dispositivo es obligatorio para tomar una mesa.")
+            if request.method == "DELETE":
+                ticket = liberar_bloqueo_ticket(ticket, device_id)
+            else:
+                ticket = asegurar_bloqueo_ticket(
+                    ticket,
+                    device_id,
+                    operador=_operador_actual_pos(request, ticket.sucursal),
+                )
+        payload = _ticket_payload(ticket, device_id)
+        return JsonResponse({"ticket": payload, "bloqueo": payload["bloqueo"]})
+    except ErrorVenta as exc:
+        return _respuesta_error_venta(exc, device_id)
 
 
 @require_POST
 def api_agregar_partida(request, ticket_id):
+    device_id = ""
     try:
-        ticket = _ticket(ticket_id)
         datos = _json(request)
-        if ticket.canal == Mesa.Canal.SUCURSALES:
-            producto = ProductoSucursal.objects.get(
-                pk=datos.get("producto_sucursal_id") or datos.get("producto_id"),
-                sucursal=ticket.sucursal,
+        with transaction.atomic():
+            ticket = _ticket(ticket_id)
+            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+            if ticket.canal == Mesa.Canal.SUCURSALES:
+                producto = ProductoSucursal.objects.get(
+                    pk=datos.get("producto_sucursal_id") or datos.get("producto_id"),
+                    sucursal=ticket.sucursal,
+                )
+                agregar_partida_sucursal(ticket, producto, Decimal(str(datos.get("cantidad", "1"))))
+                ticket.refresh_from_db()
+                return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
+            producto = Producto.objects.get(pk=datos.get("producto_id"), sucursal=ticket.sucursal)
+            comensal = int(datos.get("comensal", 1))
+            cantidad = Decimal(str(datos.get("cantidad", "1")))
+            if not 1 <= comensal <= 24 or cantidad <= 0:
+                raise ErrorVenta("Comensal o cantidad fuera de rango.")
+            promocion_aplicada = None
+            if datos.get("promocion_id"):
+                promocion_aplicada = Partida.objects.select_related("producto").get(
+                    pk=datos["promocion_id"], ticket=ticket, promocion_aplicada__isnull=True
+                )
+            agregar_partida(
+                ticket,
+                producto,
+                comensal,
+                cantidad,
+                datos.get("termino"),
+                promocion_aplicada=promocion_aplicada,
             )
-            agregar_partida_sucursal(ticket, producto, Decimal(str(datos.get("cantidad", "1"))))
             ticket.refresh_from_db()
-            return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id))})
-        producto = Producto.objects.get(pk=datos.get("producto_id"), sucursal=ticket.sucursal)
-        comensal = int(datos.get("comensal", 1))
-        cantidad = Decimal(str(datos.get("cantidad", "1")))
-        if not 1 <= comensal <= 24 or cantidad <= 0:
-            raise ErrorVenta("Comensal o cantidad fuera de rango.")
-        promocion_aplicada = None
-        if datos.get("promocion_id"):
-            promocion_aplicada = Partida.objects.select_related("producto").get(
-                pk=datos["promocion_id"], ticket=ticket, promocion_aplicada__isnull=True
-            )
-        agregar_partida(
-            ticket,
-            producto,
-            comensal,
-            cantidad,
-            datos.get("termino"),
-            promocion_aplicada=promocion_aplicada,
-        )
-        ticket.refresh_from_db()
-        return JsonResponse({"ticket": _ticket_payload(ticket)})
+        return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
     except (Producto.DoesNotExist, ProductoSucursal.DoesNotExist, Partida.DoesNotExist, ErrorVenta, InvalidOperation, ValueError) as exc:
+        if isinstance(exc, ErrorVenta):
+            return _respuesta_error_venta(exc, device_id)
         return JsonResponse({"error": str(exc) or "Producto no encontrado."}, status=400)
 
 
 @require_http_methods(["PATCH", "DELETE"])
 def api_partida(request, partida_id):
+    device_id = ""
     try:
-        partida = Partida.objects.select_related("ticket").get(pk=partida_id, sucursal=_sucursal())
-        ticket = partida.ticket
-        datos = {} if request.method == "DELETE" else _json(request)
-        cantidad = Decimal("0") if request.method == "DELETE" else Decimal(str(datos.get("cantidad", partida.cantidad)))
-        termino = datos.get("termino") if "termino" in datos else None
-        if partida.producto_sucursal_id:
-            actualizar_partida_sucursal(partida, cantidad)
-        else:
-            actualizar_partida(partida, cantidad, termino)
-        ticket.refresh_from_db()
-        return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id))})
+        datos = _json(request)
+        with transaction.atomic():
+            partida = Partida.objects.select_related("ticket__sucursal").get(pk=partida_id, sucursal=_sucursal())
+            ticket = partida.ticket
+            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+            cantidad = Decimal("0") if request.method == "DELETE" else Decimal(str(datos.get("cantidad", partida.cantidad)))
+            termino = datos.get("termino") if "termino" in datos else None
+            if partida.producto_sucursal_id:
+                actualizar_partida_sucursal(partida, cantidad)
+            else:
+                actualizar_partida(partida, cantidad, termino)
+            ticket.refresh_from_db()
+        return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
     except (Partida.DoesNotExist, ErrorVenta, InvalidOperation) as exc:
+        if isinstance(exc, ErrorVenta):
+            return _respuesta_error_venta(exc, device_id)
         return JsonResponse({"error": str(exc) or "Partida no encontrada."}, status=400)
 
 
 @require_POST
 def api_ajustar_partidas(request, ticket_id):
+    device_id = ""
     try:
-        ticket = _ticket(ticket_id)
         datos = _json(request)
-        partida_ids = [str(valor) for valor in datos.get("partida_ids", [])]
-        eliminar = bool(datos.get("eliminar", False))
-        cantidad = Decimal(str(datos.get("cantidad", "1")))
-        ajustar_grupo_partidas(ticket, partida_ids, cantidad, datos.get("termino"), eliminar)
-        ticket.refresh_from_db()
-        return JsonResponse({"ticket": _ticket_payload(ticket)})
+        with transaction.atomic():
+            ticket = _ticket(ticket_id)
+            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+            partida_ids = [str(valor) for valor in datos.get("partida_ids", [])]
+            eliminar = bool(datos.get("eliminar", False))
+            cantidad = Decimal(str(datos.get("cantidad", "1")))
+            ajustar_grupo_partidas(ticket, partida_ids, cantidad, datos.get("termino"), eliminar)
+            ticket.refresh_from_db()
+        return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
     except (ErrorVenta, InvalidOperation, ValidationError, ValueError) as exc:
+        if isinstance(exc, ErrorVenta):
+            return _respuesta_error_venta(exc, device_id)
         return JsonResponse({"error": str(exc)}, status=400)
 
 
 @require_POST
 def api_modificador(request, ticket_id):
+    device_id = ""
     try:
-        ticket = _ticket(ticket_id)
         datos = _json(request)
-        codigo = str(datos.get("codigo", "")).strip()[:20]
-        if datos.get("tipo") == "general":
-            nombre = COMENTARIOS_GENERALES_PERMITIDOS.get(codigo)
-            if not nombre:
-                raise ErrorVenta("Comentario general inválido.")
-            alternar_comentario_general(ticket, codigo, nombre)
-        else:
-            nombre = MODIFICADORES_PERMITIDOS.get(codigo)
-            if not nombre:
-                raise ErrorVenta("Modificador inválido.")
-            comensales = datos.get("comensales")
-            if comensales is not None:
-                comensales = sorted({int(valor) for valor in comensales})
-                if not codigo or not comensales or any(not 1 <= comensal <= 24 for comensal in comensales):
-                    raise ErrorVenta("Modificador inválido.")
-                asegurar_modificador(ticket, comensales, codigo, nombre)
+        with transaction.atomic():
+            ticket = _ticket(ticket_id)
+            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+            codigo = str(datos.get("codigo", "")).strip()[:20]
+            if datos.get("tipo") == "general":
+                nombre = COMENTARIOS_GENERALES_PERMITIDOS.get(codigo)
+                if not nombre:
+                    raise ErrorVenta("Comentario general inválido.")
+                alternar_comentario_general(ticket, codigo, nombre)
             else:
-                comensal = int(datos.get("comensal", 1))
-                if not codigo or not 1 <= comensal <= 24:
+                nombre = MODIFICADORES_PERMITIDOS.get(codigo)
+                if not nombre:
                     raise ErrorVenta("Modificador inválido.")
-                alternar_modificador(ticket, comensal, codigo, nombre)
-        return JsonResponse({"ticket": _ticket_payload(ticket)})
+                comensales = datos.get("comensales")
+                if comensales is not None:
+                    comensales = sorted({int(valor) for valor in comensales})
+                    if not codigo or not comensales or any(not 1 <= comensal <= 24 for comensal in comensales):
+                        raise ErrorVenta("Modificador inválido.")
+                    asegurar_modificador(ticket, comensales, codigo, nombre)
+                else:
+                    comensal = int(datos.get("comensal", 1))
+                    if not codigo or not 1 <= comensal <= 24:
+                        raise ErrorVenta("Modificador inválido.")
+                    alternar_modificador(ticket, comensal, codigo, nombre)
+        return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
     except (ErrorVenta, ValueError) as exc:
+        if isinstance(exc, ErrorVenta):
+            return _respuesta_error_venta(exc, device_id)
         return JsonResponse({"error": str(exc)}, status=400)
 
 
 @require_POST
 def api_procesar(request, ticket_id):
+    device_id = ""
     try:
-        ticket = procesar_ticket(_ticket(ticket_id))
+        datos = _json(request)
+        with transaction.atomic():
+            ticket = _ticket(ticket_id)
+            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+            ticket = procesar_ticket(ticket)
         if ticket.canal == Mesa.Canal.SUCURSALES:
             trabajos = list(encolar_impresiones(ticket, TrabajoImpresion.Formato.SUCURSAL))
         else:
             trabajos = list(encolar_impresiones(ticket, TrabajoImpresion.Formato.COMANDA))
         if ticket.canal == Mesa.Canal.DOMICILIO:
             trabajos.extend(encolar_impresiones(ticket, TrabajoImpresion.Formato.DOMICILIO))
-        return JsonResponse({"ticket": _ticket_payload(ticket), "impresiones": _trabajos_payload(trabajos)})
+        return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id), "impresiones": _trabajos_payload(trabajos)})
     except ErrorVenta as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
+        return _respuesta_error_venta(exc, device_id)
 
 
 @require_POST
 def api_cobrar(request, ticket_id):
+    device_id = ""
     try:
+        datos = _json(request)
         ticket_actual = _ticket(ticket_id)
         if ticket_actual.canal == Mesa.Canal.SUCURSALES:
             raise ErrorVenta("Los pedidos de sucursal se completan sin registrar un cobro de caja.")
-        datos = _json(request)
         _validar_clave_admin_datos(ticket_actual.sucursal, datos)
         forma = datos.get("forma_pago", Ticket.FormaPago.EFECTIVO)
         if forma not in Ticket.FormaPago.values:
             raise ErrorVenta("Forma de pago inválida.")
         recibido = datos.get("importe_recibido")
-        ticket = cobrar_ticket(_ticket(ticket_id), forma, Decimal(str(recibido)) if recibido not in (None, "") else None)
+        with transaction.atomic():
+            ticket_actual, device_id = _asegurar_edicion_ticket(request, ticket_actual, datos)
+            ticket = cobrar_ticket(ticket_actual, forma, Decimal(str(recibido)) if recibido not in (None, "") else None)
         imprimir_ticket = bool(datos.get("imprimir_ticket", True)) and ticket.canal != Mesa.Canal.RECOGER
         trabajos = encolar_impresiones(ticket, TrabajoImpresion.Formato.CUENTA) if imprimir_ticket else []
-        return JsonResponse({"ticket": _ticket_payload(ticket), "impresiones": _trabajos_payload(trabajos)})
+        return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id), "impresiones": _trabajos_payload(trabajos)})
     except (ErrorVenta, InvalidOperation) as exc:
+        if isinstance(exc, ErrorVenta):
+            return _respuesta_error_venta(exc, device_id)
         return JsonResponse({"error": str(exc)}, status=400)
 
 
 @require_POST
 def api_completar_sucursal(request, ticket_id):
+    device_id = ""
     try:
-        ticket = _ticket(ticket_id)
-        _validar_clave_admin_datos(ticket.sucursal, _json(request))
-        ticket = completar_ticket_sucursal(ticket)
-        return JsonResponse({"ticket": _ticket_payload(ticket)})
+        datos = _json(request)
+        with transaction.atomic():
+            ticket = _ticket(ticket_id)
+            _validar_clave_admin_datos(ticket.sucursal, datos)
+            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+            ticket = completar_ticket_sucursal(ticket)
+        return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
     except ErrorVenta as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
+        return _respuesta_error_venta(exc, device_id)
 
 
 @require_POST
 def api_cancelar(request, ticket_id):
+    device_id = ""
     try:
-        ticket = _ticket(ticket_id)
-        if ticket.estado == Ticket.Estado.ABIERTO:
-            ticket = cancelar_ticket(ticket)
-        else:
-            _validar_clave_admin_datos(ticket.sucursal, _json(request))
-            ticket = cancelar_ticket_administrador(ticket)
-        return JsonResponse({"ticket": _ticket_payload(ticket)})
+        datos = _json(request)
+        with transaction.atomic():
+            ticket = _ticket(ticket_id)
+            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+            if ticket.estado == Ticket.Estado.ABIERTO:
+                ticket = cancelar_ticket(ticket)
+            else:
+                _validar_clave_admin_datos(ticket.sucursal, datos)
+                ticket = cancelar_ticket_administrador(ticket)
+        return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
     except ErrorVenta as exc:
-        return JsonResponse({"error": str(exc)}, status=400)
+        return _respuesta_error_venta(exc, device_id)
 
 
 @require_POST

@@ -564,6 +564,131 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(solicitado.json()["integracion_sucursales"]["fuente"], "Supabase")
         sincronizar.assert_called_once_with(self.sucursal)
 
+    @override_settings(POS_TICKET_LOCK_LEASE_SECONDS=15)
+    def test_lock_de_ticket_bloquea_otra_tableta_y_heartbeat_renueva_lease(self):
+        mesa = Mesa.objects.get(sucursal=self.sucursal, clave="MESA-5")
+        apertura = self.client.post(
+            "/api/tickets/abrir/",
+            data=json.dumps({"mesa_id": str(mesa.id), "device_id": "tablet-a"}),
+            content_type="application/json",
+            HTTP_X_POS_DEVICE_ID="tablet-a",
+        )
+        self.assertEqual(apertura.status_code, 200)
+        ticket_payload = apertura.json()["ticket"]
+        self.assertTrue(ticket_payload["bloqueo"]["activo"])
+        self.assertTrue(ticket_payload["bloqueo"]["es_mio"])
+        self.assertEqual(ticket_payload["bloqueo"]["lease_segundos"], 15)
+        self.assertEqual(ticket_payload["version_entidad"], 1)
+
+        bloqueado = self.client.post(
+            f"/api/tickets/{ticket_payload['id']}/partidas/",
+            data=json.dumps(
+                {
+                    "producto_id": str(self.producto.id),
+                    "cantidad": 1,
+                    "device_id": "tablet-b",
+                    "version_entidad": ticket_payload["version_entidad"],
+                }
+            ),
+            content_type="application/json",
+            HTTP_X_POS_DEVICE_ID="tablet-b",
+        )
+        self.assertEqual(bloqueado.status_code, 423)
+        self.assertIn("tomada", bloqueado.json()["error"])
+        self.assertFalse(bloqueado.json()["bloqueo"]["es_mio"])
+
+        ahora = timezone.now() + timedelta(seconds=7)
+        with patch("ventas.services.timezone.now", return_value=ahora):
+            heartbeat = self.client.post(
+                f"/api/tickets/{ticket_payload['id']}/bloqueo/",
+                data=json.dumps({"device_id": "tablet-a"}),
+                content_type="application/json",
+                HTTP_X_POS_DEVICE_ID="tablet-a",
+            )
+        self.assertEqual(heartbeat.status_code, 200)
+        ticket = Ticket.objects.get(pk=ticket_payload["id"])
+        self.assertEqual(ticket.bloqueo_device_id, "tablet-a")
+        self.assertEqual(ticket.bloqueo_expira_en, ahora + timedelta(seconds=15))
+
+        sin_device = self.client.post(
+            f"/api/tickets/{ticket_payload['id']}/partidas/",
+            data=json.dumps({"producto_id": str(self.producto.id), "cantidad": 1}),
+            content_type="application/json",
+        )
+        self.assertEqual(sin_device.status_code, 423)
+
+    @override_settings(POS_TICKET_LOCK_LEASE_SECONDS=15)
+    def test_lock_expirado_se_recupera_y_la_version_stale_no_escribe(self):
+        mesa = Mesa.objects.get(sucursal=self.sucursal, clave="MESA-6")
+        apertura = self.client.post(
+            "/api/tickets/abrir/",
+            data=json.dumps({"mesa_id": str(mesa.id), "device_id": "tablet-a"}),
+            content_type="application/json",
+            HTTP_X_POS_DEVICE_ID="tablet-a",
+        )
+        self.assertEqual(apertura.status_code, 200)
+        ticket_id = apertura.json()["ticket"]["id"]
+        version_inicial = apertura.json()["ticket"]["version_entidad"]
+        ticket = Ticket.objects.get(pk=ticket_id)
+        vencido = timezone.now() - timedelta(seconds=1)
+        ticket.bloqueo_expira_en = vencido
+        ticket.bloqueo_heartbeat_en = vencido
+        ticket.comentario_general = "Cambio confirmado por el servidor"
+        ticket.version_entidad += 1
+        ticket.save(
+            update_fields=[
+                "bloqueo_expira_en",
+                "bloqueo_heartbeat_en",
+                "comentario_general",
+                "version_entidad",
+            ]
+        )
+
+        stale = self.client.patch(
+            f"/api/tickets/{ticket_id}/",
+            data=json.dumps(
+                {
+                    "comentario_general": "Cambio atrasado",
+                    "device_id": "tablet-a",
+                    "version_entidad": version_inicial,
+                }
+            ),
+            content_type="application/json",
+            HTTP_X_POS_DEVICE_ID="tablet-a",
+        )
+        self.assertEqual(stale.status_code, 409)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.comentario_general, "Cambio confirmado por el servidor")
+        self.assertEqual(ticket.bloqueo_device_id, "tablet-a")
+        self.assertEqual(ticket.bloqueo_expira_en, vencido)
+
+        recuperado = self.client.post(
+            f"/api/tickets/{ticket_id}/bloqueo/",
+            data=json.dumps({"device_id": "tablet-b"}),
+            content_type="application/json",
+            HTTP_X_POS_DEVICE_ID="tablet-b",
+        )
+        self.assertEqual(recuperado.status_code, 200)
+        self.assertTrue(recuperado.json()["bloqueo"]["es_mio"])
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.bloqueo_device_id, "tablet-b")
+
+        actualizado = self.client.post(
+            f"/api/tickets/{ticket_id}/partidas/",
+            data=json.dumps(
+                {
+                    "producto_id": str(self.producto.id),
+                    "cantidad": 1,
+                    "device_id": "tablet-b",
+                    "version_entidad": recuperado.json()["ticket"]["version_entidad"],
+                }
+            ),
+            content_type="application/json",
+            HTTP_X_POS_DEVICE_ID="tablet-b",
+        )
+        self.assertEqual(actualizado.status_code, 200)
+        self.assertEqual(actualizado.json()["ticket"]["version_entidad"], recuperado.json()["ticket"]["version_entidad"] + 1)
+
     def test_teclado_actualiza_cantidad_termino_y_elimina_grupo(self):
         mesa = Mesa.objects.get(sucursal=self.sucursal, clave="MESA-6")
         bistec = Producto.objects.get(sucursal=self.sucursal, codigo="TBI")

@@ -288,6 +288,7 @@ LOGIN_URL = "/acceso/"
 POS_LOGIN_MAX_ATTEMPTS = int(os.getenv("POS_LOGIN_MAX_ATTEMPTS", "5"))
 POS_LOGIN_MAX_IP_ATTEMPTS = int(os.getenv("POS_LOGIN_MAX_IP_ATTEMPTS", "20"))
 POS_LOGIN_LOCKOUT_SECONDS = int(os.getenv("POS_LOGIN_LOCKOUT_SECONDS", "900"))
+POS_TICKET_LOCK_LEASE_SECONDS = int(os.getenv("POS_TICKET_LOCK_LEASE_SECONDS", "15"))
 PRINT_BACKEND = os.getenv("PRINT_BACKEND", "tcp").lower()
 if PRINT_BACKEND not in {"tcp", "archivo"}:
     raise ValueError("PRINT_BACKEND debe ser 'tcp' o 'archivo'.")

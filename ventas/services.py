@@ -1,5 +1,7 @@
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
@@ -25,13 +27,174 @@ class ErrorVenta(ValueError):
     pass
 
 
+class TicketBloqueado(ErrorVenta):
+    status_code = 423
+
+    def __init__(self, ticket, device_id=""):
+        self.ticket = ticket
+        self.device_id = device_id
+        nombre = etiqueta_bloqueo_ticket(ticket) or "otra tableta"
+        super().__init__(f"{ticket.mesa.nombre} está tomada por {nombre}.")
+
+
+class VersionEntidadDesactualizada(ErrorVenta):
+    status_code = 409
+
+    def __init__(self, ticket, device_id=""):
+        self.ticket = ticket
+        self.device_id = device_id
+        super().__init__("La orden cambió desde que la abriste. Revisa la versión actual antes de guardar.")
+
+
 CANALES_CONVERSION = {
     Mesa.Canal.COMEDOR: Mesa.Canal.LLEVAR,
     Mesa.Canal.LLEVAR: Mesa.Canal.COMEDOR,
     Mesa.Canal.DOMICILIO: Mesa.Canal.RECOGER,
     Mesa.Canal.RECOGER: Mesa.Canal.DOMICILIO,
 }
+ESTADOS_ACTIVOS = (Ticket.Estado.ABIERTO, Ticket.Estado.PROCESADO, Ticket.Estado.COBRAR)
+TICKET_LOCK_FIELDS = [
+    "bloqueo_device_id",
+    "bloqueo_operador",
+    "bloqueo_tomado_en",
+    "bloqueo_heartbeat_en",
+    "bloqueo_expira_en",
+]
 _ATENDIO_AUTOMATICO = object()
+
+
+def lease_bloqueo_ticket_segundos():
+    return max(15, int(getattr(settings, "POS_TICKET_LOCK_LEASE_SECONDS", 15)))
+
+
+def _bloqueo_vigente(ticket, ahora=None):
+    ahora = ahora or timezone.now()
+    return (
+        ticket.estado in ESTADOS_ACTIVOS
+        and bool(ticket.bloqueo_device_id)
+        and ticket.bloqueo_expira_en is not None
+        and ticket.bloqueo_expira_en > ahora
+    )
+
+
+def etiqueta_bloqueo_ticket(ticket):
+    if ticket.bloqueo_operador_id:
+        return ticket.bloqueo_operador.nombre
+    if ticket.bloqueo_device_id:
+        return f"Tableta {ticket.bloqueo_device_id[-6:]}"
+    return ""
+
+
+def bloqueo_ticket_payload(ticket, device_id="", ahora=None):
+    ahora = ahora or timezone.now()
+    activo = _bloqueo_vigente(ticket, ahora)
+    return {
+        "activo": activo,
+        "device_id": ticket.bloqueo_device_id if activo else "",
+        "operador_id": str(ticket.bloqueo_operador_id) if activo and ticket.bloqueo_operador_id else "",
+        "tomado_por": etiqueta_bloqueo_ticket(ticket) if activo else "",
+        "tomado_en": ticket.bloqueo_tomado_en.isoformat() if activo and ticket.bloqueo_tomado_en else "",
+        "heartbeat_en": ticket.bloqueo_heartbeat_en.isoformat() if activo and ticket.bloqueo_heartbeat_en else "",
+        "expira_en": ticket.bloqueo_expira_en.isoformat() if activo and ticket.bloqueo_expira_en else "",
+        "lease_segundos": lease_bloqueo_ticket_segundos(),
+        "es_mio": activo and bool(device_id) and ticket.bloqueo_device_id == device_id,
+        "expirado": bool(ticket.bloqueo_device_id) and not activo,
+    }
+
+
+def _limpiar_bloqueo_instancia(ticket):
+    ticket.bloqueo_device_id = ""
+    ticket.bloqueo_operador = None
+    ticket.bloqueo_tomado_en = None
+    ticket.bloqueo_heartbeat_en = None
+    ticket.bloqueo_expira_en = None
+
+
+def guardar_ticket(ticket, update_fields=None, limpiar_bloqueo=False):
+    ticket.version_entidad = (ticket.version_entidad or 0) + 1
+    if limpiar_bloqueo:
+        _limpiar_bloqueo_instancia(ticket)
+    if update_fields is None:
+        ticket.save()
+        return ticket
+    campos = set(update_fields)
+    campos.update(["version_entidad", "actualizado_en"])
+    if limpiar_bloqueo:
+        campos.update(TICKET_LOCK_FIELDS)
+    ticket.save(update_fields=list(campos))
+    return ticket
+
+
+@transaction.atomic
+def asegurar_bloqueo_ticket(ticket, device_id, operador=None, ahora=None):
+    ahora = ahora or timezone.now()
+    if not device_id:
+        ticket = (
+            Ticket.objects.select_for_update()
+            .select_related("mesa", "bloqueo_operador", "atendio")
+            .get(pk=ticket.pk)
+        )
+        if _bloqueo_vigente(ticket, ahora):
+            raise TicketBloqueado(ticket, device_id)
+        if ticket.bloqueo_device_id:
+            _limpiar_bloqueo_instancia(ticket)
+            ticket.save(update_fields=TICKET_LOCK_FIELDS)
+        return ticket
+
+    ticket = (
+        Ticket.objects.select_for_update()
+        .select_related("mesa", "bloqueo_operador", "atendio")
+        .get(pk=ticket.pk)
+    )
+    if ticket.estado not in ESTADOS_ACTIVOS:
+        if ticket.bloqueo_device_id:
+            _limpiar_bloqueo_instancia(ticket)
+            ticket.save(update_fields=TICKET_LOCK_FIELDS)
+        return ticket
+
+    if _bloqueo_vigente(ticket, ahora) and ticket.bloqueo_device_id != device_id:
+        raise TicketBloqueado(ticket, device_id)
+
+    tomar_nuevo = ticket.bloqueo_device_id != device_id or not _bloqueo_vigente(ticket, ahora)
+    ticket.bloqueo_device_id = device_id
+    if operador is not None:
+        ticket.bloqueo_operador = operador
+    elif not ticket.bloqueo_operador_id:
+        ticket.bloqueo_operador = ticket.atendio
+    if tomar_nuevo:
+        ticket.bloqueo_tomado_en = ahora
+    ticket.bloqueo_heartbeat_en = ahora
+    ticket.bloqueo_expira_en = ahora + timedelta(seconds=lease_bloqueo_ticket_segundos())
+    ticket.save(update_fields=TICKET_LOCK_FIELDS)
+    return ticket
+
+
+@transaction.atomic
+def liberar_bloqueo_ticket(ticket, device_id, ahora=None):
+    if not device_id:
+        return Ticket.objects.select_for_update().get(pk=ticket.pk)
+    ahora = ahora or timezone.now()
+    ticket = (
+        Ticket.objects.select_for_update()
+        .select_related("mesa", "bloqueo_operador")
+        .get(pk=ticket.pk)
+    )
+    if ticket.bloqueo_device_id == device_id or not _bloqueo_vigente(ticket, ahora):
+        _limpiar_bloqueo_instancia(ticket)
+        ticket.save(update_fields=TICKET_LOCK_FIELDS)
+        return ticket
+    raise TicketBloqueado(ticket, device_id)
+
+
+def validar_version_entidad(ticket, version_esperada, device_id=""):
+    if version_esperada in (None, ""):
+        return
+    try:
+        version = int(version_esperada)
+    except (TypeError, ValueError) as exc:
+        raise ErrorVenta("La versión de la orden no es válida.") from exc
+    if version != ticket.version_entidad:
+        raise VersionEntidadDesactualizada(ticket, device_id)
 
 
 def _limpiar_cliente_ticket(ticket):
@@ -241,21 +404,49 @@ def convertir_tipo_ticket(ticket, canal_destino):
 
     canal_anterior = ticket.canal
     mesa_anterior = ticket.mesa
+    campos_ticket = ["mesa", "canal"]
     if canal_anterior == Mesa.Canal.DOMICILIO and canal_destino == Mesa.Canal.RECOGER:
         nombre = ticket.contacto_pedido_nombre or ticket.cliente_nombre
         telefono = ticket.contacto_pedido_telefono or ticket.cliente_telefono
         _limpiar_cliente_ticket(ticket)
         ticket.cliente_nombre = nombre
         ticket.cliente_telefono = telefono
+        campos_ticket.extend(
+            [
+                "cliente",
+                "telefono_cliente",
+                "domicilio_cliente",
+                "cliente_nombre",
+                "cliente_telefono",
+                "cliente_domicilio",
+                "cliente_referencia",
+                "contacto_pedido_nombre",
+                "contacto_pedido_telefono",
+            ]
+        )
     elif canal_anterior == Mesa.Canal.RECOGER and canal_destino == Mesa.Canal.DOMICILIO:
         _limpiar_cliente_ticket(ticket)
+        campos_ticket.extend(
+            [
+                "cliente",
+                "telefono_cliente",
+                "domicilio_cliente",
+                "cliente_nombre",
+                "cliente_telefono",
+                "cliente_domicilio",
+                "cliente_referencia",
+                "contacto_pedido_nombre",
+                "contacto_pedido_telefono",
+            ]
+        )
     elif canal_anterior == Mesa.Canal.LLEVAR and canal_destino == Mesa.Canal.COMEDOR:
         ticket.cliente_nombre = ""
         ticket.cliente_telefono = ""
+        campos_ticket.extend(["cliente_nombre", "cliente_telefono"])
 
     ticket.mesa = mesa_destino
     ticket.canal = canal_destino
-    ticket.save()
+    guardar_ticket(ticket, campos_ticket)
     _evento(
         ticket,
         "ticket.tipo_convertido",
@@ -326,6 +517,7 @@ def agregar_partida(
             termino=termino,
         ).order_by("creada_en").first()
     )
+    guardar_ticket(ticket, [])
     _evento(ticket, "ticket.partida_agregada", {"partida_id": str(partida.id), "producto_id": str(producto.id)})
     return partida
 
@@ -366,6 +558,7 @@ def agregar_partida_sucursal(ticket, producto, cantidad=Decimal("1.000")):
         "ticket.partida_sucursal_agregada",
         {"partida_id": str(partida.id), "producto_origen_id": producto.origen_id},
     )
+    guardar_ticket(ticket, [])
     return partida
 
 
@@ -383,6 +576,7 @@ def actualizar_partida_sucursal(partida, cantidad):
         ticket = partida.ticket
         partida_id = str(partida.id)
         partida.delete()
+        guardar_ticket(ticket, [])
         _evento(ticket, "ticket.partida_sucursal_eliminada", {"partida_id": partida_id})
         return None
     if cantidad > Decimal("999.999") or cantidad != cantidad.quantize(Decimal("0.001")):
@@ -394,6 +588,7 @@ def actualizar_partida_sucursal(partida, cantidad):
         "ticket.partida_sucursal_actualizada",
         {"partida_id": str(partida.id), "cantidad": str(cantidad)},
     )
+    guardar_ticket(partida.ticket, [])
     return partida
 
 
@@ -410,6 +605,7 @@ def actualizar_partida(partida, cantidad, termino=None, validar_componente=True)
         partida_id = str(partida.id)
         partida.delete()
         _reasignar_componentes_promocion(ticket)
+        guardar_ticket(ticket, [])
         _evento(ticket, "ticket.partida_eliminada", {"partida_id": partida_id})
         return None
     if cantidad != cantidad.to_integral_value() or cantidad > 99:
@@ -428,6 +624,7 @@ def actualizar_partida(partida, cantidad, termino=None, validar_componente=True)
         "ticket.partida_actualizada",
         {"partida_id": str(partida.id), "cantidad": str(cantidad), "termino": partida.termino},
     )
+    guardar_ticket(partida.ticket, [])
     return partida
 
 
@@ -456,6 +653,7 @@ def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar
         ids = [str(partida.id) for partida in partidas]
         Partida.objects.filter(id__in=[partida.id for partida in partidas]).delete()
         _reasignar_componentes_promocion(ticket)
+        guardar_ticket(ticket, [])
         _evento(ticket, "ticket.partidas_eliminadas", {"partida_ids": ids})
         return None
     cantidad = Decimal(str(cantidad))
@@ -496,6 +694,7 @@ def alternar_modificador(ticket, comensal, codigo, nombre):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if ticket.estado != Ticket.Estado.ABIERTO:
         raise ErrorVenta("La orden ya fue procesada.")
+    campos_ticket = []
     existente = ModificadorTicket.objects.filter(ticket=ticket, comensal=comensal, codigo=codigo).first()
     if existente:
         existente.delete()
@@ -504,7 +703,7 @@ def alternar_modificador(ticket, comensal, codigo, nombre):
         ticket.modificadores.filter(comensal=comensal).delete()
         if ticket.comentarios_generales:
             ticket.comentarios_generales = []
-            ticket.save(update_fields=["comentarios_generales", "actualizado_en"])
+            campos_ticket.append("comentarios_generales")
         ModificadorTicket.objects.create(
             sucursal=ticket.sucursal,
             ticket=ticket,
@@ -513,6 +712,7 @@ def alternar_modificador(ticket, comensal, codigo, nombre):
             nombre=nombre,
         )
         activo = True
+    guardar_ticket(ticket, campos_ticket)
     _evento(ticket, "ticket.modificador", {"comensal": comensal, "codigo": codigo, "activo": activo})
     return activo
 
@@ -532,7 +732,7 @@ def alternar_comentario_general(ticket, codigo, nombre):
         comentarios.pop(indice)
         activo = False
     ticket.comentarios_generales = comentarios
-    ticket.save(update_fields=["comentarios_generales", "actualizado_en"])
+    guardar_ticket(ticket, ["comentarios_generales"])
     _evento(ticket, "ticket.comentario_general", {"codigo": codigo, "activo": activo})
     return activo
 
@@ -548,9 +748,10 @@ def asegurar_modificador(ticket, comensales, codigo, nombre):
         .values_list("comensal", flat=True)
     )
     aplicados = []
+    campos_ticket = []
     if comensales_con_producto and ticket.comentarios_generales:
         ticket.comentarios_generales = []
-        ticket.save(update_fields=["comentarios_generales", "actualizado_en"])
+        campos_ticket.append("comentarios_generales")
     for comensal in comensales:
         if comensal not in comensales_con_producto:
             continue
@@ -565,6 +766,8 @@ def asegurar_modificador(ticket, comensales, codigo, nombre):
         aplicados.append(comensal)
         if creado:
             _evento(ticket, "ticket.modificador", {"comensal": comensal, "codigo": codigo, "activo": True})
+    if aplicados or campos_ticket:
+        guardar_ticket(ticket, campos_ticket)
     return aplicados
 
 
@@ -599,7 +802,7 @@ def procesar_ticket(ticket):
         validar_captura_por_nombres(ticket)
     ticket.estado = Ticket.Estado.PROCESADO
     ticket.procesado_en = timezone.now()
-    ticket.save(update_fields=["estado", "procesado_en", "actualizado_en"])
+    guardar_ticket(ticket, ["estado", "procesado_en"])
     ticket.partidas.update(procesada=True)
     _evento(ticket, "ticket.procesado", {"total": str(ticket.total)})
     return ticket
@@ -639,7 +842,11 @@ def cobrar_ticket(ticket, forma_pago, importe_recibido=None):
     ticket.forma_pago = forma_pago
     ticket.importe_recibido = recibido
     ticket.pagado_en = timezone.now()
-    ticket.save(update_fields=["estado", "forma_pago", "importe_recibido", "pagado_en", "actualizado_en"])
+    guardar_ticket(
+        ticket,
+        ["estado", "forma_pago", "importe_recibido", "pagado_en"],
+        limpiar_bloqueo=True,
+    )
     _evento(ticket, "ticket.pagado", {"total": str(ticket.total), "forma_pago": forma_pago})
     return ticket
 
@@ -653,7 +860,7 @@ def completar_ticket_sucursal(ticket):
         raise ErrorVenta("Primero procesa e imprime el pedido de sucursal.")
     ticket.estado = Ticket.Estado.PAGADO
     ticket.pagado_en = timezone.now()
-    ticket.save(update_fields=["estado", "pagado_en", "actualizado_en"])
+    guardar_ticket(ticket, ["estado", "pagado_en"], limpiar_bloqueo=True)
     _evento(ticket, "ticket.sucursal_completado", {"total": str(ticket.total)})
     return ticket
 
@@ -688,8 +895,9 @@ def cancelar_ticket(ticket, permitir_procesado=False):
     ticket.repartidor = None
     ticket.estado = Ticket.Estado.CANCELADO
     ticket.cancelado_en = timezone.now()
-    ticket.save(
-        update_fields=[
+    guardar_ticket(
+        ticket,
+        [
             "cliente",
             "telefono_cliente",
             "domicilio_cliente",
@@ -712,8 +920,8 @@ def cancelar_ticket(ticket, permitir_procesado=False):
             "nombres_comensales",
             "estado",
             "cancelado_en",
-            "actualizado_en",
-        ]
+        ],
+        limpiar_bloqueo=True,
     )
     _evento(ticket, "ticket.cancelado", {"mesa": ticket.mesa.nombre})
     return ticket

@@ -7,16 +7,21 @@ param(
     [string]$TrustedProxy,
     [switch]$Https,
     [switch]$AllowInsecureHttpLan,
-    [switch]$SkipFirewall
+    [switch]$SkipFirewall,
+    [ValidatePattern("^(?:[01]\d|2[0-3]):[0-5]\d$")][string]$BackupTime = "03:15",
+    [ValidateRange(1, 3650)][int]$BackupRetentionDays = 30,
+    [switch]$SkipBackupTask
 )
 
 $ErrorActionPreference = "Stop"
 $raiz = Split-Path -Parent $MyInvocation.MyCommand.Path
 $python = Join-Path $raiz ".venv\Scripts\python.exe"
 $servicioPython = Join-Path $raiz "servicio_windows.py"
+$scriptRespaldo = Join-Path $raiz "respaldar-db-sqlite.ps1"
 $entorno = Join-Path $raiz ".env"
 $nombreServicio = "LosTocayosPOS"
 $nombreFirewall = "Los Tocayos POS - LAN privada"
+$nombreTareaRespaldo = "LosTocayosPOS-RespaldoSQLite"
 
 Set-Location -LiteralPath $raiz
 
@@ -156,6 +161,99 @@ function Protect-Path {
     }
 }
 
+function Quote-TaskArgument {
+    param([string]$Value)
+
+    if ($Value -match '"') {
+        throw "Las rutas de la tarea programada no pueden contener comillas dobles."
+    }
+    return '"' + $Value + '"'
+}
+
+function Register-SqliteBackupTask {
+    param(
+        [string]$PythonPath,
+        [string]$DatabasePath,
+        [string]$BackupRoot,
+        [string]$LogPath,
+        [string]$DailyTime,
+        [int]$RetentionDays
+    )
+
+    if (-not (Test-Path -LiteralPath $scriptRespaldo)) {
+        throw "No se encontro el script de respaldo $scriptRespaldo."
+    }
+    $hora = [TimeSpan]::ParseExact($DailyTime, "hh\:mm", [Globalization.CultureInfo]::InvariantCulture)
+    $powershell = Join-Path $PSHOME "powershell.exe"
+    $argumentos = @(
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        (Quote-TaskArgument -Value $scriptRespaldo),
+        "-Python",
+        (Quote-TaskArgument -Value $PythonPath),
+        "-DatabasePath",
+        (Quote-TaskArgument -Value $DatabasePath),
+        "-BackupRoot",
+        (Quote-TaskArgument -Value $BackupRoot),
+        "-LogPath",
+        (Quote-TaskArgument -Value $LogPath),
+        "-RetentionDays",
+        $RetentionDays
+    ) -join " "
+    $accion = New-ScheduledTaskAction `
+        -Execute $powershell `
+        -Argument $argumentos `
+        -WorkingDirectory $raiz
+    $disparador = New-ScheduledTaskTrigger -Daily -At ([DateTime]::Today.Add($hora))
+    $principalTarea = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
+    $configuracionTarea = New-ScheduledTaskSettingsSet `
+        -Compatibility Win8 `
+        -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
+        -MultipleInstances IgnoreNew `
+        -StartWhenAvailable
+    Register-ScheduledTask `
+        -TaskName $nombreTareaRespaldo `
+        -Action $accion `
+        -Trigger $disparador `
+        -Principal $principalTarea `
+        -Settings $configuracionTarea `
+        -Description "Respaldo consistente y verificable de runtime\db.sqlite3 de Los Tocayos POS." `
+        -Force | Out-Null
+}
+
+function Remove-SqliteBackupTask {
+    $tarea = Get-ScheduledTask -TaskName $nombreTareaRespaldo -ErrorAction SilentlyContinue
+    if ($tarea) {
+        Unregister-ScheduledTask -TaskName $nombreTareaRespaldo -Confirm:$false
+    }
+}
+
+function Invoke-SqliteBackup {
+    param(
+        [string]$PythonPath,
+        [string]$DatabasePath,
+        [string]$BackupRoot,
+        [string]$LogPath,
+        [int]$RetentionDays
+    )
+
+    if (-not (Test-Path -LiteralPath $scriptRespaldo)) {
+        throw "No se encontro el script de respaldo $scriptRespaldo."
+    }
+    & $scriptRespaldo `
+        -Python $PythonPath `
+        -DatabasePath $DatabasePath `
+        -BackupRoot $BackupRoot `
+        -LogPath $LogPath `
+        -RetentionDays $RetentionDays
+    if ($LASTEXITCODE -ne 0) {
+        throw "Fallo el respaldo verificable inicial de runtime\db.sqlite3."
+    }
+}
+
 $hosts = @($AllowedHosts -split ",")
 if (-not $hosts.Count -or @($hosts | Where-Object { -not (Test-AllowedHost -Value $_) }).Count) {
     throw "AllowedHosts sólo acepta hosts/IP concretos, sin comodines, espacios, esquemas, rutas ni puertos."
@@ -231,9 +329,12 @@ Set-DotEnvValue -Path $entorno -Name "WAITRESS_CLEANUP_INTERVAL" -Value "10"
 Set-DotEnvValue -Path $entorno -Name "WAITRESS_TRUSTED_PROXY" -Value $TrustedProxy
 
 $dbEngine = Get-DotEnvValue -Path $entorno -Name "DB_ENGINE"
-if ([string]::IsNullOrWhiteSpace($dbEngine) -or $dbEngine.ToLowerInvariant() -eq "sqlite") {
-    $runtime = Join-Path $raiz "runtime"
-    $sqliteDestino = Join-Path $runtime "db.sqlite3"
+$usaSqlite = [string]::IsNullOrWhiteSpace($dbEngine) -or $dbEngine.ToLowerInvariant() -eq "sqlite"
+$runtime = Join-Path $raiz "runtime"
+$sqliteDestino = Join-Path $runtime "db.sqlite3"
+$backupRoot = Join-Path $raiz "backups"
+$backupLog = Join-Path $raiz "logs\sqlite-backup.log"
+if ($usaSqlite) {
     New-Item -ItemType Directory -Force -Path $runtime | Out-Null
     if (-not (Test-Path -LiteralPath $sqliteDestino) -and (Test-Path -LiteralPath (Join-Path $raiz "db.sqlite3"))) {
         Copy-Item -LiteralPath (Join-Path $raiz "db.sqlite3") -Destination $sqliteDestino
@@ -251,6 +352,7 @@ if ([string]::IsNullOrWhiteSpace($dbEngine) -or $dbEngine.ToLowerInvariant() -eq
 Protect-ApplicationTree -Path $raiz
 Protect-Path -Path (Join-Path $raiz ".env") -LocalServiceAccess "Read"
 Protect-Path -Path (Join-Path $raiz "db.sqlite3") -LocalServiceAccess "None"
+Protect-Path -Path $backupRoot -LocalServiceAccess "None"
 @("runtime", "logs", "media") | ForEach-Object {
     Protect-Path -Path (Join-Path $raiz $_) -LocalServiceAccess "Modify"
 }
@@ -314,8 +416,35 @@ if ($LASTEXITCODE -ne 0) {
 Protect-ApplicationTree -Path $raiz
 Protect-Path -Path (Join-Path $raiz ".env") -LocalServiceAccess "Read"
 Protect-Path -Path (Join-Path $raiz "db.sqlite3") -LocalServiceAccess "None"
+Protect-Path -Path $backupRoot -LocalServiceAccess "None"
 @("runtime", "logs", "media") | ForEach-Object {
     Protect-Path -Path (Join-Path $raiz $_) -LocalServiceAccess "Modify"
+}
+
+if ($usaSqlite -and -not $SkipBackupTask) {
+    Write-Host "Creando respaldo inicial verificable de runtime\db.sqlite3..." -ForegroundColor Yellow
+    Invoke-SqliteBackup `
+        -PythonPath $python `
+        -DatabasePath $sqliteDestino `
+        -BackupRoot $backupRoot `
+        -LogPath $backupLog `
+        -RetentionDays $BackupRetentionDays
+    Register-SqliteBackupTask `
+        -PythonPath $python `
+        -DatabasePath $sqliteDestino `
+        -BackupRoot $backupRoot `
+        -LogPath $backupLog `
+        -DailyTime $BackupTime `
+        -RetentionDays $BackupRetentionDays
+}
+else {
+    Remove-SqliteBackupTask
+    if ($usaSqlite) {
+        Write-Host "Se omitio la tarea programada de respaldo por -SkipBackupTask." -ForegroundColor Yellow
+    }
+    else {
+        Write-Host "DB_ENGINE no usa SQLite; se retiro la tarea programada de respaldo local." -ForegroundColor Yellow
+    }
 }
 
 $accion = if ($existente) { "update" } else { "install" }
@@ -378,3 +507,6 @@ else {
     Write-Host "Puerto LAN: $Port (sólo perfil privado/subred local)"
 }
 Write-Host "La clave secreta quedó guardada en .env con permisos NTFS restringidos."
+if ($usaSqlite -and -not $SkipBackupTask) {
+    Write-Host "Respaldo diario: tarea $nombreTareaRespaldo a las $BackupTime; retencion $BackupRetentionDays dias."
+}

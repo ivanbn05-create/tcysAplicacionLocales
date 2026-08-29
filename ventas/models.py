@@ -307,6 +307,18 @@ class Ticket(models.Model):
     paga_con = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     fecha_programada = models.DateField(null=True, blank=True)
     activado_programado_en = models.DateTimeField(null=True, blank=True)
+    version_entidad = models.PositiveIntegerField(default=1)
+    bloqueo_device_id = models.CharField(max_length=128, blank=True, db_index=True)
+    bloqueo_operador = models.ForeignKey(
+        UsuarioPOS,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="tickets_en_edicion",
+    )
+    bloqueo_tomado_en = models.DateTimeField(null=True, blank=True)
+    bloqueo_heartbeat_en = models.DateTimeField(null=True, blank=True)
+    bloqueo_expira_en = models.DateTimeField(null=True, blank=True, db_index=True)
     descuento_porcentaje = models.DecimalField(
         max_digits=5,
         decimal_places=2,
@@ -336,6 +348,9 @@ class Ticket(models.Model):
                 condition=Q(descuento_porcentaje__gte=0, descuento_porcentaje__lte=100),
                 name="ticket_descuento_valido",
             ),
+        ]
+        indexes = [
+            models.Index(fields=["estado", "bloqueo_expira_en"], name="ventas_t_estado_bloq_idx"),
         ]
 
     def __str__(self):

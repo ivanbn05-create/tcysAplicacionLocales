@@ -39,6 +39,51 @@ firewall a perfil privado/subred local y comprueba `/salud/`. El servicio corre 
 `LocalService`; sólo puede modificar `runtime`, `logs` y `media`. El código, `.venv`,
 `.env`, certificados y respaldos quedan bajo una ACL de SYSTEM/Administradores.
 
+El mismo instalador deja activo un respaldo diario verificable de
+`runtime\db.sqlite3`. De forma predeterminada registra la tarea programada
+`LosTocayosPOS-RespaldoSQLite` a las 03:15, con 30 días de retención, y ejecuta un
+primer respaldo antes de iniciar el servicio:
+
+```powershell
+.\instalar-servicio-lan.ps1 `
+  -AllowedHosts "localhost,127.0.0.1,192.168.0.30" `
+  -ListenAddress "127.0.0.1" `
+  -TrustedProxy "127.0.0.1" `
+  -Https `
+  -Port 8000 `
+  -BackupTime "03:15" `
+  -BackupRetentionDays 30
+```
+
+La tarea corre como `SYSTEM`, no usa cuentas ni contraseñas guardadas y no otorga
+acceso adicional a `LocalService`; `backups` queda reservado para SYSTEM y
+Administradores. Cada ejecución usa la API de respaldo online de SQLite para obtener
+una copia consistente aunque Waitress esté activo, guarda
+`backups\db-YYYYMMDD-HHMMSS.sqlite3`, su `.sha256` y un `.json` con resultado, hash,
+integridad y prueba de restauración. El registro operativo queda en
+`logs\sqlite-backup.log` como JSON Lines. Para cambiar horario o retención, vuelve a
+ejecutar el instalador con otros valores; para omitir la tarea en un entorno puntual,
+usa `-SkipBackupTask`, que retira la tarea si ya existía.
+
+Para lanzar una comprobación manual sin reconfigurar el servicio:
+
+```powershell
+.\respaldar-db-sqlite.ps1 -RetentionDays 30
+Get-Content .\logs\sqlite-backup.log -Tail 1
+```
+
+Para restaurar, detén el servicio, conserva una copia de emergencia del archivo actual,
+reemplaza `runtime\db.sqlite3` por el respaldo elegido y verifica la base antes de
+arrancar de nuevo:
+
+```powershell
+Stop-Service LosTocayosPOS
+Copy-Item .\runtime\db.sqlite3 .\runtime\db.sqlite3.pre-restauracion -Force
+Copy-Item .\backups\db-YYYYMMDD-HHMMSS.sqlite3 .\runtime\db.sqlite3 -Force
+.\.venv\Scripts\python -c "import sqlite3; c=sqlite3.connect(r'runtime\db.sqlite3'); print(c.execute('PRAGMA integrity_check').fetchone()[0])"
+Start-Service LosTocayosPOS
+```
+
 Para iniciar o comprobar posteriormente el servicio:
 
 ```powershell
@@ -133,6 +178,17 @@ Remoto.
 Por restricciones de Android, una página web no puede cerrar por fuerza la aplicación
 instalada. **Salir** abandona el Fullscreen API, vuelve al selector de mesas y permite al
 operador cambiar o cerrar la aplicación desde el sistema.
+
+## Bloqueo de edición
+
+Cada navegador/tableta genera un `device_id` local y toma un lock temporal al abrir una
+comanda activa. El lease dura 15 segundos por defecto (`POS_TICKET_LOCK_LEASE_SECONDS`)
+y la PWA lo renueva cada 10 segundos mientras el ticket sigue en pantalla.
+
+Si otra tableta intenta editar una mesa tomada recibe `423 Locked` con el operador que la
+tiene; si llega una petición atrasada con `version_entidad` vieja recibe `409 Conflict`.
+Al volver, cerrar o completar la orden se libera el lock explícitamente; si la tableta se
+apaga, la siguiente puede recuperarlo cuando expira el lease.
 
 ## Impresora térmica
 

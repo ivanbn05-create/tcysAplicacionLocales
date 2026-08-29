@@ -93,6 +93,8 @@ h2 { font-size: 1.7rem; }
 .ticket-top { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 18px; margin-bottom: 18px; }
 .ticket-top h1 { font-size: clamp(1.6rem, 2.5vw, 2.6rem); }
 .ticket-top h1 small { color: var(--muted); font-size: .48em; font-weight: 500; letter-spacing: 0; }
+.ticket-bloqueo { max-width: 230px; padding: 7px 10px; border: 1px solid var(--borde); border-radius: 9px; color: var(--carbon); background: var(--amarillo-suave); font-size: .72rem; font-weight: 900; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ticket-bloqueo.ajeno { color: #fff; background: var(--rojo); border-color: var(--rojo); }
 .estado { padding: 8px 12px; border-radius: 999px; color: #185d39; background: var(--verde-claro); font-weight: 800; font-size: .82rem; text-transform: capitalize; }
 .total-cabecera { padding-left: 18px; text-align: right; border-left: 1px solid var(--borde); }
 .total-cabecera span { display: block; color: var(--muted); font-size: .72rem; font-weight: 800; text-transform: uppercase; }

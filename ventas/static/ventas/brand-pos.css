@@ -480,6 +480,17 @@ body.en-operacion main,
 }
 .ocupada .posicion-estado { color: var(--amarillo-estado-oscuro); }
 .procesada .posicion-estado { color: var(--rojo); }
+.posicion.bloqueada {
+  border-color: var(--rojo);
+  background: #fff0ef;
+  box-shadow: inset 0 5px 0 var(--rojo);
+}
+.posicion.propia {
+  border-color: var(--verde);
+  box-shadow: inset 0 5px 0 var(--verde);
+}
+.posicion.bloqueada .posicion-estado { color: var(--rojo); }
+.posicion.propia .posicion-estado { color: var(--verde-oscuro); }
 .ocupada .posicion-estado i,
 .procesada .posicion-estado i { border-radius: 0; background: transparent; }
 .ocupada .posicion-estado i::after {
@@ -684,6 +695,22 @@ body.en-ticket .salir-tableta { display: none; }
   letter-spacing: .02em;
 }
 .ticket-top h1 small { color: #ecebe6; font-family: "Montserrat Tocayos", sans-serif; font-size: .45em; }
+.ticket-bloqueo {
+  max-width: 240px;
+  padding: 6px 9px;
+  border: 1px solid #77797b;
+  border-radius: 0;
+  color: var(--carbon);
+  background: var(--amarillo);
+  font-size: .62rem;
+  font-weight: 900;
+  text-align: center;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ticket-bloqueo.ajeno { color: #fff; border-color: var(--rojo); background: var(--rojo); }
 .ticket-top .boton.icono,
 .ticket-top .salir-mesero {
   min-height: 44px;
@@ -991,7 +1018,8 @@ dialog::backdrop { background: rgba(36, 38, 41, .76); backdrop-filter: none; }
   .grupo-auxiliar { grid-column: span 2; }
   .grupo-posiciones > div { grid-template-columns: subgrid; }
   .grupo-auxiliar { padding-top: 10px; border-top: 1px solid var(--carbon); }
-  .ticket-top { position: sticky; top: 60px; z-index: 8; grid-template-columns: auto minmax(0, 1fr) auto; }
+  .ticket-top { position: sticky; top: 60px; z-index: 8; grid-template-columns: auto minmax(0, 1fr) auto auto; }
+  .ticket-bloqueo { max-width: 160px; font-size: .55rem; }
   .flujo-ticket,
   .modo-tableta .flujo-ticket {
     height: auto;

@@ -3,7 +3,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 
 from personas.models import Rol, UsuarioPOS
@@ -19,7 +19,7 @@ from .models import (
     SucursalPedido,
     Ticket,
 )
-from .services import ErrorVenta, cancelar_ticket, registrar_evento
+from .services import ErrorVenta, cancelar_ticket, guardar_ticket, registrar_evento
 
 
 CANALES_CAJA = (
@@ -184,7 +184,7 @@ def activar_programados(sucursal, fecha=None):
         ticket.canal = Mesa.Canal.DOMICILIO
         ticket.estado = Ticket.Estado.PROCESADO
         ticket.activado_programado_en = ahora
-        ticket.save(update_fields=["mesa", "canal", "estado", "activado_programado_en", "actualizado_en"])
+        guardar_ticket(ticket, ["mesa", "canal", "estado", "activado_programado_en"], limpiar_bloqueo=True)
         registrar_evento(
             ticket,
             "ticket.programado_activado",
@@ -209,14 +209,15 @@ def programar_ticket(ticket, fecha_programada):
     ticket.activado_programado_en = None
     ticket.estado = Ticket.Estado.PROGRAMADO
     ticket.repartidor = None
-    ticket.save(
-        update_fields=[
+    guardar_ticket(
+        ticket,
+        [
             "fecha_programada",
             "activado_programado_en",
             "estado",
             "repartidor",
-            "actualizado_en",
-        ]
+        ],
+        limpiar_bloqueo=True,
     )
     registrar_evento(ticket, "ticket.programado", {"fecha": fecha_programada.isoformat()})
     return ticket
@@ -244,7 +245,7 @@ def reasignar_ticket(ticket, mesa_destino):
     ticket.canal = mesa_destino.canal
     if ticket.canal != Mesa.Canal.DOMICILIO:
         ticket.repartidor = None
-    ticket.save(update_fields=["mesa", "canal", "repartidor", "actualizado_en"])
+    guardar_ticket(ticket, ["mesa", "canal", "repartidor"])
     registrar_evento(
         ticket,
         "ticket.reasignado",
@@ -273,7 +274,7 @@ def asignar_repartidor(ticket, repartidor):
     if ticket.liquidaciones_repartidor.exists():
         raise ErrorVenta("El pedido ya pertenece a un total de repartidor.")
     ticket.repartidor = repartidor
-    ticket.save(update_fields=["repartidor", "actualizado_en"])
+    guardar_ticket(ticket, ["repartidor"])
     registrar_evento(ticket, "ticket.repartidor_asignado", {"repartidor_id": str(repartidor.id)})
     return ticket
 
@@ -290,7 +291,7 @@ def aplicar_descuento(ticket, porcentaje):
     if ticket.estado == Ticket.Estado.CANCELADO or ticket.liquidaciones_repartidor.exists() or ticket.cortes_caja.exists():
         raise ErrorVenta("El pedido ya fue liquidado o cerrado y no admite descuentos.")
     ticket.descuento_porcentaje = porcentaje
-    ticket.save(update_fields=["descuento_porcentaje", "actualizado_en"])
+    guardar_ticket(ticket, ["descuento_porcentaje"])
     registrar_evento(ticket, "ticket.descuento", {"porcentaje": str(porcentaje)})
     return ticket
 
@@ -590,6 +591,13 @@ def crear_corte_sucursal(sucursal, cliente_sucursal):
     Ticket.objects.filter(pk__in=[ticket.pk for ticket in tickets]).update(
         estado=Ticket.Estado.PAGADO,
         pagado_en=ahora,
+        actualizado_en=ahora,
+        version_entidad=F("version_entidad") + 1,
+        bloqueo_device_id="",
+        bloqueo_operador=None,
+        bloqueo_tomado_en=None,
+        bloqueo_heartbeat_en=None,
+        bloqueo_expira_en=None,
     )
     return corte, reporte
 

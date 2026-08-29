@@ -45,7 +45,29 @@
     "Roja Taquera",
   ];
   const prefijosSalsas = ["", "+ Más", "Nada más"];
+  const DEVICE_ID_KEY = "tocayos_pos_device_id";
+  const HEARTBEAT_BLOQUEO_MS = 10000;
+
+  function crearDeviceId() {
+    if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+    const aleatorio = Math.random().toString(36).slice(2);
+    return `tablet-${Date.now().toString(36)}-${aleatorio}`;
+  }
+
+  function obtenerDeviceId() {
+    try {
+      const guardado = localStorage.getItem(DEVICE_ID_KEY);
+      if (guardado) return guardado;
+      const nuevo = crearDeviceId();
+      localStorage.setItem(DEVICE_ID_KEY, nuevo);
+      return nuevo;
+    } catch {
+      return crearDeviceId();
+    }
+  }
+
   const estado = {
+    deviceId: obtenerDeviceId(),
     canal: "comedor",
     persona: 1,
     modoMenu: "productos",
@@ -63,6 +85,7 @@
     resultadosClientes: [],
     temporizadorCliente: null,
     temporizadorNombre: null,
+    temporizadorBloqueo: null,
     temporizadorSucursales: null,
     tokenBusquedaCliente: 0,
     clienteEditando: null,
@@ -81,13 +104,20 @@
   const escapar = (valor) => String(valor ?? "").replace(/[&<>'"]/g, caracter => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[caracter]);
 
   async function api(url, opciones = {}) {
+    const metodo = (opciones.method || "GET").toUpperCase();
+    let body = opciones.body;
+    if (requiereContratoTicket(url, metodo)) {
+      body = cuerpoConContratoTicket(body);
+    }
     const respuesta = await fetch(url, {
       cache: "no-store",
       credentials: "same-origin",
       ...opciones,
+      body,
       headers: {
         "Content-Type": "application/json",
         "X-CSRFToken": csrf(),
+        "X-POS-Device-ID": estado.deviceId,
         ...(opciones.headers || {}),
       },
     });
@@ -99,12 +129,133 @@
     let datos;
     try { datos = await respuesta.json(); } catch { datos = {}; }
     if (!respuesta.ok) {
+      if ([409, 423].includes(respuesta.status) && datos.ticket && estado.ticket?.id === datos.ticket.id) {
+        estado.ticket = datos.ticket;
+        actualizarVistaPorBloqueo();
+      }
       const error = new Error(datos.error || "No fue posible completar la operación.");
       error.datos = datos;
       error.status = respuesta.status;
       throw error;
     }
     return datos;
+  }
+
+  function requiereContratoTicket(url, metodo) {
+    if (!estado.ticket || ["GET", "HEAD"].includes(metodo)) return false;
+    if (url.includes(`/api/tickets/${estado.ticket.id}/bloqueo/`)) return false;
+    return url.includes(`/api/tickets/${estado.ticket.id}/`) || url.startsWith("/api/partidas/");
+  }
+
+  function cuerpoConContratoTicket(body) {
+    let datos = {};
+    if (typeof body === "string" && body.trim()) {
+      datos = JSON.parse(body);
+    } else if (body && typeof body === "object") {
+      return body;
+    }
+    if (!datos || typeof datos !== "object" || Array.isArray(datos)) return body;
+    return JSON.stringify({
+      ...datos,
+      device_id: estado.deviceId,
+      version_entidad: datos.version_entidad ?? estado.ticket.version_entidad,
+    });
+  }
+
+  function ticketActivo(ticket = estado.ticket) {
+    return ["abierto", "procesado", "cobrar"].includes(ticket?.estado);
+  }
+
+  function bloqueoPropio(ticket = estado.ticket) {
+    return Boolean(ticket?.bloqueo?.activo && ticket.bloqueo.es_mio);
+  }
+
+  function bloqueoDeOtro(ticket = estado.ticket) {
+    return Boolean(ticket?.bloqueo?.activo && !ticket.bloqueo.es_mio);
+  }
+
+  function textoBloqueo(ticket = estado.ticket) {
+    const bloqueo = ticket?.bloqueo;
+    if (!bloqueo?.activo) return "";
+    if (bloqueo.es_mio) return `Tomada por ${estado.operador?.nombre || "esta tableta"}`;
+    return `Tomada por ${bloqueo.tomado_por || "otra tableta"}`;
+  }
+
+  function actualizarIndicadorBloqueoTicket() {
+    const nodo = $("#ticket-bloqueo");
+    if (!nodo || !estado.ticket) return;
+    const texto = textoBloqueo();
+    nodo.hidden = !texto;
+    nodo.textContent = texto;
+    nodo.classList.toggle("ajeno", bloqueoDeOtro());
+  }
+
+  function actualizarVistaPorBloqueo() {
+    if (!estado.ticket) return;
+    actualizarIndicadorBloqueoTicket();
+    renderMenu();
+    renderComanda();
+    renderAcciones();
+  }
+
+  function iniciarHeartbeatBloqueo() {
+    clearInterval(estado.temporizadorBloqueo);
+    estado.temporizadorBloqueo = null;
+    if (!ticketActivo() || !bloqueoPropio()) return;
+    estado.temporizadorBloqueo = setInterval(() => renovarBloqueoTicket(), HEARTBEAT_BLOQUEO_MS);
+  }
+
+  async function renovarBloqueoTicket() {
+    if (!ticketActivo() || !bloqueoPropio()) {
+      clearInterval(estado.temporizadorBloqueo);
+      estado.temporizadorBloqueo = null;
+      return;
+    }
+    try {
+      const datos = await api(`/api/tickets/${estado.ticket.id}/bloqueo/`, {
+        method: "POST",
+        body: JSON.stringify({ device_id: estado.deviceId }),
+      });
+      estado.ticket = datos.ticket;
+      actualizarIndicadorBloqueoTicket();
+      renderAcciones();
+    } catch (error) {
+      clearInterval(estado.temporizadorBloqueo);
+      estado.temporizadorBloqueo = null;
+      toast(error.message, true);
+    }
+  }
+
+  async function liberarBloqueoActual() {
+    clearInterval(estado.temporizadorBloqueo);
+    estado.temporizadorBloqueo = null;
+    const ticket = estado.ticket;
+    if (!bloqueoPropio(ticket)) return;
+    try {
+      await api(`/api/tickets/${ticket.id}/bloqueo/`, {
+        method: "DELETE",
+        body: JSON.stringify({ device_id: estado.deviceId }),
+      });
+    } catch {
+      /* Si la red se cayó, el lease expira solo. */
+    }
+  }
+
+  function liberarBloqueoEnSalida() {
+    const ticket = estado.ticket;
+    if (!bloqueoPropio(ticket)) return;
+    fetch(`/api/tickets/${ticket.id}/bloqueo/`, {
+      method: "DELETE",
+      cache: "no-store",
+      credentials: "same-origin",
+      keepalive: true,
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": csrf(),
+        "X-POS-Device-ID": estado.deviceId,
+      },
+      body: JSON.stringify({ device_id: estado.deviceId }),
+    }).catch(() => {});
   }
 
   function cerrarToast() {
@@ -244,13 +395,29 @@
     }
   }
 
+  function ticketResumenEstado(ticket) {
+    return {
+      ticket_id: ticket.id,
+      folio: ticket.folio,
+      estado: ticket.estado,
+      total: ticket.total,
+      version_entidad: ticket.version_entidad,
+      bloqueo: ticket.bloqueo,
+    };
+  }
+
   function renderPosiciones() {
     const contenedor = $("#rejilla-posiciones");
     contenedor.setAttribute("aria-label", `Posiciones de ${nombresCanal[estado.canal] || estado.canal}`);
     const renderTarjeta = (posicion, opciones = {}) => {
       const ticket = estado.tickets[posicion.id];
-      const clase = ticket ? (ticket.estado === "abierto" ? "ocupada" : "procesada") : "libre";
-      const etiquetaEstado = ticket ? (ticket.estado === "abierto" ? "Orden abierta" : "Procesada") : "Libre";
+      const claseBase = ticket ? (ticket.estado === "abierto" ? "ocupada" : "procesada") : "libre";
+      const claseBloqueo = ticket?.bloqueo?.activo ? (ticket.bloqueo.es_mio ? " propia" : " bloqueada") : "";
+      const clase = `${claseBase}${claseBloqueo}`;
+      const etiquetaBloqueo = ticket?.bloqueo?.activo
+        ? (ticket.bloqueo.es_mio ? "Tomada por esta tableta" : `Tomada por ${ticket.bloqueo.tomado_por || "otra tableta"}`)
+        : "";
+      const etiquetaEstado = ticket ? (etiquetaBloqueo || (ticket.estado === "abierto" ? "Orden abierta" : "Procesada")) : "Libre";
       const detalle = ticket ? `Ticket ${ticket.folio} · ${dinero(ticket.total)}` : "Disponible";
       const partes = String(posicion.nombre).match(/^(.*?)[\s-]*(\d+)$/);
       const tipo = partes ? partes[1].trim() : "Posición";
@@ -370,10 +537,17 @@
     }
     bloquear(true);
     try {
-      const datos = await api("/api/tickets/abrir/", { method: "POST", body: JSON.stringify({ mesa_id: mesaId }) });
+      const datos = await api("/api/tickets/abrir/", {
+        method: "POST",
+        body: JSON.stringify({ mesa_id: mesaId, device_id: estado.deviceId }),
+      });
       estado.ticket = datos.ticket;
       mostrarTicket();
     } catch (error) {
+      if (error.status === 423 && error.datos?.ticket) {
+        estado.tickets[error.datos.ticket.mesa_id] = ticketResumenEstado(error.datos.ticket);
+        renderPosiciones();
+      }
       toast(error.message, true);
     } finally {
       bloquear(false);
@@ -389,6 +563,8 @@
     $("#vista-ticket").classList.toggle("ticket-sucursal", esSucursal);
     $("#ticket-mesa").textContent = ticket.mesa;
     $("#ticket-folio").textContent = ticket.folio;
+    actualizarIndicadorBloqueoTicket();
+    iniciarHeartbeatBloqueo();
     estado.modoEntrega = ticket.tipo_entrega || "aproximada";
     estado.entregaProgramadaDigitos = (ticket.tipo_entrega === "programada" ? ticket.entrega_aproximada : "")?.replace(":", "") || "";
     $("#terminal").checked = Boolean(ticket.terminal);
@@ -1163,22 +1339,29 @@
   }
 
   function renderAcciones() {
+    const bloqueoAjeno = bloqueoDeOtro();
     const abierto = estado.ticket.estado === "abierto";
     const cobrable = ["procesado", "cobrar"].includes(estado.ticket.estado);
     const esSucursal = estado.ticket.canal === "sucursales";
     const esDomicilio = estado.ticket.canal === "domicilio";
+    const editable = abierto && !bloqueoAjeno;
+    const operable = !bloqueoAjeno;
     $("#procesar").textContent = esSucursal ? "Procesar e imprimir" : "Procesar orden";
     $("#cobrar").textContent = esSucursal ? "Completar pedido" : "Cobrar";
     $("#procesar").classList.toggle("oculto", !abierto);
     $("#cancelar-orden").classList.toggle("oculto", !abierto && !cobrable);
     $("#cobrar").classList.toggle("oculto", !cobrable || esDomicilio);
     $("#reimprimir").classList.toggle("oculto", abierto);
+    $("#procesar").disabled = !editable;
+    $("#cancelar-orden").disabled = !operable;
+    $("#cobrar").disabled = !operable;
     $$(".persona, .opcion-preparacion, .comanda-papel button, .producto, .fila-partida-sucursal").forEach(b => {
       b.disabled = !abierto || b.classList.contains("no-disponible-hoy");
+      if (bloqueoAjeno) b.disabled = true;
     });
-    $$("#datos-cliente button, #datos-cliente input, #datos-cliente textarea").forEach(control => control.disabled = !abierto);
-    $$("#datos-servicio-directo input, #ticket-switches input, #nombre-persona").forEach(control => control.disabled = !abierto);
-    $$("#entrega, #pago-domicilio input").forEach(control => control.disabled = !abierto);
+    $$("#datos-cliente button, #datos-cliente input, #datos-cliente textarea").forEach(control => control.disabled = !editable);
+    $$("#datos-servicio-directo input, #ticket-switches input, #nombre-persona").forEach(control => control.disabled = !editable);
+    $$("#entrega, #pago-domicilio input, #comentario").forEach(control => control.disabled = !editable);
   }
 
   function partidasDeEdicion(productoId, persona, termino) {
@@ -1739,6 +1922,7 @@
   async function volver(forzar = false) {
     if (!forzar && !(await finalizarEdicion())) return;
     clearTimeout(estado.temporizadorNombre);
+    await liberarBloqueoActual();
     estado.ticket = null;
     document.body.classList.remove("en-ticket");
     $("#vista-ticket").classList.add("oculto");
@@ -1748,6 +1932,7 @@
 
   async function salirModoMesero() {
     if (!(await finalizarEdicion())) return;
+    await liberarBloqueoActual();
     estado.ticket = null;
     document.body.classList.remove("en-ticket");
     $("#vista-ticket").classList.add("oculto");
@@ -2080,7 +2265,14 @@
   });
   $("#reimprimir").addEventListener("click", reimprimir);
 
-  window.addEventListener("online", () => cargarEstado(estado.canal === "sucursales"));
+  window.addEventListener("online", () => {
+    if (bloqueoPropio()) renovarBloqueoTicket();
+    cargarEstado(estado.canal === "sucursales");
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && bloqueoPropio()) renovarBloqueoTicket();
+  });
+  window.addEventListener("pagehide", liberarBloqueoEnSalida);
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/service-worker.js").catch(() => {});
   renderOperadorActual();
   renderPersonas();
