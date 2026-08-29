@@ -866,12 +866,19 @@ class FlujoPOSTests(TestCase):
         self.assertNotContains(respuesta, 'class="perfil-acceso administrador" type="button" disabled')
         self.assertNotContains(respuesta, "¿Cómo deseas entrar?")
         self.assertContains(respuesta, 'id="pantalla-completa"')
+        self.assertContains(respuesta, 'id="operador-actual"')
+        self.assertContains(respuesta, 'id="operador-actual-nombre"')
+        self.assertContains(respuesta, '>Usuario activo</span>')
+        self.assertContains(respuesta, 'class="marca-los" aria-hidden="true">Los</span>')
+        self.assertContains(respuesta, 'class="marca-t-inicial">T</span>ocayos')
+        self.assertContains(respuesta, '<sup class="marca-registro" aria-hidden="true">®</sup>')
         self.assertContains(respuesta, 'id="comentario"')
         self.assertContains(respuesta, f"app.css?v={ASSET_VERSION}")
         self.assertContains(respuesta, f"brand-pos.css?v={ASSET_VERSION}")
         self.assertContains(respuesta, f"app.js?v={ASSET_VERSION}")
         self.assertContains(respuesta, "102e4b50")
         self.assertContains(respuesta, 'data-canal="comedor" type="button" aria-pressed="true"')
+        self.assertEqual(respuesta.content.decode().count('class="canal-marcador"'), 3)
         self.assertContains(respuesta, 'aria-labelledby="titulo-dialogo-cobro"')
         self.assertContains(respuesta, 'id="switch-tipo-pedido"')
         self.assertContains(respuesta, 'id="switch-modo-nombres"')
@@ -924,6 +931,25 @@ class FlujoPOSTests(TestCase):
         ):
             with self.subTest(contrato=contrato):
                 self.assertIn(contrato, javascript)
+
+    def test_javascript_sincroniza_el_operador_activo_con_la_cabecera(self):
+        javascript = (Path(settings.BASE_DIR) / "ventas" / "static" / "ventas" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        for contrato in (
+            'const contenedor = $("#operador-actual")',
+            'const nombre = $("#operador-actual-nombre")',
+            'const operador = estado.operador?.nombre?.trim() || ""',
+            "nombre.textContent = operador",
+            "contenedor.hidden = !operador",
+            "estado.operador = datos.operador;\n      renderOperadorActual();",
+            "estado.operador = null;\n    renderOperadorActual();",
+        ):
+            with self.subTest(contrato=contrato):
+                self.assertIn(contrato, javascript)
+
+        inicializacion = javascript.rsplit('renderOperadorActual();', 1)[-1]
+        self.assertIn("renderPersonas();", inicializacion)
 
     def test_imagen_producto_se_publica_como_miniatura_webp_privada(self):
         contenido = BytesIO()

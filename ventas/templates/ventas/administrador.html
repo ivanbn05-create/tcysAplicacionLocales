@@ -22,8 +22,12 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 
   <header class="admin-topbar">
     <a class="admin-marca" href="{% url 'ventas:inicio' %}" aria-label="Volver al punto de venta">
-      <img src="{% static 'ventas/brand/logoactual.jpeg' %}" alt="">
-      <span>Administrador</span>
+      <span class="admin-logotipo" aria-hidden="true">
+        <span class="admin-logo-los">Los</span>
+        <span class="admin-logo-tocayos"><span class="admin-logo-t">T</span>ocayos</span>
+        <sup class="admin-logo-registro">®</sup>
+      </span>
+      <span class="admin-marca-seccion">Administrador</span>
     </a>
     <div class="admin-contexto">
       <span>Sucursal</span>

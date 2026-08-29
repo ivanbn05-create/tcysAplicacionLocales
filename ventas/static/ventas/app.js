@@ -144,6 +144,15 @@
     resolver?.(clave);
   }
 
+  function renderOperadorActual() {
+    const contenedor = $("#operador-actual");
+    const nombre = $("#operador-actual-nombre");
+    if (!contenedor || !nombre) return;
+    const operador = estado.operador?.nombre?.trim() || "";
+    nombre.textContent = operador;
+    contenedor.hidden = !operador;
+  }
+
   async function entrarComoMesero({ mostrarPantalla = true } = {}) {
     const clave = await pedirClavePos("Código de mesero", "Ingresa el código de 4 dígitos asignado a tu nombre.");
     if (!clave) return false;
@@ -153,6 +162,7 @@
         body: JSON.stringify({ clave }),
       });
       estado.operador = datos.operador;
+      renderOperadorActual();
       if (mostrarPantalla) {
         $("#pantalla-acceso")?.classList.add("oculto");
         $("main").classList.remove("oculto");
@@ -1748,6 +1758,7 @@
     clearInterval(estado.temporizadorSucursales);
     estado.temporizadorSucursales = null;
     estado.operador = null;
+    renderOperadorActual();
     try { await api("/api/operador/salir/", { method: "POST", body: "{}" }); }
     catch (error) { toast(error.message, true); }
   }
@@ -2071,6 +2082,7 @@
 
   window.addEventListener("online", () => cargarEstado(estado.canal === "sucursales"));
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/service-worker.js").catch(() => {});
+  renderOperadorActual();
   renderPersonas();
   renderMenu();
   cargarEstado();

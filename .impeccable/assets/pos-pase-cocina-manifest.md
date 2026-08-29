@@ -7,6 +7,18 @@ desde el sitio existente de Los Tocayos. No se descargaron fotografías externas
 generaron imágenes sintéticas. La aplicación conserva las copias dentro de
 `ventas/static/ventas/menu/` para operar sin conexión.
 
+Los iconos de navegación sí proceden de Tabler Icons y se incrustan como trazos SVG
+en `ventas/templates/ventas/inicio.html`: `tools-kitchen-2`, `route` y
+`building-store`. Se obtuvieron del repositorio oficial el 29 de agosto de 2026,
+conservan su cuadrícula de 24 px y trazo de 2 px, y se sirven sin conexión. Tabler
+Icons usa licencia MIT; la copia íntegra está en
+`ventas/static/ventas/icons/TABLER-LICENSE.txt`.
+
+- Fuente: `https://github.com/tabler/tabler-icons`.
+- Archivos fuente: `icons/outline/tools-kitchen-2.svg`,
+  `icons/outline/route.svg` e `icons/outline/building-store.svg`.
+- Autor/licencia: Paweł Kuna y contribuidores, MIT.
+
 - Fuente de menú autorizada por el usuario: `C:\tcysWeb\img\menu\cards\*-480.webp`.
 - Fuente del respaldo de marca: `C:\tcysWeb\img\utils\cards\mainlogo-480.webp`.
 - Destino operativo: `ventas/static/ventas/menu/`.

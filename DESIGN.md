@@ -17,6 +17,7 @@ colors:
   rail: "#242629"
   muted: "#625f62"
   paper: "#f8f7f5"
+  paper-inactive: "#eeece8"
   canvas: "#e9e7e1"
   focus: "#0066cc"
 typography:
@@ -25,6 +26,12 @@ typography:
     fontSize: "clamp(2.8rem, 5vw, 3.8rem)"
     fontWeight: 400
     lineHeight: 0.82
+    letterSpacing: "0.01em"
+  brand:
+    fontFamily: '"Bebas Neue Tocayos", "Arial Narrow", sans-serif'
+    fontSize: "clamp(2.1rem, 3.8vw, 2.7rem)"
+    fontWeight: 400
+    lineHeight: 0.78
     letterSpacing: "0.01em"
   title:
     fontFamily: '"Bebas Neue Tocayos", "Arial Narrow", sans-serif'
@@ -62,12 +69,18 @@ components:
     height: "62px"
     padding: "5px clamp(14px, 2.4vw, 34px)"
     rounded: "{rounded.none}"
+  typed-brand-signature:
+    backgroundColor: "transparent"
+    textColor: "{colors.charcoal}"
+    typography: "{typography.brand}"
+    padding: "0"
+    rounded: "{rounded.none}"
   channel-ticket:
     backgroundColor: "{colors.paper}"
     textColor: "{colors.charcoal}"
     typography: "{typography.title}"
     height: "70px"
-    padding: "10px clamp(24px, 2.5vw, 34px) 10px clamp(15px, 2vw, 24px)"
+    padding: "10px clamp(14px, 2vw, 24px) 11px"
     rounded: "{rounded.none}"
   position-free:
     backgroundColor: "#ffffff"
@@ -126,7 +139,7 @@ components:
 
 **Creative North Star: “El pase de cocina digital”**
 
-La interfaz traduce el trabajo físico del restaurante —pase, tickets, clips, papel térmico y marcadores de estado— a una superficie operativa de alta densidad. Debe sentirse propia de Los Tocayos: enérgica, franca y táctil; la marca vive en la estructura amarilla, la tipografía condensada, las reglas de carbón y las decisiones de color, no en efectos decorativos.
+La interfaz traduce el trabajo físico del restaurante —pase, tickets, clips, papel térmico y marcadores de estado— a una superficie operativa de alta densidad. Debe sentirse propia de Los Tocayos: enérgica, franca y táctil; la marca vive en la estructura amarilla, la firma tipográfica bicolor, la tipografía condensada, las reglas de carbón y las decisiones de color, no en efectos decorativos.
 
 La referencia de composición aprobada del POS es `.impeccable/mocks/pos-pase-cocina-b-hibrida.png`; la del Administrador local es `.impeccable/mocks/decision/admin-bandeja-pendientes.png`. El Administrador no reemplaza ni convierte el POS en un dashboard: extiende el mismo mundo con una estación separada de bandejas, tickets y herramientas. La comanda virtual conserva la topología y la sobriedad de la comanda impresa; el resto de cada superficie puede evolucionar dentro de este sistema y de su brief.
 
@@ -184,9 +197,9 @@ La paleta combina identidad cálida con papel y carbón; los colores de estado s
 
 ## Layout
 
-La aplicación sigue una secuencia vertical: cabecera de marca compacta, riel de canales y estación de posiciones. No usa un pie de página operativo: cada posición comunica su estado dentro de la propia tarjeta, con texto, símbolo y color. La cabecera no aloja telemetría pasiva de conexión o impresora. En la vista de posiciones reserva las acciones de ventana y `Salir`; al entrar a captura, `Salir` desaparece y la navegación vuelve a depender de la acción contextual `Volver`.
+La aplicación sigue una secuencia vertical: cabecera de marca compacta, riel de canales y estación de posiciones. No usa un pie de página operativo: cada posición comunica su estado dentro de la propia tarjeta, con texto, símbolo y color. La cabecera no aloja telemetría pasiva de conexión o impresora. Entre la sucursal y los controles muestra al mesero realmente identificado por PIN; el bloque se oculta al cerrar su modo de operación y nunca sustituye ese nombre por la cuenta técnica de Django. En la vista de posiciones reserva las acciones de ventana y `Salir`; al entrar a captura, `Salir` desaparece y la navegación vuelve a depender de la acción contextual `Volver`.
 
-Las etiquetas Comedor, Domicilio y Sucursales son tickets/clipboards horizontales orientados a la derecha, con icono SVG a la izquierda, texto breve y clip superior. La estación usa una rejilla de siete columnas entre 701 px y escritorio: la zona principal ocupa cinco y Recoger/Llevar dos. Ambas heredan el mismo `subgrid`, por lo que toda tarjeta principal y auxiliar tiene exactamente el mismo ancho, alto, separación y padding. Bajo 700 px ambas zonas ocupan dos columnas y se apilan sin deformar las tarjetas.
+Las etiquetas Comedor, Domicilio y Sucursales son tickets/clipboards horizontales de papel con esquinas superiores cortadas, agrupados a la derecha del riel y sin ocupar todo su ancho en escritorio. Cada uno usa un icono SVG Tabler a la izquierda y un clip centrado; el seleccionado vuelve rojo el clip y añade una regla inferior roja cuya muesca triangular apunta hacia el contenido. La estación usa una rejilla de siete columnas entre 701 px y escritorio: la zona principal ocupa cinco y Recoger/Llevar dos. Ambas heredan el mismo `subgrid`, por lo que toda tarjeta principal y auxiliar tiene exactamente el mismo ancho, alto, separación y padding. Bajo 700 px ambas zonas ocupan dos columnas y se apilan sin deformar las tarjetas.
 
 Las sucursales se organizan como columnas desplazables; sus encabezados y textos internos usan una escala compacta para evitar saturación. El flujo de captura mantiene tres zonas funcionales —comensal, catálogo y comanda—: el riel de comensales conserva 62 px y, en disposición horizontal, el espacio restante se reparte aproximadamente 60 % para catálogo y 40 % para comanda. La comanda puede compactar sus pistas, pero nunca alterar el orden ni el lenguaje de la impresión térmica. Bajo 700 px las tres zonas se apilan sin ocultar funciones.
 
@@ -210,9 +223,9 @@ El sistema es plano por defecto. La separación proviene de campos tonales, regl
 
 ## Shapes
 
-Predominan esquinas rectas o apenas suavizadas. Campos y tarjetas operativas usan radios discretos; la comanda y los tickets administrativos permanecen rectangulares. Los canales incorporan un corte triangular hacia la derecha y un clip superior construido con CSS; los tickets de pendiente usan borde carbón y pequeños cortes inferiores. Reglas de carbón, subrayados y bordes discontinuos evocan impresión y papelería sin usar texturas raster.
+Predominan esquinas rectas o apenas suavizadas. Campos y tarjetas operativas usan radios discretos; la comanda y los tickets administrativos permanecen rectangulares. Los canales incorporan dos cortes superiores de papel, un clip centrado construido con CSS y una muesca roja únicamente en el activo; los tickets de pendiente usan borde carbón y pequeños cortes inferiores. Reglas de carbón, subrayados y bordes discontinuos evocan impresión y papelería sin usar texturas raster.
 
-El logotipo se muestra completo, proporcional y sin recoloración, rotación, contornos, relieve ni sombras. Los iconos son SVG de línea, con trazo uniforme, remates redondos y texto visible cuando funcionan como navegación.
+La firma visible se compone con la fuente Bebas Neue local: `LOS` verde, `TOCAYOS` rojo, la `T` inicial un 13 % mayor y `®` al final. Es texto de marca controlado —sin imagen raster, contorno, relieve ni sombra— y conserva un nombre accesible único para lectores de pantalla. La misma firma aparece en POS y Administrador. Los iconos de navegación proceden de Tabler Icons, son SVG de línea de 24 px y trazo uniforme de 2 px, se incrustan localmente y mantienen texto visible junto a cada símbolo.
 
 ## Components
 
@@ -239,7 +252,7 @@ El logotipo se muestra completo, proporcional y sin recoloración, rotación, co
 
 ### Navigation
 
-El riel de canales del POS usa tres tickets tipo clipboard orientados a la derecha. El seleccionado expone `aria-pressed`, papel blanco, clip amarillo y una única regla roja inferior. Los siete atajos del catálogo son botones con nombre accesible y destino explícito; el desplazamiento respeta movimiento reducido y nunca cambia el orden de categorías. `Salir` vive en la cabecera sólo mientras se muestran posiciones; dentro de una orden se oculta para evitar abandonar accidentalmente la captura.
+El riel de canales del POS usa tres tickets tipo clipboard agrupados y alineados a la derecha. El seleccionado expone `aria-pressed`, papel blanco, clip rojo y una única regla roja inferior con muesca central. Los siete atajos del catálogo son botones con nombre accesible y destino explícito; el desplazamiento respeta movimiento reducido y nunca cambia el orden de categorías. `Salir` vive en la cabecera sólo mientras se muestran posiciones; dentro de una orden se oculta para evitar abandonar accidentalmente la captura.
 
 El Administrador usa un riel carbón separado con Inicio, Personal, Domicilios, Programados, Movimientos, Reportes y Sucursales. El destino activo cambia a amarillo y expone `aria-current="page"`; en móvil conserva el mismo orden como pista horizontal. La pista inferior de Inicio ofrece herramientas secundarias después de los pendientes y no suplanta el riel ni eleva Reportes por encima de una urgencia operativa.
 

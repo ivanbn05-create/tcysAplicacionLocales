@@ -21,13 +21,18 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
 -->
   <form class="csrf-holder">{% csrf_token %}</form>
   <header class="topbar">
-    <div class="marca" role="img" aria-label="Los Tocayos, tacos de barbacoa">
-      <img src="{% static 'ventas/brand/logoactual.jpeg' %}" alt="" aria-hidden="true">
-      <span class="solo-lectores">Los Tocayos</span>
+    <div class="marca" role="img" aria-label="Los Tocayos, marca registrada">
+      <span class="marca-los" aria-hidden="true">Los</span>
+      <span class="marca-tocayos" aria-hidden="true"><span class="marca-t-inicial">T</span>ocayos</span>
+      <sup class="marca-registro" aria-hidden="true">®</sup>
     </div>
     <div class="sucursal">
       <span class="etiqueta-sistema">Sucursal</span>
       <strong>{{ sucursal.nombre }}</strong>
+    </div>
+    <div id="operador-actual" class="operador-actual" hidden>
+      <span class="etiqueta-sistema">Usuario activo</span>
+      <strong id="operador-actual-nombre" aria-live="polite"></strong>
     </div>
   </header>
   {% if not modo_tableta %}
@@ -78,13 +83,13 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
         <div class="canales-fila">
           <nav class="canales" aria-label="Canales de venta">
             <button class="canal activo" data-canal="comedor" type="button" aria-pressed="true">
-              <span class="canal-icono" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M6 16h20v5H6zM9 21v7M23 21v7M4 10h5v11M23 10h5v11M12 10a4 4 0 0 1 8 0"/></svg></span><span class="canal-texto">Comedor</span>
+              <span class="canal-icono" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M19 3v12h-5c-.023-3.681.184-7.406 5-12m0 12v6h-1v-3M8 4v17M5 4v3a3 3 0 1 0 6 0V4"/></svg></span><span class="canal-texto">Comedor</span><span class="canal-marcador" aria-hidden="true"></span>
             </button>
             <button class="canal" data-canal="domicilio" type="button" aria-pressed="false">
-              <span class="canal-icono" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M5 21h15l4-8h-8l-3-4H8M8 21a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm14 0a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM23 4c-2.2 0-4 1.7-4 3.8 0 3 4 6.2 4 6.2s4-3.2 4-6.2C27 5.7 25.2 4 23 4z"/></svg></span><span class="canal-texto">Domicilio</span>
+              <span class="canal-icono" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 19a2 2 0 1 0 4 0 2 2 0 0 0-4 0M19 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4M11 19h5.5a3.5 3.5 0 0 0 0-7h-8a3.5 3.5 0 0 1 0-7H13"/></svg></span><span class="canal-texto">Domicilio</span><span class="canal-marcador" aria-hidden="true"></span>
             </button>
             <button class="canal" data-canal="sucursales" type="button" aria-pressed="false">
-              <span class="canal-icono" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M6 13h20v14H6zM4 8h24l-2 5H6zM8 8l2-4h12l2 4M10 27v-8h6v8M20 18h3v4h-3M6 13c2 3 4 3 6 0 2 3 4 3 6 0 2 3 4 3 6 0"/></svg></span><span class="canal-texto">Sucursales</span>
+              <span class="canal-icono" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 21h18M3 7v1a3 3 0 0 0 6 0V7m0 1a3 3 0 0 0 6 0V7m0 1a3 3 0 0 0 6 0V7H3l2-4h14l2 4M5 21V10.85M19 21V10.85M9 21v-4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v4"/></svg></span><span class="canal-texto">Sucursales</span><span class="canal-marcador" aria-hidden="true"></span>
             </button>
           </nav>
         </div>

@@ -66,17 +66,43 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .admin-marca {
   min-width: 0;
   padding: 7px 18px;
-  display: flex;
-  align-items: center;
-  gap: 11px;
+  display: grid;
+  grid-template-rows: auto auto;
+  align-content: center;
+  justify-items: start;
+  gap: 2px;
   color: #111;
   text-decoration: none;
 }
-.admin-marca img { width: 46px; height: 46px; object-fit: cover; filter: grayscale(1) contrast(1.45); }
-.admin-marca span {
+.admin-logotipo {
+  display: inline-flex;
+  align-items: baseline;
+  gap: .1em;
   font-family: "Bebas Neue Tocayos", sans-serif;
-  font-size: 1.58rem;
-  letter-spacing: .035em;
+  font-size: 1.55rem;
+  letter-spacing: .01em;
+  line-height: .76;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.admin-logo-los { color: var(--verde); }
+.admin-logo-tocayos { color: var(--rojo); }
+.admin-logo-t { display: inline-block; font-size: 1.13em; line-height: .7; }
+.admin-logo-registro {
+  align-self: flex-start;
+  margin-left: -.05em;
+  color: var(--rojo);
+  font-family: "Montserrat Tocayos", Montserrat, sans-serif;
+  font-size: .3em;
+  font-weight: 800;
+  line-height: 1;
+}
+.admin-marca-seccion {
+  color: var(--carbon);
+  font-size: .57rem;
+  font-weight: 850;
+  letter-spacing: .12em;
+  line-height: 1;
   text-transform: uppercase;
 }
 .admin-contexto, .admin-turno {
@@ -482,8 +508,8 @@ dialog::backdrop { background: rgba(20,20,20,.72); }
 @media (max-width: 760px) {
   .admin-topbar { position: static; min-height: 58px; grid-template-columns: minmax(0, 1fr) auto; border-bottom-width: 3px; }
   .admin-marca { padding: 6px 10px; }
-  .admin-marca img { width: 40px; height: 40px; }
-  .admin-marca span { font-size: 1.26rem; }
+  .admin-logotipo { font-size: 1.3rem; }
+  .admin-marca-seccion { font-size: .5rem; }
   .admin-contexto { display: none; }
   .boton-topbar { min-height: 55px; padding: 7px 11px; }
   .boton-topbar span { display: none; }

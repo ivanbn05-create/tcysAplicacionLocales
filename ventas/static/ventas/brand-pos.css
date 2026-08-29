@@ -28,6 +28,7 @@
   --carbon: #353436;
   --carbon-suave: #535154;
   --riel: #242629;
+  --papel-inactivo: #eeece8;
   --tinta: #353436;
   --muted: #625f62;
   --papel: #f8f7f5;
@@ -132,7 +133,7 @@ button.operando::after {
   z-index: 12;
   min-height: 62px;
   padding: 5px clamp(14px, 2.4vw, 34px);
-  grid-template-columns: minmax(190px, 260px) minmax(140px, 1fr);
+  grid-template-columns: minmax(190px, 240px) minmax(100px, 1fr) minmax(130px, 220px);
   gap: clamp(12px, 2vw, 28px);
   border: 0;
   border-bottom: 3px solid var(--carbon);
@@ -140,24 +141,64 @@ button.operando::after {
   background: var(--amarillo);
   box-shadow: none;
 }
-.marca { position: relative; width: min(218px, 100%); height: 47px; overflow: hidden; }
-.marca img {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 270px;
-  max-width: none;
-  height: 270px;
-  object-fit: contain;
-  transform: translate(-40px, -115px);
+.marca {
+  position: relative;
+  width: max-content;
+  max-width: 100%;
+  height: auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: .1em;
+  overflow: visible;
+  color: var(--carbon);
+  font-family: "Bebas Neue Tocayos", "Arial Narrow", sans-serif;
+  font-size: clamp(2.1rem, 3.8vw, 2.7rem);
+  font-weight: 400;
+  letter-spacing: .01em;
+  line-height: .78;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
-.sucursal { min-width: 0; text-align: right; }
-.sucursal .etiqueta-sistema { color: #565100; }
+.marca-los { color: var(--verde); }
+.marca-tocayos { color: var(--rojo); }
+.marca-t-inicial { display: inline-block; font-size: 1.13em; line-height: .72; }
+.marca-registro {
+  align-self: flex-start;
+  margin: .02em 0 0 -.06em;
+  color: var(--rojo);
+  font-family: "Montserrat Tocayos", Montserrat, sans-serif;
+  font-size: .28em;
+  font-weight: 800;
+  line-height: 1;
+}
+.sucursal { min-width: 0; text-align: center; }
+.sucursal .etiqueta-sistema { color: var(--amarillo-estado-oscuro); }
 .sucursal strong {
   display: block;
   overflow: hidden;
   font-size: clamp(.9rem, 1.6vw, 1.15rem);
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.operador-actual {
+  min-width: 0;
+  padding-left: clamp(8px, 1.5vw, 18px);
+  display: grid;
+  align-content: center;
+  justify-items: end;
+  border-left: 1px solid rgba(53, 52, 54, .3);
+  text-align: right;
+}
+.operador-actual[hidden] { display: none; }
+.operador-actual .etiqueta-sistema { color: var(--amarillo-estado-oscuro); }
+.operador-actual strong {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  font-size: clamp(.72rem, 1.35vw, .9rem);
+  font-weight: 850;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -217,32 +258,38 @@ body.en-operacion main,
 .modo-tableta .vista-posiciones { grid-template-rows: minmax(0, 1fr); }
 .modo-tableta .estacion-posiciones { border-top: 2px solid var(--carbon); }
 .canales-fila {
-  min-height: 84px;
-  padding: 8px 8px 0;
+  min-height: 91px;
+  padding: 14px 8px 0;
   grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   align-items: stretch;
+  justify-items: end;
   background: var(--riel);
 }
 .canales,
 .canales-fila .canales {
+  width: min(880px, 86%);
   height: 100%;
   margin: 0;
-  gap: 10px;
+  gap: 12px;
   align-items: end;
+  justify-self: end;
+  overflow: visible;
 }
 .canal {
   min-height: 70px;
-  padding: 10px clamp(24px, 2.5vw, 34px) 10px clamp(15px, 2vw, 24px);
+  min-width: 0;
+  padding: 10px clamp(14px, 2vw, 24px) 11px;
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
+  grid-template-columns: 40px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   border: 0;
   border-radius: 0;
-  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 50%, calc(100% - 16px) 100%, 0 100%);
+  isolation: isolate;
+  overflow: visible;
   color: var(--carbon);
-  background: #eeece8;
+  background: transparent;
   box-shadow: none;
   text-align: left;
   transform: none;
@@ -251,31 +298,37 @@ body.en-operacion main,
 .canal::before {
   content: "";
   position: absolute;
-  top: 0;
-  left: 16px;
-  width: 24px;
-  height: 8px;
+  top: -8px;
+  left: 50%;
+  z-index: 3;
+  width: 29px;
+  height: 18px;
   border: 2px solid var(--carbon);
-  border-top: 0;
-  background: #b9b7b2;
+  border-radius: 2px;
+  background: var(--carbon-suave);
+  box-shadow: 0 2px 3px rgba(0, 0, 0, .28), inset 0 0 0 2px rgba(255, 255, 255, .16);
+  transform: translateX(-50%);
 }
 .canal::after {
   content: "";
   position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: 6px;
-  background: transparent;
+  inset: 0;
+  z-index: -1;
+  height: auto;
+  background: var(--papel-inactivo);
+  clip-path: polygon(12px 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%, 0 12px);
 }
-.canal:hover { color: var(--carbon); border-color: transparent; background: #fff; transform: none; }
-.canal.activo { color: var(--carbon); border-color: transparent; background: #fff; box-shadow: none; }
-.canal.activo::before { background: var(--amarillo); }
-.canal.activo::after { background: var(--rojo); }
+.canal:hover,
+.canal.activo { color: var(--carbon); border-color: transparent; background: transparent; box-shadow: none; transform: none; }
+.canal:hover::after,
+.canal.activo::after { background: var(--papel); }
+.canal.activo::before { border-color: var(--rojo); background: var(--rojo); }
 .canal-icono,
 .canal span.canal-icono {
-  width: 38px;
-  height: 38px;
+  position: relative;
+  z-index: 1;
+  width: 40px;
+  height: 40px;
   display: grid;
   place-items: center;
   border: 0;
@@ -284,16 +337,18 @@ body.en-operacion main,
   background: transparent;
 }
 .canal-icono svg {
-  width: 36px;
-  height: 36px;
+  width: 38px;
+  height: 38px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.8;
+  stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 .canal-texto,
 .canal span.canal-texto {
+  position: relative;
+  z-index: 1;
   width: auto;
   height: auto;
   display: block;
@@ -303,12 +358,27 @@ body.en-operacion main,
   background: transparent;
   min-width: 0;
   font-family: "Bebas Neue Tocayos", sans-serif;
-  font-size: clamp(1.25rem, 2vw, 1.7rem);
+  font-size: clamp(1.2rem, 1.7vw, 1.5rem);
   font-weight: 400;
   letter-spacing: .02em;
   line-height: 1;
   text-transform: uppercase;
 }
+.canal span.canal-marcador {
+  position: absolute;
+  inset: auto 0 0;
+  z-index: 2;
+  width: 100%;
+  height: 12px;
+  display: block;
+  border: 0;
+  border-radius: 0;
+  color: transparent;
+  background: transparent;
+  clip-path: polygon(0 55%, calc(50% - 9px) 55%, 50% 0, calc(50% + 9px) 55%, 100% 55%, 100% 100%, 0 100%);
+  pointer-events: none;
+}
+.canal.activo span.canal-marcador { background: var(--rojo); }
 .estacion-posiciones {
   min-height: 0;
   display: grid;
@@ -852,8 +922,8 @@ dialog {
 dialog::backdrop { background: rgba(36, 38, 41, .76); backdrop-filter: none; }
 
 @media (max-width: 1180px) {
-  .topbar { grid-template-columns: minmax(160px, 210px) minmax(110px, 1fr); }
-  .canal { grid-template-columns: 36px minmax(0, 1fr); padding-inline: 14px 24px; }
+  .topbar { grid-template-columns: minmax(160px, 210px) minmax(80px, 1fr) minmax(115px, 180px); }
+  .canal { grid-template-columns: 36px minmax(0, 1fr); padding-inline: 14px; }
   .canal-icono, .canal span.canal-icono { width: 36px; height: 36px; }
   .canal-icono svg { width: 36px; height: 36px; }
   .rejilla-posiciones.rejilla-dividida { grid-template-columns: repeat(7, minmax(0, 1fr)); }
@@ -866,13 +936,13 @@ dialog::backdrop { background: rgba(36, 38, 41, .76); backdrop-filter: none; }
 }
 
 @media (max-width: 900px) {
-  .topbar { min-height: 60px; padding: 5px 10px; grid-template-columns: 176px minmax(80px, 1fr); gap: 8px; }
-  .marca { width: 176px; height: 45px; }
-  .marca img { width: 260px; height: 260px; transform: translate(-38px, -111px); }
+  .topbar { min-height: 60px; padding: 5px 10px; grid-template-columns: minmax(160px, 176px) minmax(70px, 1fr) minmax(96px, 135px); gap: 8px; }
+  .marca { font-size: 2rem; }
   body.en-operacion .topbar { padding-right: 212px; }
   .modo-tableta .topbar { padding-right: 170px; }
   .controles-tableta .cerrar-sesion span { display: none; }
-  .canales-fila { min-height: 78px; padding: 7px 7px 0; }
+  .canales-fila { min-height: 82px; padding: 13px 7px 0; }
+  .canales, .canales-fila .canales { width: 100%; }
   .canal { min-height: 64px; grid-template-columns: 34px minmax(0, 1fr); gap: 8px; padding: 8px 21px 8px 10px; }
   .canal-icono, .canal span.canal-icono { width: 34px; height: 34px; }
   .canal-icono svg { width: 31px; height: 31px; }
@@ -893,18 +963,24 @@ dialog::backdrop { background: rgba(36, 38, 41, .76); backdrop-filter: none; }
   body { width: 100%; height: auto; min-height: 100dvh; display: block; overflow-x: hidden; overflow-y: auto; overscroll-behavior: auto; }
   body.modo-tableta { position: static; height: auto; min-height: 100dvh; overflow-x: hidden; overflow-y: auto; }
   .pantalla-acceso { min-height: calc(100dvh - 60px); }
-  .topbar { position: sticky; top: 0; min-height: 60px; grid-template-columns: minmax(118px, 1fr); }
+  .topbar { position: sticky; top: 0; min-height: 60px; grid-template-columns: minmax(108px, 1fr) minmax(54px, 84px); gap: 5px; }
+  .marca { font-size: clamp(1.42rem, 6vw, 1.75rem); }
   .sucursal { display: none; }
+  .operador-actual { padding-left: 5px; }
+  .operador-actual .etiqueta-sistema { display: none; }
+  .operador-actual strong { font-size: .63rem; line-height: 1.1; }
   body.en-operacion .topbar { padding-right: 176px; }
   .modo-tableta .topbar { padding-right: 128px; }
   .controles-tableta { top: 8px; right: 8px; }
   .controles-tableta .cerrar-sesion span,
+  .controles-tableta .salir-mesero-cabecera span,
   .controles-tableta .salir-tableta span { display: none; }
   main, body.en-operacion main, .modo-tableta main { height: auto; min-height: calc(100dvh - 60px); flex: none; overflow: visible; }
   .vista-posiciones, .vista-ticket { height: auto; min-height: calc(100dvh - 84px); }
-  .canales-fila { min-height: auto; grid-template-columns: minmax(0, 1fr); padding: 6px; }
+  .canales-fila { min-height: auto; grid-template-columns: minmax(0, 1fr); padding: 13px 6px 6px; }
   .canales { gap: 5px; }
-  .canal { min-height: 58px; grid-template-columns: 1fr; justify-items: center; gap: 2px; padding: 7px 17px 5px 5px; text-align: center; }
+  .canal { min-height: 58px; grid-template-columns: 1fr; justify-items: center; gap: 2px; padding: 7px 5px 6px; text-align: center; }
+  .canal::before { top: -7px; width: 24px; height: 15px; }
   .canal-icono, .canal span.canal-icono { width: 28px; height: 28px; }
   .canal-icono svg { width: 27px; height: 27px; }
   .canal-texto { font-size: 1rem; }

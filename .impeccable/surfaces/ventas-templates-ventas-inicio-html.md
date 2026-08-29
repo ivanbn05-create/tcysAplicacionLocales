@@ -15,8 +15,8 @@ related_targets: ["ventas/static/ventas/app.css","ventas/static/ventas/brand-pos
 
 ## Compromisos de composición
 
-- Barra amarilla compacta con logotipo completo y sucursal.
-- Riel carbón horizontal con tres etiquetas-tíquet orientadas a la derecha, clip superior, iconos SVG de línea y marcador rojo único.
+- Barra amarilla compacta con firma tipográfica bicolor, sucursal y operador identificado por PIN.
+- Riel carbón horizontal con tres etiquetas-tíquet compactas y agrupadas a la derecha, clip superior centrado, iconos SVG Tabler y marcador rojo con muesca en el canal activo.
 - Rejilla de posiciones dominante, con lectura de 24 mesas a 1440×900 cuando el canal lo permita.
 - La captura real no implementa “Nuevo ticket” ni nombres inventados de la maqueta; la cabecera omite telemetría pasiva y reserva los avisos persistentes para fallos accionables.
 - En el flujo de ticket se conserva la topología funcional de tres pasos y se aplica la misma gramática material.
@@ -28,10 +28,11 @@ related_targets: ["ventas/static/ventas/app.css","ventas/static/ventas/brand-pos
 
 | Elemento | Compromiso visible | Medio de implementación |
 |---|---|---|
-| Logotipo | marca principal sin deformación ni efectos; maestro vectorial todavía pendiente | recorte CSS determinista del lienzo compuesto de `logoactual.jpeg`, sólo como fallback |
+| Firma de marca | `LOS` verde, `TOCAYOS` rojo, `T` inicial 13 % mayor y `®`; mismo tratamiento en POS y Administrador | texto semántico con Bebas Neue y Montserrat locales; sin raster visible |
 | Barra de marca | campo amarillo plano y regla carbón | HTML/CSS semántico |
-| Tickets de canal | papel con corte, regla de 2px, marcador rojo | HTML/CSS |
-| Iconos de canal | comedor, ruta/domicilio, sucursal; trazo uniforme | SVG en línea, autoría local |
+| Operador activo | nombre real del mesero validado; se muestra al identificar el PIN y se limpia al salir | HTML accesible + estado real de `app.js` |
+| Tickets de canal | papel con cortes superiores, clip centrado y regla roja con muesca sólo en selección | HTML/CSS |
+| Iconos de canal | comedor, ruta/domicilio y sucursal; cuadrícula 24 px y trazo 2 px | SVG Tabler en línea, licencia MIT local |
 | Números/estado | Bebas Neue, verde libre, amarillo abierto y rojo procesado; etiqueta e icono siempre | HTML/CSS + datos reales de JS |
 | Fondo/papel | `#F8F7F5`; sin textura raster | CSS plano |
 | Riel | `#242629` muestreado de la composición | CSS plano |
@@ -46,6 +47,7 @@ related_targets: ["ventas/static/ventas/app.css","ventas/static/ventas/brand-pos
 - `Orden abierta`: campo y marcador amarillo + número mostaza accesible, texto y marca de ticket.
 - `Procesada`: número rojo + texto y marca de verificación.
 - Canales publican estado seleccionado semántico y foco visible.
+- El nombre del operador proviene de la identificación de mesero, usa texto seguro, admite elipsis y nunca queda visible tras salir.
 - Controles principales miden al menos 44px; la interfaz respeta teclado y movimiento reducido.
 - Conexión e impresora no ocupan la cabecera; los fallos que requieran actuar se anuncian mediante aviso persistente.
 - `Salir` vive en la cabecera sólo mientras se muestran posiciones; desaparece al entrar a captura para evitar abandonar accidentalmente la orden.
@@ -54,4 +56,4 @@ related_targets: ["ventas/static/ventas/app.css","ventas/static/ventas/brand-pos
 
 ## Límites
 
-El acceso Administrador continúa deshabilitado y explícitamente separado. La dirección visual sí se documenta para ese módulo, pero sus capacidades no se inventan. No se importan acciones, métricas, nombres de personas ni datos que sólo aparecen como demostración en la maqueta.
+El Administrador permanece explícitamente separado del flujo de captura y reutiliza la firma tipográfica sin convertir el POS en dashboard. No se importan acciones, métricas, nombres de personas ni datos que sólo aparecen como demostración en la maqueta.
