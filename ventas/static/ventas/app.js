@@ -40,7 +40,7 @@
     ...modificadores,
   ];
   const opcionesSalsas = [
-    "Con Todo", "Sin Nada", "Sólo Salsas", "Verde", "Roja", "Pepino", "Rábano", "Cebolla", "Limón",
+    "Con Todo", "Sin Nada", "Sólo Salsas", "Individual", "Verde", "Roja", "Pepino", "Rábano", "Cebolla", "Limón",
     "Morada", "Serrano", "Cilantro", "Cacahuate", "Chipotle", "Mexicana", "Verde Tomate", "Habanero",
     "Roja Taquera",
   ];
@@ -74,6 +74,7 @@
     objetivoModificador: { tipo: "persona", persona: 1 },
     edicion: null,
     colaEdicion: Promise.resolve(),
+    colaMutacionesTicket: Promise.resolve(),
     errorEdicion: null,
     tickets: {},
     programados: [],
@@ -81,6 +82,7 @@
     operador: null,
     sucursalSeleccionada: null,
     resolucionClave: null,
+    resolucionFormaPago: null,
     operando: false,
     resultadosClientes: [],
     temporizadorCliente: null,
@@ -93,6 +95,7 @@
     prefijoSalsa: "",
     modoEntrega: "aproximada",
     entregaProgramadaDigitos: "",
+    comandaVisible: 1,
     botonOperacion: null,
   };
 
@@ -103,10 +106,119 @@
   const cantidad = (valor) => Number(valor).toLocaleString("es-MX", { maximumFractionDigits: 3 });
   const escapar = (valor) => String(valor ?? "").replace(/[&<>'"]/g, caracter => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[caracter]);
 
+  function numeroComandaActual(ticket = estado.ticket) {
+    return Math.max(1, Number(ticket?.comanda_actual || 1));
+  }
+
+  function comandasDisponibles(ticket = estado.ticket) {
+    const declaradas = Array.isArray(ticket?.comandas)
+      ? ticket.comandas
+        .map(comanda => ({ numero: Number(comanda.numero), procesada: Boolean(comanda.procesada) }))
+        .filter(comanda => Number.isInteger(comanda.numero) && comanda.numero > 0)
+        .sort((a, b) => a.numero - b.numero)
+      : [];
+    if (declaradas.length) return declaradas;
+    const total = Math.max(1, Number(ticket?.cantidad_comandas || numeroComandaActual(ticket)));
+    return Array.from({ length: total }, (_, indice) => ({
+      numero: indice + 1,
+      procesada: indice + 1 < numeroComandaActual(ticket) || !comandaEnEdicion(ticket),
+    }));
+  }
+
+  function comandaEnEdicion(ticket = estado.ticket) {
+    if (!ticket) return false;
+    return typeof ticket.comanda_en_edicion === "boolean"
+      ? ticket.comanda_en_edicion
+      : ticket.estado === "abierto";
+  }
+
+  function normalizarComandaVisible(ticket = estado.ticket) {
+    const disponibles = comandasDisponibles(ticket);
+    const numeros = disponibles.map(comanda => comanda.numero);
+    const preferida = Number(estado.comandaVisible || numeroComandaActual(ticket));
+    estado.comandaVisible = numeros.includes(preferida)
+      ? preferida
+      : (numeros.includes(numeroComandaActual(ticket)) ? numeroComandaActual(ticket) : numeros.at(-1));
+    return estado.comandaVisible;
+  }
+
+  function comandaVisibleEditable(ticket = estado.ticket) {
+    return Boolean(
+      ticket
+      && comandaEnEdicion(ticket)
+      && normalizarComandaVisible(ticket) === numeroComandaActual(ticket)
+    );
+  }
+
+  function perteneceAComanda(item, numero) {
+    return Number(item?.comanda_numero || 1) === Number(numero);
+  }
+
+  function ticketParaComandaVisible(ticket = estado.ticket) {
+    if (!ticket) return null;
+    const numero = normalizarComandaVisible(ticket);
+    const contexto = numero === numeroComandaActual(ticket) && comandaEnEdicion(ticket)
+      ? null
+      : ticket.contextos_comandas?.[String(numero)];
+    const vista = contexto && typeof contexto === "object"
+      ? {
+          ...ticket,
+          ...contexto,
+          fecha_programada: ticket.fecha_programada || contexto.fecha_programada || "",
+          hora_programada: ticket.hora_programada || contexto.hora_programada || "",
+          entrega_aproximada: ticket.hora_programada || contexto.entrega_aproximada || "",
+          cliente: {
+            ...(ticket.cliente || {}),
+            nombre: contexto.cliente_nombre ?? ticket.cliente?.nombre ?? "",
+            telefono: contexto.cliente_telefono ?? ticket.cliente?.telefono ?? "",
+            domicilio: contexto.cliente_domicilio ?? ticket.cliente?.domicilio ?? "",
+            referencia: contexto.cliente_referencia ?? ticket.cliente?.referencia ?? "",
+            contacto_pedido_nombre: contexto.contacto_pedido_nombre ?? "",
+            contacto_pedido_telefono: contexto.contacto_pedido_telefono ?? "",
+          },
+        }
+      : ticket;
+    return {
+      ...vista,
+      partidas: (ticket.partidas || []).filter(partida => perteneceAComanda(partida, numero)),
+      modificadores: (ticket.modificadores || []).filter(modificador => perteneceAComanda(modificador, numero)),
+    };
+  }
+
+  function sincronizarControlesComandaVisible() {
+    const ticket = ticketParaComandaVisible();
+    if (!ticket) return;
+    estado.modoEntrega = ticket.tipo_entrega || "aproximada";
+    estado.entregaProgramadaDigitos = (
+      ticket.tipo_entrega === "programada" ? ticket.entrega_aproximada : ""
+    )?.replace(":", "") || "";
+    if ($("#terminal")) $("#terminal").checked = Boolean(ticket.terminal);
+    if ($("#paga-con")) $("#paga-con").value = ticket.paga_con || "";
+    if ($("#comentario")) $("#comentario").value = ticket.comentario_general || "";
+    if ($("#cliente-directo-nombre")) {
+      $("#cliente-directo-nombre").value = ticket.cliente?.nombre || "";
+    }
+    if ($("#cliente-directo-telefono")) {
+      $("#cliente-directo-telefono").value = ticket.cliente?.telefono || "";
+    }
+    actualizarControlEntrega(ticket);
+    if (estado.ticket?.canal === "domicilio") renderClienteDomicilio(ticket);
+  }
+
   async function api(url, opciones = {}) {
     const metodo = (opciones.method || "GET").toUpperCase();
+    const conContratoTicket = requiereContratoTicket(url, metodo);
+    if (!conContratoTicket) return ejecutarApi(url, opciones, false);
+    const ejecutar = () => ejecutarApi(url, opciones, true);
+    const actual = estado.colaMutacionesTicket.then(ejecutar, ejecutar);
+    estado.colaMutacionesTicket = actual.catch(() => {});
+    return actual;
+  }
+
+  async function ejecutarApi(url, opciones = {}, conContratoTicket = false) {
+    const metodo = (opciones.method || "GET").toUpperCase();
     let body = opciones.body;
-    if (requiereContratoTicket(url, metodo)) {
+    if (conContratoTicket || requiereContratoTicket(url, metodo)) {
       body = cuerpoConContratoTicket(body);
     }
     const respuesta = await fetch(url, {
@@ -278,12 +390,14 @@
 
   function pedirClavePos(titulo, ayuda) {
     const dialogo = $("#dialogo-clave-pos");
+    const campo = $("#clave-pos");
     $("#titulo-clave-pos").textContent = titulo;
     $("#ayuda-clave-pos").textContent = ayuda;
-    $("#clave-pos").value = "";
+    campo.value = "";
+    campo.setAttribute("aria-invalid", "false");
     $("#error-clave-pos").hidden = true;
     dialogo.showModal();
-    setTimeout(() => $("#clave-pos").focus(), 40);
+    setTimeout(() => campo.focus(), 40);
     return new Promise(resolve => { estado.resolucionClave = resolve; });
   }
 
@@ -293,6 +407,21 @@
     const resolver = estado.resolucionClave;
     estado.resolucionClave = null;
     resolver?.(clave);
+  }
+
+  function pedirFormaPago() {
+    const dialogo = $("#dialogo-forma-pago");
+    dialogo.showModal();
+    setTimeout(() => dialogo.querySelector("[data-forma-pago]")?.focus(), 40);
+    return new Promise(resolve => { estado.resolucionFormaPago = resolve; });
+  }
+
+  function resolverFormaPago(formaPago) {
+    const dialogo = $("#dialogo-forma-pago");
+    if (dialogo.open) dialogo.close();
+    const resolver = estado.resolucionFormaPago;
+    estado.resolucionFormaPago = null;
+    resolver?.(formaPago);
   }
 
   function renderOperadorActual() {
@@ -344,17 +473,18 @@
     }
   }
 
-  function bloquear(valor) {
+  function bloquear(valor, botonIniciador = null) {
     estado.operando = valor;
     document.body.setAttribute("aria-busy", String(valor));
     if (valor) {
-      const boton = document.activeElement?.closest?.("button");
+      const boton = botonIniciador || document.activeElement?.closest?.("button");
       if (boton && !boton.disabled) {
         const etiquetas = {
           procesar: "Procesando orden…",
           cobrar: "Registrando cobro…",
           "cancelar-orden": "Cancelando orden…",
-          reimprimir: "Preparando impresión…",
+          "ticket-cuenta": "Imprimiendo ticket…",
+          "agregar-comanda": "Creando comanda…",
         };
         boton.dataset.textoCarga = etiquetas[boton.id] || "Cargando…";
         boton.dataset.ariaOperacionOriginal = boton.getAttribute("aria-label") || "";
@@ -403,6 +533,11 @@
       total: ticket.total,
       version_entidad: ticket.version_entidad,
       bloqueo: ticket.bloqueo,
+      comanda_actual: ticket.comanda_actual,
+      comanda_en_edicion: ticket.comanda_en_edicion,
+      cantidad_comandas: ticket.cantidad_comandas,
+      puede_agregar_comanda: ticket.puede_agregar_comanda,
+      comandas: ticket.comandas,
     };
   }
 
@@ -411,13 +546,14 @@
     contenedor.setAttribute("aria-label", `Posiciones de ${nombresCanal[estado.canal] || estado.canal}`);
     const renderTarjeta = (posicion, opciones = {}) => {
       const ticket = estado.tickets[posicion.id];
-      const claseBase = ticket ? (ticket.estado === "abierto" ? "ocupada" : "procesada") : "libre";
+      const ordenAbierta = ticket && comandaEnEdicion(ticket);
+      const claseBase = ticket ? (ordenAbierta ? "ocupada" : "procesada") : "libre";
       const claseBloqueo = ticket?.bloqueo?.activo ? (ticket.bloqueo.es_mio ? " propia" : " bloqueada") : "";
       const clase = `${claseBase}${claseBloqueo}`;
       const etiquetaBloqueo = ticket?.bloqueo?.activo
         ? (ticket.bloqueo.es_mio ? "Tomada por esta tableta" : `Tomada por ${ticket.bloqueo.tomado_por || "otra tableta"}`)
         : "";
-      const etiquetaEstado = ticket ? (etiquetaBloqueo || (ticket.estado === "abierto" ? "Orden abierta" : "Procesada")) : "Libre";
+      const etiquetaEstado = ticket ? (etiquetaBloqueo || (ordenAbierta ? "Orden abierta" : "Procesada")) : "Libre";
       const detalle = ticket ? `Ticket ${ticket.folio} · ${dinero(ticket.total)}` : "Disponible";
       const partes = String(posicion.nombre).match(/^(.*?)[\s-]*(\d+)$/);
       const tipo = partes ? partes[1].trim() : "Posición";
@@ -488,10 +624,10 @@
     contenedor.className = "rejilla-posiciones rejilla-dividida";
     const programados = estado.canal === "domicilio" && estado.programados.length
       ? `<section class="pedidos-programados-pos">
-          <header><strong>Programados</strong><small>Se activarán por fecha en la primera casilla libre</small></header>
+          <header><strong>Programados</strong><small>Se activarán por fecha y hora en la primera casilla libre</small></header>
           <div>${estado.programados.map(ticket => `<article class="programado-pos">
             <span>Programado</span><strong>#${escapar(ticket.folio)} · ${escapar(ticket.cliente_nombre || "Cliente")}</strong>
-            <small>${escapar(ticket.fecha_programada)}${ticket.entrega_aproximada ? ` · ${escapar(ticket.entrega_aproximada)}` : ""}</small><b>${dinero(ticket.total)}</b>
+            <small>${escapar(ticket.fecha_programada)}${ticket.hora_programada ? ` · ${escapar(ticket.hora_programada)}` : ""}</small><b>${dinero(ticket.total)}</b>
           </article>`).join("")}</div>
         </section>`
       : "";
@@ -542,6 +678,8 @@
         body: JSON.stringify({ mesa_id: mesaId, device_id: estado.deviceId }),
       });
       estado.ticket = datos.ticket;
+      estado.persona = 1;
+      estado.comandaVisible = numeroComandaActual(estado.ticket);
       mostrarTicket();
     } catch (error) {
       if (error.status === 423 && error.datos?.ticket) {
@@ -565,6 +703,8 @@
     $("#ticket-folio").textContent = ticket.folio;
     actualizarIndicadorBloqueoTicket();
     iniciarHeartbeatBloqueo();
+    estado.comandaVisible = numeroComandaActual(ticket);
+    estado.prefijoSalsa = "";
     estado.modoEntrega = ticket.tipo_entrega || "aproximada";
     estado.entregaProgramadaDigitos = (ticket.tipo_entrega === "programada" ? ticket.entrega_aproximada : "")?.replace(":", "") || "";
     $("#terminal").checked = Boolean(ticket.terminal);
@@ -590,8 +730,8 @@
     $("#ticket-switches").classList.toggle("oculto", !admiteSwitches);
     $("#switch-tipo-pedido").checked = esRecoger || esLlevar;
     $("#switch-modo-nombres").checked = Boolean(ticket.captura_por_nombres);
-    $("#switch-tipo-pedido").disabled = ticket.estado !== "abierto";
-    $("#switch-modo-nombres").disabled = ticket.estado !== "abierto";
+    $("#switch-tipo-pedido").disabled = !comandaVisibleEditable(ticket);
+    $("#switch-modo-nombres").disabled = !comandaVisibleEditable(ticket);
     $("#tipo-pedido-etiqueta").textContent = esEntrega ? (esRecoger ? "Recoger" : "Domicilio") : (esLlevar ? "Llevar" : "Mesa");
     $("#modo-nombres-etiqueta").textContent = ticket.captura_por_nombres ? "Por nombres" : "Normal";
     $("#nombre-persona-panel").classList.toggle("oculto", esSucursal || !ticket.captura_por_nombres);
@@ -610,9 +750,11 @@
     estado.colaEdicion = Promise.resolve();
     estado.errorEdicion = null;
     estado.ultimoTerminoPorProducto.clear();
+    sincronizarControlesComandaVisible();
     renderMenu();
     renderComanda();
     renderAcciones();
+    renderNavegadorComandas();
   }
 
   function renderPersonas() {
@@ -620,8 +762,9 @@
       $("#personas").innerHTML = "";
       return;
     }
-    const nombres = estado.ticket?.nombres_comensales || {};
-    const porNombres = Boolean(estado.ticket?.captura_por_nombres);
+    const ticketVisible = ticketParaComandaVisible();
+    const nombres = ticketVisible?.nombres_comensales || {};
+    const porNombres = Boolean(ticketVisible?.captura_por_nombres);
     $("#personas").classList.toggle("con-nombres", porNombres);
     $("#personas").innerHTML = Array.from({ length: 24 }, (_, i) => i + 1).map(numero => {
       const nombre = nombres[String(numero)] || "";
@@ -630,16 +773,58 @@
     actualizarNombrePersona();
   }
 
+  function renderNavegadorComandas() {
+    const navegador = $("#navegador-comandas");
+    if (!navegador || !estado.ticket) return;
+    const comandas = comandasDisponibles();
+    const visible = normalizarComandaVisible();
+    const indice = Math.max(0, comandas.findIndex(comanda => comanda.numero === visible));
+    const comanda = comandas[indice];
+    const contador = $("#contador-comandas");
+    contador.textContent = `${indice + 1}/${comandas.length}`;
+    contador.setAttribute(
+      "aria-label",
+      `Comanda ${indice + 1} de ${comandas.length}${comanda?.procesada ? ", procesada" : ", en edición"}`,
+    );
+    $("#comanda-anterior").disabled = estado.operando || bloqueoDeOtro() || indice <= 0;
+    $("#comanda-siguiente").disabled = estado.operando || bloqueoDeOtro() || indice >= comandas.length - 1;
+  }
+
+  async function cambiarComandaVisible(direccion) {
+    if (estado.operando || !estado.ticket) return;
+    const comandas = comandasDisponibles();
+    const visible = normalizarComandaVisible();
+    const indice = comandas.findIndex(comanda => comanda.numero === visible);
+    const destino = comandas[indice + direccion];
+    if (!destino) return;
+    if (!(await finalizarEdicion())) return;
+    if (comandaVisibleEditable() && estado.ticket.captura_por_nombres) {
+      clearTimeout(estado.temporizadorNombre);
+      try { await guardarNombrePersona(); }
+      catch (error) { toast(error.message, true); return; }
+    }
+    estado.comandaVisible = destino.numero;
+    estado.modoMenu = "productos";
+    estado.edicion = null;
+    sincronizarControlesComandaVisible();
+    renderPersonas();
+    renderMenu();
+    renderComanda();
+    renderAcciones();
+    renderNavegadorComandas();
+  }
+
   function actualizarNombrePersona() {
     const panel = $("#nombre-persona-panel");
     if (!panel || !estado.ticket) return;
-    panel.classList.toggle("oculto", !estado.ticket.captura_por_nombres);
+    const ticketVisible = ticketParaComandaVisible();
+    panel.classList.toggle("oculto", !ticketVisible?.captura_por_nombres);
     $("#nombre-persona-numero").textContent = estado.persona;
-    $("#nombre-persona").value = estado.ticket.nombres_comensales?.[String(estado.persona)] || "";
+    $("#nombre-persona").value = ticketVisible?.nombres_comensales?.[String(estado.persona)] || "";
   }
 
   async function guardarNombrePersona({ avanzar = false } = {}) {
-    if (!estado.ticket?.captura_por_nombres || estado.ticket.estado !== "abierto") return;
+    if (!estado.ticket?.captura_por_nombres || !comandaVisibleEditable()) return;
     const nombres = { ...(estado.ticket.nombres_comensales || {}) };
     const valor = $("#nombre-persona").value.trim();
     if (valor) nombres[String(estado.persona)] = valor;
@@ -751,7 +936,8 @@
   }
 
   function renderMenu() {
-    const abierto = estado.ticket?.estado === "abierto";
+    const abierto = comandaVisibleEditable();
+    const ticketVisible = ticketParaComandaVisible();
     const esSucursal = estado.ticket?.canal === "sucursales";
     const modoCalculadora = ["calculadora", "calculadora-sucursal"].includes(estado.modoMenu);
     configurarAtajosMenu();
@@ -784,7 +970,7 @@
       }
       $("#menu-contexto").textContent = "Productos de sucursal";
       $("#menu-indicacion").textContent = "Selecciona un producto y captura su cantidad";
-      const capturados = new Set(estado.ticket.partidas.map(partida => partida.producto_sucursal_id));
+      const capturados = new Set(ticketVisible.partidas.map(partida => partida.producto_sucursal_id));
       $("#productos").innerHTML = `<section class="catalogo-sucursal">${(estado.ticket.catalogo_sucursal || []).map(producto => `
         <button class="producto producto-sucursal ${capturados.has(producto.id) ? "en-pedido" : ""}" data-sucursal-producto="${producto.id}" type="button" ${!abierto ? "disabled" : ""}>
           <small>${escapar(producto.nombre_ticket)} · ${escapar(producto.unidad)}</small>
@@ -859,7 +1045,7 @@
       const botonesComentarios = opciones.map(modificador => {
         const activo = esGeneral
           ? (estado.ticket.comentarios_generales || []).some(item => item.codigo === modificador.codigo)
-          : estado.ticket.modificadores.some(item => item.comensal === estado.objetivoModificador.persona && item.codigo === modificador.codigo);
+          : ticketVisible.modificadores.some(item => item.comensal === estado.objetivoModificador.persona && item.codigo === modificador.codigo);
         return `<button class="producto opcion-preparacion ${activo ? "seleccionada" : ""}" data-tipo-comentario="${esGeneral ? "general" : "particular"}" data-codigo="${modificador.codigo}" data-nombre="${modificador.nombre}" type="button" ${!abierto ? "disabled" : ""}>
           <small>${modificador.codigo}</small><strong>${modificador.nombre}</strong>
         </button>`
@@ -923,6 +1109,10 @@
 
   function textoEntregaComanda(ticket) {
     if (!ticket.entrega_aproximada) return "Sin hora de entrega";
+    if (ticket.fecha_programada && ticket.hora_programada) {
+      const [anio, mes, dia] = ticket.fecha_programada.split("-");
+      return `Programado: ${dia}/${mes}/${anio} ${ticket.hora_programada}`;
+    }
     if (ticket.tipo_entrega === "programada") return `Programado: ${ticket.entrega_aproximada}`;
     const tomada = new Date(ticket.creado_en).toLocaleTimeString("es-MX", { hour: "numeric", minute: "2-digit" });
     return `${tomada} - ${ticket.entrega_aproximada}`;
@@ -1017,7 +1207,7 @@
   }
 
   function renderPedidoSucursal(ticket, contenedor) {
-    const abierto = ticket.estado === "abierto";
+    const abierto = comandaVisibleEditable(ticket);
     const filas = [...ticket.partidas].sort((a, b) => a.orden - b.orden).map(partida => `
       <button class="fila-partida-sucursal ${estado.edicion?.partidaId === partida.id ? "seleccionada" : ""}" data-partida-sucursal="${partida.id}" data-producto-sucursal="${partida.producto_sucursal_id}" type="button" ${!abierto ? "disabled" : ""}>
         <span class="concepto"><strong>${escapar(partida.nombre_catalogo || partida.nombre)}</strong><small>${escapar(partida.nombre)}</small></span>
@@ -1040,7 +1230,7 @@
   }
 
   function renderComanda() {
-    const ticket = estado.ticket;
+    const ticket = ticketParaComandaVisible();
     const contenedor = $("#comanda-papel-preview");
     if (!ticket || !contenedor) return;
     if (ticket.canal === "sucursales") {
@@ -1146,8 +1336,8 @@
       </section>`;
   }
 
-  function renderClienteDomicilio() {
-    const cliente = estado.ticket?.cliente || {};
+  function renderClienteDomicilio(ticket = ticketParaComandaVisible()) {
+    const cliente = ticket?.cliente || {};
     const seleccionado = Boolean(cliente.id);
     $("#cliente-buscador").classList.toggle("oculto", seleccionado);
     $("#resultados-clientes").classList.toggle("oculto", seleccionado);
@@ -1156,12 +1346,16 @@
       renderResultadosClientes();
       return;
     }
+    const contacto = [
+      cliente.telefono || "Sin teléfono",
+      cliente.domicilio || "Sin domicilio",
+    ].join(" · ");
     $("#cliente-seleccionado").innerHTML = `
       <div class="cliente-resultado-cabecera">
         <strong>${escapar(cliente.nombre)}</strong>
         <span class="cliente-clave">${escapar(cliente.clave_corta)}</span>
       </div>
-      <p>${cliente.telefono ? `<b>${escapar(cliente.telefono)}</b> · ` : ""}${escapar(cliente.domicilio)}</p>
+      <p>${escapar(contacto)}</p>
       ${cliente.referencia ? `<p>Referencia: ${escapar(cliente.referencia)}</p>` : ""}
       ${cliente.notas ? `<p class="cliente-nota-interna"><b>Nota interna:</b> ${escapar(cliente.notas)}</p>` : ""}
       ${cliente.comentarios_multiples ? `
@@ -1187,11 +1381,13 @@
     contenedor.innerHTML = estado.resultadosClientes.map((resultado, indice) => {
       const telefono = resultado.telefono?.numero || "Sin teléfono";
       const domicilio = resultado.domicilio?.texto || "Sin domicilio";
-      const incompleto = !resultado.domicilio || (!resultado.telefono && !resultado.comentarios_multiples);
-      return `<button class="cliente-resultado" data-seleccionar-cliente="${indice}" type="button" ${incompleto ? "disabled" : ""}>
+      const observacion = resultado.comentarios_multiples
+        ? `${resultado.motivo} · solicita contacto`
+        : resultado.motivo;
+      return `<button class="cliente-resultado" data-seleccionar-cliente="${indice}" type="button">
         <span class="cliente-resultado-cabecera"><strong>${escapar(resultado.nombre)}</strong><span class="cliente-clave">${escapar(resultado.clave_corta)}</span></span>
         <p>${escapar(telefono)} · ${escapar(domicilio)}</p>
-        <small>${escapar(incompleto ? "Registro incompleto: edítalo antes de usarlo" : (resultado.comentarios_multiples ? `${resultado.motivo} · solicita contacto` : resultado.motivo))}</small>
+        <small>${escapar(observacion)}</small>
       </button>`;
     }).join("");
   }
@@ -1247,7 +1443,7 @@
   function filaDomicilio(domicilio = {}) {
     return `<div class="fila-domicilio" data-registro-id="${escapar(domicilio.id || "")}">
       <label>Etiqueta<input class="domicilio-etiqueta" value="${escapar(domicilio.etiqueta || "Principal")}" maxlength="30"></label>
-      <label>Calle<input class="domicilio-calle" value="${escapar(domicilio.calle || "")}" autocomplete="address-line1" required></label>
+      <label>Calle<input class="domicilio-calle" value="${escapar(domicilio.calle || "")}" autocomplete="address-line1"></label>
       <label>Núm. exterior<input class="domicilio-exterior" value="${escapar(domicilio.numero_exterior || "")}"></label>
       <label>Núm. interior<input class="domicilio-interior" value="${escapar(domicilio.numero_interior || "")}"></label>
       <label class="domicilio-colonia">Colonia<input class="domicilio-colonia-valor" value="${escapar(domicilio.colonia || "")}"></label>
@@ -1270,7 +1466,7 @@
     $("#aviso-duplicados").classList.add("oculto");
     $("#aviso-duplicados").innerHTML = "";
     $("#form-cliente").dataset.confirmarDuplicado = "false";
-    $("#guardar-cliente").textContent = "Guardar y seleccionar";
+    $("#guardar-cliente").textContent = "Guardar cliente";
     $("#dialogo-cliente").showModal();
     $("#cliente-form-nombre").focus();
   }
@@ -1322,8 +1518,12 @@
       const cliente = datos.cliente;
       const telefonoActual = cliente.telefonos.find(item => item.id === estado.ticket.cliente.telefono_id) || cliente.telefonos[0];
       const domicilioActual = cliente.domicilios.find(item => item.id === estado.ticket.cliente.domicilio_id) || cliente.domicilios[0];
-      await asignarCliente(cliente.id, telefonoActual?.id || "", domicilioActual.id);
       $("#dialogo-cliente").close();
+      await asignarCliente(
+        cliente.id,
+        telefonoActual?.id || "",
+        domicilioActual?.id || "",
+      );
       toast(`Cliente ${cliente.nombre} guardado y seleccionado.`);
     } catch (error) {
       if (error.status === 409 && error.datos?.duplicados) mostrarDuplicados(error.datos.duplicados);
@@ -1340,21 +1540,54 @@
 
   function renderAcciones() {
     const bloqueoAjeno = bloqueoDeOtro();
-    const abierto = estado.ticket.estado === "abierto";
+    const enEdicion = comandaEnEdicion();
+    const abierto = comandaVisibleEditable();
     const cobrable = ["procesado", "cobrar"].includes(estado.ticket.estado);
     const esSucursal = estado.ticket.canal === "sucursales";
     const esDomicilio = estado.ticket.canal === "domicilio";
-    const editable = abierto && !bloqueoAjeno;
-    const operable = !bloqueoAjeno;
-    $("#procesar").textContent = esSucursal ? "Procesar e imprimir" : "Procesar orden";
+    const comandaAgregadaPendiente = (
+      estado.ticket.estado === "procesado"
+      && enEdicion
+      && numeroComandaActual() > 1
+    );
+    const muestraCancelar = abierto && (
+      (estado.ticket.estado === "abierto" && numeroComandaActual() === 1)
+      || comandaAgregadaPendiente
+    );
+    const muestraTicket = cobrable && !enEdicion && ["comedor", "llevar", "recoger", "domicilio"].includes(estado.ticket.canal);
+    const muestraAgregar = !enEdicion && Boolean(estado.ticket.puede_agregar_comanda);
+    const muestraCobro = cobrable && !esDomicilio;
+    const editable = abierto && !bloqueoAjeno && !estado.operando;
+    const operable = !bloqueoAjeno && !estado.operando;
+    const cobroBloqueado = muestraCobro && enEdicion;
+    const acciones = $(".acciones");
+    $("#procesar").textContent = esSucursal
+      ? "Procesar e imprimir"
+      : (numeroComandaActual() > 1 ? "Procesar comanda" : "Procesar orden");
     $("#cobrar").textContent = esSucursal ? "Completar pedido" : "Cobrar";
+    $("#cancelar-orden").textContent = comandaAgregadaPendiente ? "Cancelar comanda" : "Cancelar orden";
     $("#procesar").classList.toggle("oculto", !abierto);
-    $("#cancelar-orden").classList.toggle("oculto", !abierto && !cobrable);
-    $("#cobrar").classList.toggle("oculto", !cobrable || esDomicilio);
-    $("#reimprimir").classList.toggle("oculto", abierto);
+    $("#cancelar-orden").classList.toggle("oculto", !muestraCancelar);
+    $("#ticket-cuenta").classList.toggle("oculto", !muestraTicket);
+    $("#agregar-comanda").classList.toggle("oculto", !muestraAgregar);
+    $("#cobrar").classList.toggle("oculto", !muestraCobro);
+    acciones.classList.toggle("con-ticket", muestraTicket);
+    acciones.classList.toggle("con-agregar", muestraAgregar);
+    acciones.classList.toggle("con-cobro-bloqueado", cobroBloqueado && abierto);
+    acciones.classList.toggle("solo-agregar", muestraAgregar && !muestraTicket && !muestraCobro);
+    acciones.classList.toggle("oculto", !abierto && !muestraCancelar && !muestraTicket && !muestraAgregar && !muestraCobro);
     $("#procesar").disabled = !editable;
     $("#cancelar-orden").disabled = !operable;
-    $("#cobrar").disabled = !operable;
+    $("#ticket-cuenta").disabled = !operable;
+    $("#agregar-comanda").disabled = !operable || !estado.ticket.puede_agregar_comanda;
+    $("#cobrar").disabled = !operable || cobroBloqueado;
+    if (cobroBloqueado) {
+      $("#cobrar").setAttribute("aria-label", "Cobrar; primero procesa la comanda actual");
+      $("#cobrar").title = "Procesa la comanda actual antes de cobrar";
+    } else {
+      $("#cobrar").removeAttribute("aria-label");
+      $("#cobrar").removeAttribute("title");
+    }
     $$(".persona, .opcion-preparacion, .comanda-papel button, .producto, .fila-partida-sucursal").forEach(b => {
       b.disabled = !abierto || b.classList.contains("no-disponible-hoy");
       if (bloqueoAjeno) b.disabled = true;
@@ -1362,6 +1595,7 @@
     $$("#datos-cliente button, #datos-cliente input, #datos-cliente textarea").forEach(control => control.disabled = !editable);
     $$("#datos-servicio-directo input, #ticket-switches input, #nombre-persona").forEach(control => control.disabled = !editable);
     $$("#entrega, #pago-domicilio input, #comentario").forEach(control => control.disabled = !editable);
+    renderNavegadorComandas();
   }
 
   function partidasDeEdicion(productoId, persona, termino) {
@@ -1369,6 +1603,7 @@
       partida.producto_id === productoId
       && partida.comensal === persona
       && (partida.termino || "") === (termino || "")
+      && perteneceAComanda(partida, numeroComandaActual())
     );
   }
 
@@ -1384,7 +1619,11 @@
     if (!producto.permite_termino) return "";
     const existentes = new Set(
       estado.ticket.partidas
-        .filter(partida => partida.producto_id === producto.id && partida.comensal === estado.persona)
+        .filter(partida =>
+          partida.producto_id === producto.id
+          && partida.comensal === estado.persona
+          && perteneceAComanda(partida, numeroComandaActual())
+        )
         .map(partida => partida.termino)
         .filter(Boolean),
     );
@@ -1730,11 +1969,11 @@
     } catch (error) { toast(error.message, true); }
   }
 
-  function actualizarControlEntrega() {
+  function actualizarControlEntrega(ticket = ticketParaComandaVisible()) {
     const boton = $("#entrega");
-    if (!boton || !estado.ticket) return;
-    boton.textContent = estado.ticket.entrega_aproximada
-      ? (estado.ticket.tipo_entrega === "programada" ? `Programado · ${estado.ticket.entrega_aproximada}` : `Aproximado · ${estado.ticket.entrega_aproximada}`)
+    if (!boton || !ticket) return;
+    boton.textContent = ticket.entrega_aproximada
+      ? (ticket.tipo_entrega === "programada" ? `Programado · ${ticket.entrega_aproximada}` : `Aproximado · ${ticket.entrega_aproximada}`)
       : "Seleccionar hora";
   }
 
@@ -1835,19 +2074,17 @@
     finally { bloquear(false); }
   }
 
-  async function cobrar(formaPago, importeRecibido, imprimirTicket, claveAdministrador) {
-    bloquear(true);
+  async function cobrar(claveAdministrador, formaPago) {
+    bloquear(true, $("#cobrar"));
     try {
       const datos = await api(`/api/tickets/${estado.ticket.id}/cobrar/`, {
         method: "POST", body: JSON.stringify({
-          forma_pago: formaPago,
-          importe_recibido: importeRecibido,
-          imprimir_ticket: imprimirTicket,
           clave_administrador: claveAdministrador,
+          forma_pago: formaPago,
         }),
       });
       estado.ticket = datos.ticket;
-      resumirImpresiones(datos.impresiones, imprimirTicket ? "Cobro registrado." : "Cobro registrado sin imprimir ticket.");
+      resumirImpresiones(datos.impresiones, "Cobro registrado sin imprimir ticket.");
       await volver(true);
     } catch (error) { toast(error.message, true); }
     finally { bloquear(false); }
@@ -1868,14 +2105,40 @@
     finally { bloquear(false); }
   }
 
-  async function reimprimir() {
-    const formato = estado.ticket.canal === "sucursales"
-      ? "sucursal"
-      : (estado.ticket.canal === "recoger" ? "comanda" : (estado.ticket.estado === "pagado" ? "cuenta" : "comanda"));
+  async function imprimirTicketCuenta() {
+    if (!estado.ticket) return;
+    bloquear(true, $("#ticket-cuenta"));
     try {
-      const datos = await api(`/api/tickets/${estado.ticket.id}/imprimir/`, { method: "POST", body: JSON.stringify({ formato }) });
-      resumirImpresiones(datos.impresiones, "Reimpresión solicitada.");
-    } catch (error) { toast(error.message, true); }
+      const datos = await api(`/api/tickets/${estado.ticket.id}/imprimir/`, {
+        method: "POST",
+        body: JSON.stringify({ formato: "cuenta" }),
+      });
+      resumirImpresiones(datos.impresiones, "Ticket total solicitado.");
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      bloquear(false);
+    }
+  }
+
+  async function crearComandaAdicional() {
+    if (!estado.ticket?.puede_agregar_comanda || !(await finalizarEdicion())) return;
+    bloquear(true, $("#agregar-comanda"));
+    try {
+      const datos = await api(`/api/tickets/${estado.ticket.id}/comandas/`, {
+        method: "POST",
+        body: "{}",
+      });
+      estado.ticket = datos.ticket;
+      estado.persona = 1;
+      estado.comandaVisible = numeroComandaActual(datos.ticket);
+      mostrarTicket();
+      toast(`Comanda ${estado.comandaVisible} lista para capturar.`);
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      bloquear(false);
+    }
   }
 
   function resumirImpresiones(impresiones, mensajeBase) {
@@ -1897,21 +2160,37 @@
   }
 
   async function cancelarOrden() {
-    if (!estado.ticket || !window.confirm("¿Cancelar esta orden? Se borrarán todos los productos y la posición quedará disponible.")) return;
+    if (!estado.ticket) return;
+    const esComandaAgregada = (
+      estado.ticket.estado === "procesado"
+      && comandaEnEdicion()
+      && numeroComandaActual() > 1
+    );
+    const pregunta = esComandaAgregada
+      ? "¿Cancelar esta comanda agregada? Se descartarán sólo sus productos; el pedido anterior se conservará."
+      : "¿Cancelar esta orden? Se borrarán todos los productos y la posición quedará disponible.";
+    if (!window.confirm(pregunta)) return;
     let claveAdministrador = "";
-    if (estado.ticket.estado !== "abierto") {
+    if (estado.ticket.estado !== "abierto" && !esComandaAgregada) {
       claveAdministrador = await pedirClavePos("Cancelar pedido procesado", "Sólo el administrador puede cancelar un pedido después de imprimirlo.");
       if (!claveAdministrador) return;
     }
     clearTimeout(estado.temporizadorNombre);
     bloquear(true);
     try {
-      await api(`/api/tickets/${estado.ticket.id}/cancelar/`, {
+      const datos = await api(`/api/tickets/${estado.ticket.id}/cancelar/`, {
         method: "POST",
         body: JSON.stringify({ clave_administrador: claveAdministrador }),
       });
-      toast("Orden cancelada; la posición quedó disponible.");
-      await volver(true);
+      if (esComandaAgregada) {
+        estado.ticket = datos.ticket;
+        estado.comandaVisible = numeroComandaActual(datos.ticket);
+        mostrarTicket();
+        toast("Comanda agregada cancelada; el pedido anterior se conservó.");
+      } else {
+        toast("Orden cancelada; la posición quedó disponible.");
+        await volver(true);
+      }
     } catch (error) {
       toast(error.message, true);
     } finally {
@@ -1994,6 +2273,15 @@
   $("#dialogo-clave-pos")?.addEventListener("cancel", evento => {
     evento.preventDefault();
     resolverClavePos(null);
+  });
+  $("#dialogo-forma-pago")?.addEventListener("click", evento => {
+    const opcion = evento.target.closest("[data-forma-pago]");
+    if (opcion) resolverFormaPago(opcion.dataset.formaPago);
+  });
+  $("#cancelar-forma-pago")?.addEventListener("click", () => resolverFormaPago(null));
+  $("#dialogo-forma-pago")?.addEventListener("cancel", evento => {
+    evento.preventDefault();
+    resolverFormaPago(null);
   });
   $("#toast-cerrar")?.addEventListener("click", cerrarToast);
   $$('[data-salir-mesero]').forEach(boton => boton.addEventListener("click", salirModoMesero));
@@ -2155,9 +2443,9 @@
     const resultado = evento.target.closest("[data-seleccionar-cliente]");
     if (resultado) {
       const cliente = estado.resultadosClientes[Number(resultado.dataset.seleccionarCliente)];
-      if (!cliente?.domicilio || (!cliente?.telefono && !cliente?.comentarios_multiples)) return;
+      if (!cliente) return;
       try {
-        await asignarCliente(cliente.cliente_id, cliente.telefono?.id || "", cliente.domicilio.id);
+        await asignarCliente(cliente.cliente_id, cliente.telefono?.id || "", cliente.domicilio?.id || "");
         toast(`${cliente.nombre} seleccionado.`);
       } catch (error) { toast(error.message, true); }
       return;
@@ -2231,39 +2519,20 @@
   });
   $("#procesar").addEventListener("click", procesar);
   $("#cancelar-orden").addEventListener("click", cancelarOrden);
-  $("#cobrar").addEventListener("click", () => {
+  $("#cobrar").addEventListener("click", async () => {
     if (estado.ticket?.canal === "sucursales") {
-      completarSucursal();
+      await completarSucursal();
       return;
     }
-    $("#cobro-total").textContent = dinero(estado.ticket.total);
-    $("#importe-recibido").value = estado.ticket.total;
-    const soloComanda = estado.ticket.canal === "recoger";
-    $("#opciones-impresion").classList.toggle("oculto", soloComanda);
-    if (soloComanda) $("#opciones-impresion input[value='no']").checked = true;
-    $("#dialogo-cobro").showModal();
-  });
-  $("#form-cobro").addEventListener("submit", async evento => {
-    evento.preventDefault();
-    if (evento.submitter?.value === "cancel") { $("#dialogo-cobro").close(); return; }
-    const formulario = new FormData(evento.currentTarget);
-    const formaPago = formulario.get("forma_pago");
-    const importe = $("#importe-recibido").value;
-    const imprimir = formulario.get("imprimir_ticket") === "si";
-    $("#dialogo-cobro").close();
+    const formaPago = await pedirFormaPago();
+    if (!formaPago) return;
     const claveAdministrador = await pedirClavePos("Autorizar cobro", "Marcar el pedido como cobrado requiere la clave de administrador.");
-    if (!claveAdministrador) {
-      $("#dialogo-cobro").showModal();
-      return;
-    }
-    cobrar(
-      formaPago,
-      importe,
-      imprimir,
-      claveAdministrador,
-    );
+    if (claveAdministrador) await cobrar(claveAdministrador, formaPago);
   });
-  $("#reimprimir").addEventListener("click", reimprimir);
+  $("#ticket-cuenta").addEventListener("click", imprimirTicketCuenta);
+  $("#agregar-comanda").addEventListener("click", crearComandaAdicional);
+  $("#comanda-anterior").addEventListener("click", () => cambiarComandaVisible(-1));
+  $("#comanda-siguiente").addEventListener("click", () => cambiarComandaVisible(1));
 
   window.addEventListener("online", () => {
     if (bloqueoPropio()) renovarBloqueoTicket();

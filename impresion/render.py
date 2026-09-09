@@ -115,15 +115,18 @@ def _logo_actual():
     return logo
 
 
-def _partidas_destino(ticket, destino):
-    partidas = list(ticket.partidas.select_related("producto__categoria").all())
+def _partidas_destino(ticket, destino, comanda_numero=None, canal=None):
+    consulta = ticket.partidas.select_related("producto__categoria").all()
+    if comanda_numero is not None:
+        consulta = consulta.filter(comanda_numero=comanda_numero)
+    partidas = list(consulta)
     if destino == "cocina":
         return [
             p
             for p in partidas
             if p.producto.categoria.nombre.lower() not in {"extras", "bebidas"}
             and (
-                ticket.canal in {"comedor", "llevar", "domicilio", "recoger"}
+                (canal or ticket.canal) in {"comedor", "llevar", "domicilio", "recoger"}
                 or p.producto.destino_impresion == "cocina"
             )
         ]
@@ -136,21 +139,40 @@ def _hora_corta(valor):
     return valor.strftime("%I:%M %p").lstrip("0").lower()
 
 
-def _texto_entrega(ticket, incluir_toma=True):
-    if not ticket.entrega_aproximada:
+def _contexto_comanda(ticket, comanda_numero):
+    contexto = (ticket.contextos_comandas or {}).get(str(comanda_numero), {})
+    return contexto if isinstance(contexto, dict) else {}
+
+
+def _hora_contexto(contexto, campo, respaldo):
+    valor = contexto.get(campo) if contexto else None
+    if valor:
+        try:
+            return datetime.strptime(str(valor), "%H:%M").time()
+        except ValueError:
+            pass
+    return respaldo
+
+
+def _texto_entrega(ticket, incluir_toma=True, contexto=None):
+    entrega = _hora_contexto(contexto, "entrega_aproximada", ticket.entrega_aproximada)
+    if not entrega:
         return "Sin hora de entrega"
-    entrega = _hora_corta(ticket.entrega_aproximada)
-    if ticket.tipo_entrega == "programada":
-        return f"Programado: {entrega}"
+    entrega_texto = _hora_corta(entrega)
+    tipo_entrega = (contexto or {}).get("tipo_entrega", ticket.tipo_entrega)
+    if ticket.fecha_programada and ticket.hora_programada:
+        return f"Programado: {ticket.fecha_programada.strftime('%d/%m/%Y')} {_hora_corta(ticket.hora_programada)}"
+    if tipo_entrega == "programada":
+        return f"Programado: {entrega_texto}"
     if not incluir_toma:
-        return f"Entrega aprox: {entrega}"
+        return f"Entrega aprox: {entrega_texto}"
     tomada = _hora_corta(timezone.localtime(ticket.creado_en))
-    return f"{tomada} - {entrega}"
+    return f"{tomada} - {entrega_texto}"
 
 
-def _texto_salsas(ticket):
+def _texto_salsas(ticket, contexto=None):
     grupos = []
-    for grupo in ticket.salsas_verduras or []:
+    for grupo in (contexto or {}).get("salsas_verduras", ticket.salsas_verduras) or []:
         prefijo = str(grupo.get("prefijo", "")).strip()
         elementos = ", ".join(str(item) for item in grupo.get("elementos", []))
         if elementos:
@@ -158,15 +180,22 @@ def _texto_salsas(ticket):
     return " * ".join(grupos)
 
 
-def _identificador_ticket(ticket):
-    if ticket.canal == "domicilio":
-        return f"Ticket: {ticket.folio}, {ticket.mesa.orden}"
-    if ticket.canal == "recoger":
-        return f"Ticket: {ticket.folio}, R{ticket.mesa.orden}"
+def _identificador_ticket(ticket, contexto=None):
+    canal = (contexto or {}).get("canal", ticket.canal)
+    posicion = (contexto or {}).get("posicion_numero", ticket.mesa.orden)
+    if canal == "domicilio":
+        return f"Ticket: {ticket.folio}, {posicion}"
+    if canal == "recoger":
+        return f"Ticket: {ticket.folio}, R{posicion}"
     return f"Ticket: {ticket.folio}"
 
 
-def _contacto_pedido(ticket):
+def _contacto_pedido(ticket, contexto=None):
+    if contexto:
+        return (
+            str(contexto.get("contacto_pedido_nombre", "")),
+            str(contexto.get("contacto_pedido_telefono", "")),
+        )
     if (
         ticket.canal != "domicilio"
         or not ticket.cliente_id
@@ -207,10 +236,15 @@ def _agrupar_partidas_total(ticket):
     return list(agrupadas.values())
 
 
-def _datos_comanda_por_nombres(ticket):
+def _datos_comanda_por_nombres(ticket, comanda_numero=None):
+    consulta = ticket.partidas.select_related("producto__categoria").all()
+    modificadores = ticket.modificadores.all()
+    if comanda_numero is not None:
+        consulta = consulta.filter(comanda_numero=comanda_numero)
+        modificadores = modificadores.filter(comanda_numero=comanda_numero)
     partidas = [
         partida
-        for partida in ordenar_partidas(ticket.partidas.select_related("producto__categoria").all())
+        for partida in ordenar_partidas(consulta)
         if not configuracion_promocion(partida.producto)
     ]
     principales, complementos = [], []
@@ -236,11 +270,12 @@ def _datos_comanda_por_nombres(ticket):
     for partida in principales:
         cantidades[partida.comensal][(partida.producto_id, partida.termino)] += partida.cantidad
     modificaciones = defaultdict(list)
-    for modificador in ticket.modificadores.all():
+    for modificador in modificadores:
         modificaciones[modificador.comensal].append(modificador.codigo)
 
-    nombres = ticket.nombres_comensales or {}
-    personas = sorted({partida.comensal for partida in partidas} | {int(clave) for clave in nombres if str(clave).isdigit()})
+    contexto = _contexto_comanda(ticket, comanda_numero) if comanda_numero is not None else {}
+    nombres = contexto.get("nombres_comensales", ticket.nombres_comensales) or {}
+    personas = sorted({partida.comensal for partida in partidas})
     filas = [
         {
             "persona": persona,
@@ -265,8 +300,9 @@ def _datos_comanda_por_nombres(ticket):
     return {"columnas": columnas, "filas": filas, "extras": extras}
 
 
-def _dibujar_comanda_por_nombres(draw, y, ticket):
-    datos = _datos_comanda_por_nombres(ticket)
+def _dibujar_comanda_por_nombres(draw, y, ticket, comanda_numero=None):
+    datos = _datos_comanda_por_nombres(ticket, comanda_numero)
+    contexto = _contexto_comanda(ticket, comanda_numero) if comanda_numero is not None else {}
     f_encabezado = fuente(18, negrita=True)
     f_nombre = fuente(21, negrita=True)
     f_modificador = fuente(15)
@@ -289,7 +325,10 @@ def _dibujar_comanda_por_nombres(draw, y, ticket):
             linea_y += 22
     y += alto_encabezado
 
-    generales = " · ".join(item.get("nombre", "") for item in ticket.comentarios_generales or []).upper()
+    generales = " · ".join(
+        item.get("nombre", "")
+        for item in contexto.get("comentarios_generales", ticket.comentarios_generales) or []
+    ).upper()
     if generales:
         lineas = _ajustar(draw, generales, f_encabezado, ANCHO - MARGEN * 2 - 14)
         alto = max(44, len(lineas) * 22 + 12)
@@ -336,23 +375,42 @@ def _dibujar_comanda_por_nombres(draw, y, ticket):
     return y + 24
 
 
-def render_comanda(ticket, destino):
-    partidas_destino = ordenar_partidas(_partidas_destino(ticket, destino))
+def render_comanda(ticket, destino, comanda_numero=None):
+    comanda_numero = int(comanda_numero or ticket.comanda_actual or 1)
+    contexto = _contexto_comanda(ticket, comanda_numero)
+    canal = contexto.get("canal", ticket.canal)
+    try:
+        total_comanda = Decimal(str(contexto.get("total", ticket.total)))
+    except (ValueError, TypeError, ArithmeticError):
+        total_comanda = ticket.total
+    captura_por_nombres = bool(
+        contexto.get("captura_por_nombres", ticket.captura_por_nombres)
+    )
+    partidas_destino = ordenar_partidas(
+        _partidas_destino(ticket, destino, comanda_numero, canal)
+    )
     # La fila de promociones sólo es una ayuda de captura en la comanda virtual.
     # En cocina se imprimen exclusivamente los productos que la componen.
     partidas = [partida for partida in partidas_destino if not configuracion_promocion(partida.producto)]
     bebidas = (
-        list(ticket.partidas.select_related("producto__categoria").filter(producto__categoria__nombre__iexact="Bebidas"))
-        if destino == "cocina" and ticket.canal in {"comedor", "llevar", "domicilio", "recoger"}
+        list(
+            ticket.partidas.select_related("producto__categoria").filter(
+                comanda_numero=comanda_numero,
+                producto__categoria__nombre__iexact="Bebidas",
+            )
+        )
+        if destino == "cocina" and canal in {"comedor", "llevar", "domicilio", "recoger"}
         else []
     )
-    modificadores = list(ticket.modificadores.all())
+    modificadores = list(
+        ticket.modificadores.filter(comanda_numero=comanda_numero)
+    )
     ultimo_comensal = max([p.comensal for p in partidas] + [m.comensal for m in modificadores] + [1])
     bloques = max(1, min(4, (ultimo_comensal + 5) // 6))
     bebidas_agrupadas = defaultdict(Decimal)
     for bebida in ordenar_partidas(bebidas):
         bebidas_agrupadas[bebida.nombre_corto] += bebida.cantidad
-    contacto_nombre, contacto_telefono = _contacto_pedido(ticket)
+    contacto_nombre, contacto_telefono = _contacto_pedido(ticket, contexto)
     contacto_pedido = " ".join(parte for parte in [contacto_nombre, contacto_telefono] if parte)
     imagen = Image.new("L", (ANCHO, 6000), 255)
     draw = ImageDraw.Draw(imagen)
@@ -374,28 +432,36 @@ def render_comanda(ticket, destino):
     draw.line(((ANCHO - ancho_titulo) / 2, y, (ANCHO + ancho_titulo) / 2, y), fill=0, width=2)
     local = timezone.localtime(ticket.creado_en)
     y += 12
-    if ticket.canal in {"domicilio", "recoger"}:
+    if canal in {"domicilio", "recoger"}:
         draw.text((MARGEN, y), local.strftime("%d/%m/%Y"), font=f_normal, fill=0)
-        _derecha(draw, y, _identificador_ticket(ticket), f_bold)
+        _derecha(draw, y, _identificador_ticket(ticket, contexto), f_bold)
         y += 35
-        draw.text((MARGEN, y), _texto_entrega(ticket), font=f_normal, fill=0)
-        _derecha(draw, y, f"${ticket.total:,.2f}", f_total)
+        draw.text((MARGEN, y), _texto_entrega(ticket, contexto=contexto), font=f_normal, fill=0)
+        _derecha(draw, y, f"${total_comanda:,.2f}", f_total)
         y += 43
-        if ticket.canal == "recoger":
-            contacto = " · ".join(parte for parte in [ticket.cliente_nombre, ticket.cliente_telefono] if parte)
+        if canal == "recoger":
+            contacto = " · ".join(
+                parte
+                for parte in [
+                    contexto.get("cliente_nombre", ticket.cliente_nombre),
+                    contexto.get("cliente_telefono", ticket.cliente_telefono),
+                ]
+                if parte
+            )
             for linea in _ajustar(draw, f"RECOGER: {contacto}".upper(), f_bold, ANCHO - MARGEN * 2):
                 _centrado(draw, y, linea, f_bold)
                 y += 34
             y += 5
-    elif ticket.canal in {"comedor", "llevar"}:
+    elif canal in {"comedor", "llevar"}:
         draw.text((MARGEN, y), f"{local.strftime('%d/%m/%Y')} {_hora_corta(local)}", font=f_normal, fill=0)
-        _derecha(draw, y, ticket.mesa.nombre, f_bold)
+        _derecha(draw, y, contexto.get("mesa", ticket.mesa.nombre), f_bold)
         y += 38
-        draw.text((MARGEN, y), _identificador_ticket(ticket), font=f_bold, fill=0)
-        _derecha(draw, y, f"${ticket.total:,.2f}", f_total)
+        draw.text((MARGEN, y), _identificador_ticket(ticket, contexto), font=f_bold, fill=0)
+        _derecha(draw, y, f"${total_comanda:,.2f}", f_total)
         y += 46
-        if ticket.canal == "llevar":
-            for linea in _ajustar(draw, f"LLEVAR: {ticket.cliente_nombre}".upper(), f_bold, ANCHO - MARGEN * 2):
+        if canal == "llevar":
+            cliente_nombre = contexto.get("cliente_nombre", ticket.cliente_nombre)
+            for linea in _ajustar(draw, f"LLEVAR: {cliente_nombre}".upper(), f_bold, ANCHO - MARGEN * 2):
                 _centrado(draw, y, linea, f_bold)
                 y += 34
             y += 5
@@ -403,14 +469,22 @@ def render_comanda(ticket, destino):
         draw.text((MARGEN, y), f"{local.strftime('%d/%m/%Y')} {_hora_corta(local)}", font=f_normal, fill=0)
         _derecha(draw, y, f"Ticket: {ticket.folio}", f_bold)
         y += 36
-        _derecha(draw, y, f"${ticket.total:,.2f}", f_total)
+        _derecha(draw, y, f"${total_comanda:,.2f}", f_total)
         y += 42
     if destino != "cocina":
         _centrado(draw, y, destino.upper(), f_chico)
         y += 32
+    if comanda_numero > 1:
+        _centrado(draw, y, f"COMANDA {comanda_numero}", f_chico)
+        y += 30
 
-    if ticket.captura_por_nombres:
-        y = _dibujar_comanda_por_nombres(draw, y, ticket)
+    if captura_por_nombres:
+        y = _dibujar_comanda_por_nombres(
+            draw,
+            y,
+            ticket,
+            comanda_numero,
+        )
     else:
         agrupadas = {}
         for partida in partidas:
@@ -436,7 +510,9 @@ def render_comanda(ticket, destino):
                 texto = str(persona)
                 draw.text((x + (celda - _ancho(draw, texto, f_matriz_numero)) / 2, arriba + 6), texto, font=f_matriz_numero, fill=0)
             y = arriba + 48
-            comentarios_generales = ticket.comentarios_generales or []
+            comentarios_generales = contexto.get(
+                "comentarios_generales", ticket.comentarios_generales
+            ) or []
             if comentarios_generales:
                 texto_general = " · ".join(item.get("nombre", "") for item in comentarios_generales).upper()
                 lineas_general = _ajustar(draw, texto_general, f_tabla_bold, ANCHO - MARGEN * 2 - 12)
@@ -483,28 +559,29 @@ def render_comanda(ticket, destino):
             _centrado(draw, y, linea, f_bold)
             y += 36
 
-    if ticket.comentario_general:
+    comentario_general = contexto.get("comentario_general", ticket.comentario_general)
+    if comentario_general:
         draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
         y += 16
-        for linea in _ajustar(draw, ticket.comentario_general.upper(), f_bold, ANCHO - MARGEN * 2):
+        for linea in _ajustar(draw, str(comentario_general).upper(), f_bold, ANCHO - MARGEN * 2):
             _centrado(draw, y, linea, f_bold)
             y += 36
 
-    if bebidas_agrupadas and not ticket.captura_por_nombres:
+    if bebidas_agrupadas and not captura_por_nombres:
         draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
         y += 12
         segmentos = _segmentos_bebidas(bebidas_agrupadas, f_bebidas, f_bebidas)
         y = _dibujar_segmentos(draw, y, segmentos, ANCHO - MARGEN * 2, alto_linea=38)
         y += 8
 
-    salsas = _texto_salsas(ticket)
+    salsas = _texto_salsas(ticket, contexto)
     if salsas:
         draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
         y += 12
         for linea in _ajustar(draw, salsas.upper(), f_bold, ANCHO - MARGEN * 2):
             _centrado(draw, y, linea, f_bold)
             y += 36
-    if ticket.terminal and ticket.canal in {"domicilio", "recoger"}:
+    if contexto.get("terminal", ticket.terminal) and canal in {"domicilio", "recoger"}:
         draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
         y += 14
         _centrado(draw, y, "PAGO: T E R M I N A L", f_bold)
@@ -830,6 +907,7 @@ def render_reporte_administrativo(reporte):
             "llevar": "LLEVAR",
             "domicilio": "DOMICILIO",
             "recoger": "RECOGER",
+            "sucursales": "SUCURSALES",
         }
         for canal, etiqueta in etiquetas.items():
             valor = Decimal(str(datos.get("canales", {}).get(canal, 0)))

@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, time, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
@@ -9,7 +9,15 @@ from django.utils import timezone
 from catalogo.models import Producto
 from personas.models import Sucursal, UsuarioPOS
 
-from .models import EventoOutbox, Mesa, ModificadorTicket, Partida, ProductoSucursal, Ticket
+from .models import (
+    ConsecutivoFolio,
+    EventoOutbox,
+    Mesa,
+    ModificadorTicket,
+    Partida,
+    ProductoSucursal,
+    Ticket,
+)
 from .normalizacion import normalizar_telefono
 from .orden import PRODUCTOS_SIEMPRE_AL_FINAL
 from .promociones import (
@@ -61,6 +69,111 @@ TICKET_LOCK_FIELDS = [
     "bloqueo_expira_en",
 ]
 _ATENDIO_AUTOMATICO = object()
+
+
+def validar_comanda_editable(ticket):
+    editable = ticket.comanda_en_edicion or ticket.estado == Ticket.Estado.ABIERTO
+    if (
+        not editable
+        or ticket.estado not in {Ticket.Estado.ABIERTO, Ticket.Estado.PROCESADO}
+    ):
+        raise ErrorVenta("La comanda actual ya fue procesada.")
+
+
+def _contexto_comanda(ticket):
+    return {
+        "canal": ticket.canal,
+        "mesa": ticket.mesa.nombre,
+        "posicion_numero": ticket.mesa.orden,
+        "total": str(ticket.total),
+        "comentario_general": ticket.comentario_general,
+        "comentarios_generales": list(ticket.comentarios_generales or []),
+        "salsas_verduras": list(ticket.salsas_verduras or []),
+        "tipo_entrega": ticket.tipo_entrega,
+        "entrega_aproximada": (
+            ticket.entrega_aproximada.strftime("%H:%M")
+            if ticket.entrega_aproximada
+            else ""
+        ),
+        "fecha_programada": (
+            ticket.fecha_programada.isoformat() if ticket.fecha_programada else ""
+        ),
+        "hora_programada": (
+            ticket.hora_programada.strftime("%H:%M") if ticket.hora_programada else ""
+        ),
+        "terminal": ticket.terminal,
+        "paga_con": str(ticket.paga_con) if ticket.paga_con is not None else "",
+        "captura_por_nombres": ticket.captura_por_nombres,
+        "nombres_comensales": dict(ticket.nombres_comensales or {}),
+        "cliente_nombre": ticket.cliente_nombre,
+        "cliente_telefono": ticket.cliente_telefono,
+        "cliente_domicilio": ticket.cliente_domicilio,
+        "cliente_referencia": ticket.cliente_referencia,
+        "contacto_pedido_nombre": ticket.contacto_pedido_nombre,
+        "contacto_pedido_telefono": ticket.contacto_pedido_telefono,
+    }
+
+
+def _guardar_contexto_comanda(ticket):
+    contextos = dict(ticket.contextos_comandas or {})
+    contextos[str(ticket.comanda_actual)] = _contexto_comanda(ticket)
+    ticket.contextos_comandas = contextos
+
+
+def _restaurar_contexto_comanda(ticket, numero):
+    contexto = (ticket.contextos_comandas or {}).get(str(numero)) or {}
+    if not contexto:
+        return []
+
+    campos = [
+        "comentario_general",
+        "comentarios_generales",
+        "salsas_verduras",
+        "tipo_entrega",
+        "entrega_aproximada",
+        "fecha_programada",
+        "hora_programada",
+        "terminal",
+        "paga_con",
+        "captura_por_nombres",
+        "nombres_comensales",
+        "cliente_nombre",
+        "cliente_telefono",
+        "cliente_domicilio",
+        "cliente_referencia",
+        "contacto_pedido_nombre",
+        "contacto_pedido_telefono",
+    ]
+    ticket.comentario_general = contexto.get("comentario_general", "")
+    ticket.comentarios_generales = list(contexto.get("comentarios_generales") or [])
+    ticket.salsas_verduras = list(contexto.get("salsas_verduras") or [])
+    ticket.tipo_entrega = contexto.get("tipo_entrega") or Ticket.TipoEntrega.APROXIMADA
+    try:
+        ticket.entrega_aproximada = time.fromisoformat(contexto.get("entrega_aproximada") or "")
+    except ValueError:
+        ticket.entrega_aproximada = None
+    try:
+        ticket.fecha_programada = date.fromisoformat(contexto.get("fecha_programada") or "")
+    except ValueError:
+        ticket.fecha_programada = None
+    try:
+        ticket.hora_programada = time.fromisoformat(contexto.get("hora_programada") or "")
+    except ValueError:
+        ticket.hora_programada = None
+    ticket.terminal = bool(contexto.get("terminal"))
+    ticket.paga_con = contexto.get("paga_con") or None
+    ticket.captura_por_nombres = bool(contexto.get("captura_por_nombres"))
+    ticket.nombres_comensales = dict(contexto.get("nombres_comensales") or {})
+    for campo in (
+        "cliente_nombre",
+        "cliente_telefono",
+        "cliente_domicilio",
+        "cliente_referencia",
+        "contacto_pedido_nombre",
+        "contacto_pedido_telefono",
+    ):
+        setattr(ticket, campo, contexto.get(campo) or "")
+    return campos
 
 
 def lease_bloqueo_ticket_segundos():
@@ -212,7 +325,11 @@ def _limpiar_cliente_ticket(ticket):
 def validar_limite_productos_por_nombre(ticket):
     if not ticket.captura_por_nombres:
         return
-    partidas = list(ticket.partidas.select_related("producto__categoria").all())
+    partidas = list(
+        ticket.partidas.select_related("producto__categoria").filter(
+            comanda_numero=ticket.comanda_actual
+        )
+    )
     claves = {
         (partida.producto_id, partida.termino)
         for partida in partidas
@@ -260,6 +377,57 @@ def registrar_evento(ticket, tipo, datos=None):
     _evento(ticket, tipo, datos)
 
 
+def _consecutivo_folio_bloqueado(sucursal):
+    """Obtiene el contador vigente y lo repara si hubo altas fuera del servicio."""
+
+    Sucursal.objects.select_for_update().get(pk=sucursal.pk)
+    ultimo_ticket = (
+        Ticket.objects.filter(sucursal=sucursal)
+        .order_by("-serie_folio", "-folio")
+        .values("serie_folio", "folio")
+        .first()
+    )
+    serie_inicial = ultimo_ticket["serie_folio"] if ultimo_ticket else 1
+    folio_inicial = ultimo_ticket["folio"] if ultimo_ticket else 0
+    consecutivo, creado = ConsecutivoFolio.objects.select_for_update().get_or_create(
+        sucursal=sucursal,
+        defaults={"serie": serie_inicial, "ultimo": folio_inicial},
+    )
+    if creado or not ultimo_ticket:
+        return consecutivo
+    if ultimo_ticket["serie_folio"] > consecutivo.serie:
+        consecutivo.serie = ultimo_ticket["serie_folio"]
+        consecutivo.ultimo = ultimo_ticket["folio"]
+        consecutivo.save(update_fields=["serie", "ultimo", "actualizado_en"])
+    elif (
+        ultimo_ticket["serie_folio"] == consecutivo.serie
+        and ultimo_ticket["folio"] > consecutivo.ultimo
+    ):
+        consecutivo.ultimo = ultimo_ticket["folio"]
+        consecutivo.save(update_fields=["ultimo", "actualizado_en"])
+    return consecutivo
+
+
+@transaction.atomic
+def reiniciar_folios(sucursal):
+    consecutivo = _consecutivo_folio_bloqueado(sucursal)
+    serie_anterior = consecutivo.serie
+    consecutivo.serie += 1
+    consecutivo.ultimo = 0
+    consecutivo.save(update_fields=["serie", "ultimo", "actualizado_en"])
+    EventoOutbox.objects.create(
+        sucursal=sucursal,
+        agregado="sucursal",
+        agregado_id=sucursal.id,
+        tipo="folios.reiniciados",
+        datos={
+            "serie_anterior": serie_anterior,
+            "serie_nueva": consecutivo.serie,
+        },
+    )
+    return consecutivo
+
+
 def _datos_termino(producto, termino=None):
     if not producto.permite_termino:
         return "", producto.nombre, producto.nombre_corto
@@ -278,13 +446,18 @@ def _reasignar_componentes_promocion(ticket):
     raices = list(
         Partida.objects.select_for_update()
         .select_related("producto")
-        .filter(ticket=ticket, promocion_aplicada__isnull=True, producto__codigo__in=PROMOCIONES)
+        .filter(
+            ticket=ticket,
+            comanda_numero=ticket.comanda_actual,
+            promocion_aplicada__isnull=True,
+            producto__codigo__in=PROMOCIONES,
+        )
         .order_by("creada_en")
     )
     regulares = list(
         Partida.objects.select_for_update()
         .select_related("producto__categoria")
-        .filter(ticket=ticket)
+        .filter(ticket=ticket, comanda_numero=ticket.comanda_actual)
         .exclude(producto__codigo__in=PROMOCIONES)
         .order_by("creada_en")
     )
@@ -330,6 +503,7 @@ def _reasignar_componentes_promocion(ticket):
                     sucursal=partida.sucursal,
                     ticket=partida.ticket,
                     producto=partida.producto,
+                    comanda_numero=ticket.comanda_actual,
                     promocion_aplicada=raiz,
                     comensal=partida.comensal,
                     cantidad=faltante,
@@ -355,21 +529,31 @@ def abrir_ticket(mesa, atendio=_ATENDIO_AUTOMATICO):
     ).first()
     if activo:
         return activo, False
-    # Serializa la asignación de folios por sucursal también cuando la base está concurrida.
-    Sucursal.objects.select_for_update().get(pk=mesa.sucursal_id)
-    ultimo = Ticket.objects.filter(sucursal=mesa.sucursal).aggregate(Max("folio"))["folio__max"] or 0
+    consecutivo = _consecutivo_folio_bloqueado(mesa.sucursal)
+    consecutivo.ultimo += 1
+    consecutivo.save(update_fields=["ultimo", "actualizado_en"])
     if atendio is _ATENDIO_AUTOMATICO:
         atendio = UsuarioPOS.objects.filter(sucursal=mesa.sucursal, activo=True).first()
     elif atendio is not None and (
         not atendio.activo or atendio.sucursal_id != mesa.sucursal_id
     ):
         raise ErrorVenta("El perfil del operador no está activo en esta sucursal.")
+    valores_iniciales = {}
+    if mesa.canal == Mesa.Canal.DOMICILIO:
+        entrega = timezone.localtime(timezone.now()) + timedelta(minutes=50)
+        valores_iniciales = {
+            "comentarios_generales": [{"codigo": "C/T", "nombre": "CON TODO"}],
+            "salsas_verduras": [{"prefijo": "", "elementos": ["Con Todo"]}],
+            "entrega_aproximada": entrega.time().replace(second=0, microsecond=0),
+        }
     ticket = Ticket.objects.create(
         sucursal=mesa.sucursal,
         mesa=mesa,
         atendio=atendio,
-        folio=ultimo + 1,
+        folio=consecutivo.ultimo,
+        serie_folio=consecutivo.serie,
         canal=mesa.canal,
+        **valores_iniciales,
     )
     _evento(ticket, "ticket.abierto", {"canal": ticket.canal, "mesa": mesa.nombre})
     return ticket, True
@@ -470,8 +654,7 @@ def agregar_partida(
     promocion_aplicada=None,
 ):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
-    if ticket.estado != Ticket.Estado.ABIERTO:
-        raise ErrorVenta("La orden ya fue procesada; no admite nuevas partidas.")
+    validar_comanda_editable(ticket)
     cantidad = Decimal(str(cantidad))
     if cantidad != cantidad.to_integral_value() or not 1 <= cantidad <= 99:
         raise ErrorVenta("La cantidad debe ser un entero entre 1 y 99.")
@@ -497,6 +680,7 @@ def agregar_partida(
         sucursal=ticket.sucursal,
         ticket=ticket,
         producto=producto,
+        comanda_numero=ticket.comanda_actual,
         promocion_aplicada=None,
         comensal=comensal,
         cantidad=cantidad,
@@ -512,6 +696,7 @@ def agregar_partida(
         Partida.objects.filter(pk=partida.pk).first()
         or Partida.objects.filter(
             ticket=ticket,
+            comanda_numero=ticket.comanda_actual,
             producto=producto,
             comensal=comensal,
             termino=termino,
@@ -597,8 +782,9 @@ def actualizar_partida(partida, cantidad, termino=None, validar_componente=True)
     ticket = Ticket.objects.select_for_update().get(pk=partida.ticket_id)
     partida = Partida.objects.select_for_update().select_related("producto", "ticket").get(pk=partida.pk)
     partida.ticket = ticket
-    if partida.ticket.estado != Ticket.Estado.ABIERTO:
-        raise ErrorVenta("La orden ya fue procesada.")
+    validar_comanda_editable(ticket)
+    if partida.comanda_numero != ticket.comanda_actual:
+        raise ErrorVenta("Las comandas anteriores son de sólo lectura.")
     cantidad = Decimal(str(cantidad))
     if cantidad <= 0:
         ticket = partida.ticket
@@ -631,12 +817,15 @@ def actualizar_partida(partida, cantidad, termino=None, validar_componente=True)
 @transaction.atomic
 def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar=False):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
-    if ticket.estado != Ticket.Estado.ABIERTO:
-        raise ErrorVenta("La orden ya fue procesada.")
+    validar_comanda_editable(ticket)
     partidas = list(
         Partida.objects.select_for_update()
         .select_related("producto", "ticket")
-        .filter(ticket=ticket, id__in=partida_ids)
+        .filter(
+            ticket=ticket,
+            comanda_numero=ticket.comanda_actual,
+            id__in=partida_ids,
+        )
         .order_by("creada_en")
     )
     if not partidas:
@@ -666,6 +855,7 @@ def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar
             Partida.objects.select_for_update()
             .filter(
                 ticket=ticket,
+                comanda_numero=ticket.comanda_actual,
                 producto=principal.producto,
                 comensal=principal.comensal,
                 termino=termino_destino,
@@ -692,21 +882,29 @@ def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar
 @transaction.atomic
 def alternar_modificador(ticket, comensal, codigo, nombre):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
-    if ticket.estado != Ticket.Estado.ABIERTO:
-        raise ErrorVenta("La orden ya fue procesada.")
+    validar_comanda_editable(ticket)
     campos_ticket = []
-    existente = ModificadorTicket.objects.filter(ticket=ticket, comensal=comensal, codigo=codigo).first()
+    existente = ModificadorTicket.objects.filter(
+        ticket=ticket,
+        comanda_numero=ticket.comanda_actual,
+        comensal=comensal,
+        codigo=codigo,
+    ).first()
     if existente:
         existente.delete()
         activo = False
     else:
-        ticket.modificadores.filter(comensal=comensal).delete()
+        ticket.modificadores.filter(
+            comanda_numero=ticket.comanda_actual,
+            comensal=comensal,
+        ).delete()
         if ticket.comentarios_generales:
             ticket.comentarios_generales = []
             campos_ticket.append("comentarios_generales")
         ModificadorTicket.objects.create(
             sucursal=ticket.sucursal,
             ticket=ticket,
+            comanda_numero=ticket.comanda_actual,
             comensal=comensal,
             codigo=codigo,
             nombre=nombre,
@@ -720,14 +918,13 @@ def alternar_modificador(ticket, comensal, codigo, nombre):
 @transaction.atomic
 def alternar_comentario_general(ticket, codigo, nombre):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
-    if ticket.estado != Ticket.Estado.ABIERTO:
-        raise ErrorVenta("La orden ya fue procesada.")
+    validar_comanda_editable(ticket)
     comentarios = list(ticket.comentarios_generales or [])
     indice = next((i for i, item in enumerate(comentarios) if item.get("codigo") == codigo), None)
     if indice is None:
         comentarios.append({"codigo": codigo, "nombre": nombre})
         activo = True
-        ticket.modificadores.all().delete()
+        ticket.modificadores.filter(comanda_numero=ticket.comanda_actual).delete()
     else:
         comentarios.pop(indice)
         activo = False
@@ -740,11 +937,13 @@ def alternar_comentario_general(ticket, codigo, nombre):
 @transaction.atomic
 def asegurar_modificador(ticket, comensales, codigo, nombre):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
-    if ticket.estado != Ticket.Estado.ABIERTO:
-        raise ErrorVenta("La orden ya fue procesada.")
+    validar_comanda_editable(ticket)
     comensales_con_producto = set(
         ticket.partidas.exclude(producto__categoria__nombre__iexact="Bebidas")
-        .filter(comensal__in=comensales)
+        .filter(
+            comanda_numero=ticket.comanda_actual,
+            comensal__in=comensales,
+        )
         .values_list("comensal", flat=True)
     )
     aplicados = []
@@ -755,10 +954,15 @@ def asegurar_modificador(ticket, comensales, codigo, nombre):
     for comensal in comensales:
         if comensal not in comensales_con_producto:
             continue
-        ModificadorTicket.objects.filter(ticket=ticket, comensal=comensal).exclude(codigo=codigo).delete()
+        ModificadorTicket.objects.filter(
+            ticket=ticket,
+            comanda_numero=ticket.comanda_actual,
+            comensal=comensal,
+        ).exclude(codigo=codigo).delete()
         _, creado = ModificadorTicket.objects.get_or_create(
             sucursal=ticket.sucursal,
             ticket=ticket,
+            comanda_numero=ticket.comanda_actual,
             comensal=comensal,
             codigo=codigo,
             defaults={"nombre": nombre},
@@ -772,11 +976,38 @@ def asegurar_modificador(ticket, comensales, codigo, nombre):
 
 
 @transaction.atomic
+def agregar_comanda(ticket):
+    ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    if ticket.canal == Mesa.Canal.SUCURSALES:
+        raise ErrorVenta("Los pedidos de sucursal no admiten comandas adicionales.")
+    if ticket.estado != Ticket.Estado.PROCESADO or ticket.comanda_en_edicion:
+        raise ErrorVenta("Primero procesa la comanda actual.")
+    if ticket.liquidaciones_repartidor.exists() or ticket.cortes_caja.exists():
+        raise ErrorVenta("El pedido ya pertenece a un cierre.")
+    if str(ticket.comanda_actual) not in (ticket.contextos_comandas or {}):
+        _guardar_contexto_comanda(ticket)
+    ticket.comanda_actual += 1
+    ticket.comanda_en_edicion = True
+    if ticket.captura_por_nombres:
+        ticket.nombres_comensales = {}
+    guardar_ticket(
+        ticket,
+        ["comanda_actual", "comanda_en_edicion", "contextos_comandas", "nombres_comensales"],
+    )
+    _evento(
+        ticket,
+        "ticket.comanda_agregada",
+        {"comanda_numero": ticket.comanda_actual},
+    )
+    return ticket
+
+
+@transaction.atomic
 def procesar_ticket(ticket):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
-    if ticket.estado != Ticket.Estado.ABIERTO:
-        raise ErrorVenta("La orden no está abierta.")
-    if not ticket.partidas.exists():
+    validar_comanda_editable(ticket)
+    partidas_actuales = ticket.partidas.filter(comanda_numero=ticket.comanda_actual)
+    if not partidas_actuales.exists():
         raise ErrorVenta("Agrega al menos un producto.")
     if ticket.canal != Mesa.Canal.SUCURSALES:
         try:
@@ -784,13 +1015,11 @@ def procesar_ticket(ticket):
         except ValueError as exc:
             raise ErrorVenta(str(exc)) from exc
     if ticket.canal == Mesa.Canal.DOMICILIO:
-        if not all([ticket.cliente_id, ticket.cliente_nombre, ticket.cliente_domicilio]):
-            raise ErrorVenta("Selecciona un cliente con domicilio antes de procesar la orden.")
+        if not ticket.cliente_id or not ticket.cliente_nombre.strip():
+            raise ErrorVenta("Selecciona un cliente antes de procesar la orden.")
         if ticket.cliente.comentarios_multiples:
             if not all([ticket.contacto_pedido_nombre, ticket.contacto_pedido_telefono]):
                 raise ErrorVenta("Captura el nombre y teléfono del contacto para este pedido.")
-        elif not ticket.cliente_telefono:
-            raise ErrorVenta("Selecciona un cliente con teléfono antes de procesar la orden.")
     elif ticket.canal == Mesa.Canal.RECOGER:
         if not ticket.cliente_nombre.strip():
             raise ErrorVenta("Captura el nombre del cliente que recogerá el pedido.")
@@ -800,17 +1029,28 @@ def procesar_ticket(ticket):
         raise ErrorVenta("Captura el nombre del cliente para llevar.")
     if ticket.canal != Mesa.Canal.SUCURSALES:
         validar_captura_por_nombres(ticket)
+    _guardar_contexto_comanda(ticket)
     ticket.estado = Ticket.Estado.PROCESADO
+    ticket.comanda_en_edicion = False
     ticket.procesado_en = timezone.now()
-    guardar_ticket(ticket, ["estado", "procesado_en"])
-    ticket.partidas.update(procesada=True)
-    _evento(ticket, "ticket.procesado", {"total": str(ticket.total)})
+    guardar_ticket(
+        ticket,
+        ["estado", "comanda_en_edicion", "procesado_en", "contextos_comandas"],
+    )
+    partidas_actuales.update(procesada=True)
+    _evento(
+        ticket,
+        "ticket.procesado",
+        {"total": str(ticket.total), "comanda_numero": ticket.comanda_actual},
+    )
     return ticket
 
 
 @transaction.atomic
 def cobrar_ticket(ticket, forma_pago, importe_recibido=None):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    if ticket.comanda_en_edicion:
+        raise ErrorVenta("Procesa la comanda actual antes de cobrar.")
     if ticket.canal == Mesa.Canal.DOMICILIO:
         raise ErrorVenta("Los domicilios se liquidan mediante su repartidor desde Administrador.")
     if ticket.estado not in [Ticket.Estado.PROCESADO, Ticket.Estado.COBRAR]:
@@ -854,6 +1094,8 @@ def cobrar_ticket(ticket, forma_pago, importe_recibido=None):
 @transaction.atomic
 def completar_ticket_sucursal(ticket):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    if ticket.comanda_en_edicion:
+        raise ErrorVenta("Procesa la comanda actual antes de completar el pedido.")
     if ticket.canal != Mesa.Canal.SUCURSALES:
         raise ErrorVenta("La orden no pertenece al módulo de sucursales.")
     if ticket.estado not in [Ticket.Estado.PROCESADO, Ticket.Estado.COBRAR]:
@@ -862,6 +1104,37 @@ def completar_ticket_sucursal(ticket):
     ticket.pagado_en = timezone.now()
     guardar_ticket(ticket, ["estado", "pagado_en"], limpiar_bloqueo=True)
     _evento(ticket, "ticket.sucursal_completado", {"total": str(ticket.total)})
+    return ticket
+
+
+@transaction.atomic
+def cancelar_comanda_adicional(ticket):
+    ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    if not (
+        ticket.estado == Ticket.Estado.PROCESADO
+        and ticket.comanda_en_edicion
+        and ticket.comanda_actual > 1
+    ):
+        raise ErrorVenta("No hay una comanda agregada pendiente por cancelar.")
+
+    numero_cancelado = ticket.comanda_actual
+    ticket.partidas.filter(comanda_numero=numero_cancelado).delete()
+    ticket.modificadores.filter(comanda_numero=numero_cancelado).delete()
+    contextos = dict(ticket.contextos_comandas or {})
+    contextos.pop(str(numero_cancelado), None)
+    ticket.contextos_comandas = contextos
+    ticket.comanda_actual -= 1
+    ticket.comanda_en_edicion = False
+    campos = _restaurar_contexto_comanda(ticket, ticket.comanda_actual)
+    guardar_ticket(
+        ticket,
+        campos + ["comanda_actual", "comanda_en_edicion", "contextos_comandas"],
+    )
+    _evento(
+        ticket,
+        "ticket.comanda_cancelada",
+        {"comanda_numero": numero_cancelado},
+    )
     return ticket
 
 
@@ -890,8 +1163,10 @@ def cancelar_ticket(ticket, permitir_procesado=False):
         ticket.captura_por_nombres = False
         ticket.nombres_comensales = {}
         ticket.fecha_programada = None
+        ticket.hora_programada = None
         ticket.repartidor = None
     ticket.fecha_programada = None
+    ticket.hora_programada = None
     ticket.repartidor = None
     ticket.estado = Ticket.Estado.CANCELADO
     ticket.cancelado_en = timezone.now()
@@ -915,6 +1190,7 @@ def cancelar_ticket(ticket, permitir_procesado=False):
             "terminal",
             "paga_con",
             "fecha_programada",
+            "hora_programada",
             "repartidor",
             "captura_por_nombres",
             "nombres_comensales",

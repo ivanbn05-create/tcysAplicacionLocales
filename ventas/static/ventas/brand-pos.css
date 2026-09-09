@@ -246,6 +246,33 @@ button.operando::after {
 .perfil-acceso.administrador small { color: rgba(255,255,255,.78); }
 .perfil-acceso.administrador:hover { color: #111; background: var(--amarillo); }
 .perfil-acceso.administrador:hover small { color: var(--carbon); }
+.acceso-cerrar-sesion {
+  margin-top: 18px;
+  display: flex;
+  justify-content: flex-end;
+}
+.cerrar-sesion-principal {
+  min-height: 44px;
+  padding: 10px 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  border: 2px solid var(--carbon);
+  border-radius: 2px;
+  color: var(--carbon);
+  background: var(--papel);
+  font-weight: 900;
+}
+.cerrar-sesion-principal:hover { color: #fff; background: var(--carbon); }
+.cerrar-sesion-principal svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 
 main,
 body.en-operacion main,
@@ -669,7 +696,7 @@ body.en-ticket .salir-tableta { display: none; }
 .clave-pos-sello { width: 42px; height: 42px; display: grid; place-items: center; border: 2px solid var(--carbon); color: var(--carbon); background: var(--amarillo); }
 .clave-pos-sello svg { width: 27px; height: 27px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 .clave-pos-ayuda { margin: -7px 0 0; color: var(--muted); font-size: .72rem; line-height: 1.45; }
-.dialogo-clave-pos input { min-height: 54px; font-family: ui-monospace, Consolas, monospace; font-size: 1.55rem; letter-spacing: .45em; text-align: center; }
+.dialogo-clave-pos input { min-height: 54px; font-family: "Montserrat Tocayos", Montserrat, system-ui, sans-serif; font-size: 1.55rem; letter-spacing: .45em; text-align: center; }
 .error-clave-pos { margin: -5px 0 0; padding: 9px; color: #fff; background: var(--rojo); font-size: .68rem; font-weight: 800; }
 
 @media (max-width: 700px) {
@@ -939,6 +966,57 @@ textarea {
   box-shadow: none;
 }
 .accion-cancelar { color: #fff; background: var(--rojo); border: 2px solid var(--rojo); }
+.accion-ticket {
+  color: var(--carbon);
+  background: var(--amarillo);
+  border: 2px solid var(--carbon);
+}
+.accion-agregar {
+  color: #fff;
+  background: var(--verde);
+  border: 2px solid #287a21;
+}
+.navegador-comandas {
+  min-width: 132px;
+  display: grid;
+  grid-template-columns: 42px minmax(42px, auto) 42px;
+  align-items: center;
+  border: 2px solid var(--carbon);
+  background: #fff;
+}
+.navegador-comandas button {
+  width: 42px;
+  min-height: 42px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  color: var(--carbon);
+  background: transparent;
+}
+.navegador-comandas button:first-child { border-right: 1px solid var(--carbon); }
+.navegador-comandas button:last-child { border-left: 1px solid var(--carbon); }
+.navegador-comandas button:disabled { opacity: .3; cursor: default; }
+.navegador-comandas svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.navegador-comandas output {
+  padding: 0 6px;
+  font-weight: 950;
+  text-align: center;
+}
+.pin-enmascarado { -webkit-text-security: disc; }
+.ayuda-campo {
+  margin: -6px 0 2px;
+  color: var(--muted);
+  font-size: .76rem;
+  font-weight: 700;
+}
 .boton.enlace { color: #8c1715; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
 
 dialog {

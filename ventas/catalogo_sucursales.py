@@ -77,7 +77,7 @@ PRECIOS_BASE = {
 }
 
 
-def configuracion_precio(tipo, producto_id, nombre_ticket):
+def configuracion_precio(tipo, producto_id, nombre_ticket, cliente_origen_id=None):
     """Devuelve disponibilidad, alias y precio para el grupo del CSV."""
     if tipo == "cliente_mayorista":
         if producto_id in {25, 26}:
@@ -92,4 +92,9 @@ def configuracion_precio(tipo, producto_id, nombre_ticket):
             31: "JAM 1/2 .M", 32: "JAM LT .M",
         }.get(producto_id, nombre_ticket)
         return Decimal(importe), alias
-    return Decimal(PRECIOS_BASE[producto_id]), nombre_ticket
+    importe = (
+        "200.00"
+        if cliente_origen_id == 1 and producto_id == 24
+        else PRECIOS_BASE[producto_id]
+    )
+    return Decimal(importe), nombre_ticket

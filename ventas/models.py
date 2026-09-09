@@ -250,6 +250,23 @@ class ConfiguracionSucursal(models.Model):
         return f"Configuración · {self.sucursal.nombre}"
 
 
+class ConsecutivoFolio(models.Model):
+    """Consecutivo vigente de tickets, separado por una serie reiniciable."""
+
+    sucursal = models.OneToOneField(
+        Sucursal,
+        primary_key=True,
+        on_delete=models.CASCADE,
+        related_name="consecutivo_folios",
+    )
+    serie = models.PositiveIntegerField(default=1)
+    ultimo = models.PositiveIntegerField(default=0)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.sucursal.nombre} · serie {self.serie} · {self.ultimo}"
+
+
 class Ticket(models.Model):
     class Estado(models.TextChoices):
         ABIERTO = "abierto", "Abierto"
@@ -292,6 +309,7 @@ class Ticket(models.Model):
         related_name="tickets_repartidos",
     )
     folio = models.PositiveIntegerField()
+    serie_folio = models.PositiveIntegerField(default=1)
     canal = models.CharField(max_length=15, choices=Mesa.Canal.choices)
     estado = models.CharField(max_length=15, choices=Estado.choices, default=Estado.ABIERTO)
     comentario_general = models.TextField(blank=True)
@@ -306,7 +324,11 @@ class Ticket(models.Model):
     terminal = models.BooleanField(default=False)
     paga_con = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     fecha_programada = models.DateField(null=True, blank=True)
+    hora_programada = models.TimeField(null=True, blank=True)
     activado_programado_en = models.DateTimeField(null=True, blank=True)
+    comanda_actual = models.PositiveIntegerField(default=1)
+    comanda_en_edicion = models.BooleanField(default=True)
+    contextos_comandas = models.JSONField(default=dict, blank=True)
     version_entidad = models.PositiveIntegerField(default=1)
     bloqueo_device_id = models.CharField(max_length=128, blank=True, db_index=True)
     bloqueo_operador = models.ForeignKey(
@@ -338,7 +360,10 @@ class Ticket(models.Model):
     class Meta:
         ordering = ["-creado_en"]
         constraints = [
-            models.UniqueConstraint(fields=["sucursal", "folio"], name="ticket_folio_sucursal"),
+            models.UniqueConstraint(
+                fields=["sucursal", "serie_folio", "folio"],
+                name="ticket_folio_serie_sucursal",
+            ),
             models.UniqueConstraint(
                 fields=["mesa"],
                 condition=Q(estado__in=["abierto", "procesado", "cobrar"]),
@@ -388,6 +413,7 @@ class Partida(models.Model):
         related_name="componentes_promocion",
     )
     comensal = models.PositiveSmallIntegerField(validators=[MinValueValidator(1), MaxValueValidator(24)])
+    comanda_numero = models.PositiveIntegerField(default=1)
     cantidad = models.DecimalField(max_digits=8, decimal_places=3, default=Decimal("1.000"))
     precio_unitario = models.DecimalField(max_digits=10, decimal_places=2)
     cantidad_por_precio = models.DecimalField(max_digits=8, decimal_places=3, default=Decimal("1.000"))
@@ -420,12 +446,16 @@ class ModificadorTicket(models.Model):
     sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="modificadores_ticket")
     ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="modificadores")
     comensal = models.PositiveSmallIntegerField(validators=[MinValueValidator(1), MaxValueValidator(24)])
+    comanda_numero = models.PositiveIntegerField(default=1)
     codigo = models.CharField(max_length=20)
     nombre = models.CharField(max_length=60)
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["ticket", "comensal", "codigo"], name="modificador_unico_comensal")
+            models.UniqueConstraint(
+                fields=["ticket", "comanda_numero", "comensal", "codigo"],
+                name="modificador_unico_comanda_comensal",
+            )
         ]
 
 

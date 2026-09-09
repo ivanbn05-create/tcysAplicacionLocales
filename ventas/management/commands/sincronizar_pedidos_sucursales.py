@@ -6,7 +6,7 @@ from ventas.integracion_sucursales import sincronizar_pedidos_confirmados
 
 
 class Command(BaseCommand):
-    help = "Importa pedidos confirmados del día desde Supabase o la SQLite de respaldo."
+    help = "Importa pedidos confirmados de hoy o ayer desde Supabase o la SQLite de respaldo."
 
     def handle(self, *args, **options):
         sucursal = Sucursal.objects.get(clave=settings.SUCURSAL_CLAVE, activa=True)

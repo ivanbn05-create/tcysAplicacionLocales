@@ -254,11 +254,11 @@ La firma visible se compone con la fuente Bebas Neue local: `LOS` verde, `TOCAYO
 
 El riel de canales del POS usa tres tickets tipo clipboard agrupados y alineados a la derecha. El seleccionado expone `aria-pressed`, papel blanco, clip rojo y una única regla roja inferior con muesca central. Los siete atajos del catálogo son botones con nombre accesible y destino explícito; el desplazamiento respeta movimiento reducido y nunca cambia el orden de categorías. `Salir` vive en la cabecera sólo mientras se muestran posiciones; dentro de una orden se oculta para evitar abandonar accidentalmente la captura.
 
-El Administrador usa un riel carbón separado con Inicio, Personal, Domicilios, Programados, Movimientos, Reportes y Sucursales. El destino activo cambia a amarillo y expone `aria-current="page"`; en móvil conserva el mismo orden como pista horizontal. La pista inferior de Inicio ofrece herramientas secundarias después de los pendientes y no suplanta el riel ni eleva Reportes por encima de una urgencia operativa.
+El Administrador usa un riel carbón separado con Inicio, Pedidos, Personal, Domicilios, Programados, Movimientos, Reportes y Sucursales. El destino activo cambia a amarillo y expone `aria-current="page"`; en móvil conserva el mismo orden como pista horizontal. Pedidos representa las posiciones físicas agrupadas por canal, permite seleccionar sólo operaciones compatibles y mantiene el detalle de la orden junto a su origen y destino. La pista inferior de Inicio ofrece herramientas secundarias después de los pendientes y no suplanta el riel ni eleva Reportes por encima de una urgencia operativa.
 
 ### Protected Administrative Actions
 
-Entrar al Administrador exige una clave de cuatro dígitos, pero no crea una autorización persistente. Cada mutación o impresión protegida vuelve a pedir el PIN en un diálogo modal, devuelve el foco al flujo y presenta errores accionables sin revelar la clave. Mientras la petición corre, el control iniciador se bloquea con etiqueta de progreso y `aria-busy`; no se permiten dos mutaciones simultáneas.
+Entrar al Administrador exige una clave de cuatro dígitos y crea una autorización de sesión breve. Mientras siga vigente, las acciones internas no vuelven a pedir el PIN; cambiar la propia clave sí exige la clave actual y, si la sesión vence, la interfaz solicita renovarla. Los campos de cuatro dígitos se sirven como texto con enmascarado visual y `autocomplete="off"` para evitar avisos engañosos de contraseña insegura sin exponer su valor. Mientras una petición corre, el control iniciador se bloquea con etiqueta de progreso y `aria-busy`; no se permiten dos mutaciones simultáneas.
 
 ### Administrative Page Change
 
@@ -266,7 +266,7 @@ El cambio de sección usa un único gesto de hoja horizontal, breve y sin rebote
 
 ### Virtual Comanda
 
-La comanda virtual conserva deliberadamente el aspecto y el orden de la impresión térmica: encabezado, folio/contexto, comensales, preparación, productos, contacto, comentarios, bebidas, salsas y terminal. En disposición horizontal ocupa aproximadamente 45 % del flujo completo. En captura Por nombres, la primera columna mide 92 px y los encabezados se compactan sin desbordar; los nombres excepcionales usan elipsis. Sus celdas siguen siendo controles accesibles, pero no se rediseñan como tarjetas de aplicación.
+La comanda virtual conserva deliberadamente el aspecto y el orden de la impresión térmica: encabezado, folio/contexto, comensales, preparación, productos, contacto, comentarios, bebidas, salsas y terminal. El navegador muestra `actual/total` entre flechas; una comanda procesada se vuelve de sólo lectura y conserva un snapshot de posición, total, nombres, preparación y entrega. `Agregar` crea una comanda nueva en verde, vuelve al Comensal 1 y sólo esa comanda puede editarse o imprimirse al procesar. `Ticket` imprime el total acumulado y `Cobrar` únicamente registra el cobro, sin impresión implícita. En disposición horizontal la comanda ocupa aproximadamente 45 % del flujo completo. En captura Por nombres, la primera columna mide 92 px y los encabezados se compactan sin desbordar; los nombres excepcionales usan elipsis. Sus celdas siguen siendo controles accesibles, pero no se rediseñan como tarjetas de aplicación.
 
 ### Product Image Resolver
 
@@ -281,7 +281,7 @@ La resolución sigue una sola prioridad: `Producto.imagen` mediante endpoint aut
 - **Do** mantener el reparto 5+2 de posiciones y reservar aproximadamente 45 % del ancho horizontal total a la comanda.
 - **Do** mantener color, etiqueta y símbolo en todos los estados operativos.
 - **Do** conservar en móvil la prioridad administrativa Domicilios → Cierres → Programados y mantener las herramientas secundarias después de la bandeja.
-- **Do** pedir el PIN de cuatro dígitos en cada acción administrativa protegida y marcar el control iniciador con texto de espera, deshabilitado y `aria-busy`.
+- **Do** pedir el PIN al entrar o renovar la sesión administrativa y marcar cada control iniciador con texto de espera, deshabilitado y `aria-busy`.
 - **Do** conservar la comanda virtual alineada con `impresion/render.py::render_comanda` y con una impresión real.
 - **Do** servir tipografías, iconos e imágenes desde el proyecto y registrar la procedencia de todo raster nuevo.
 - **Do** mantener el Administrador local dentro de este lenguaje, con navegación separada y funciones confirmadas por su brief.
@@ -291,7 +291,7 @@ La resolución sigue una sola prioridad: `Producto.imagen` mediante endpoint aut
 - **Don't** devolver Orden abierta al rojo; amarillo es su semántica aprobada.
 - **Don't** reintroducir un footer de estado: esa información debe vivir en las posiciones y acciones que representa.
 - **Don't** convertir la bandeja administrativa en un dashboard de métricas ni mostrar totales fuera de Reportes y corte de caja.
-- **Don't** conservar el PIN como autorización de sesión para mutaciones posteriores.
+- **Don't** volver a pedir el PIN dentro del Administrador mientras su autorización breve siga vigente, salvo al cambiar la propia clave.
 - **Don't** mostrar `Salir` durante la captura ni reintroducir estados pasivos de conexión o impresora en la cabecera.
 - **Don't** crear tarjetas flotantes genéricas, glassmorphism, gradientes decorativos, halos, texturas de papel o sombras duras.
 - **Don't** deformar el logotipo ni usar Bebas Neue para instrucciones, datos de cliente o errores extensos.

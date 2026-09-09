@@ -13,6 +13,11 @@
     promesaResumen: null,
     operacionEnCurso: false,
     peticionesPendientes: 0,
+    ticketSeleccionadoId: "",
+    ticketMoverId: "",
+    ticketsSeleccionados: new Set(),
+    canalPedidosAbierto: "",
+    movimientoEditandoId: "",
   };
 
   class ErrorAPI extends Error {
@@ -91,13 +96,20 @@
     return new Intl.DateTimeFormat("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(valor));
   }
 
-  function mananaISO() {
-    const fecha = new Date();
-    fecha.setDate(fecha.getDate() + 1);
+  function fechaLocalISO(fecha) {
     const anio = fecha.getFullYear();
     const mes = String(fecha.getMonth() + 1).padStart(2, "0");
     const dia = String(fecha.getDate()).padStart(2, "0");
     return `${anio}-${mes}-${dia}`;
+  }
+
+  function programacionPredeterminada() {
+    const fecha = new Date(Date.now() + 60 * 60 * 1000);
+    return {
+      fecha: fechaLocalISO(fecha),
+      hora: `${String(fecha.getHours()).padStart(2, "0")}:${String(fecha.getMinutes()).padStart(2, "0")}`,
+      minima: fechaLocalISO(new Date()),
+    };
   }
 
   function mostrarPanel(nombre) {
@@ -155,12 +167,14 @@
     }
   }
 
-  async function cargarResumen() {
+  async function cargarResumen(control = null) {
     if (estado.promesaResumen) return estado.promesaResumen;
-    const control = $("#actualizar-resumen");
+    const iniciador = control === false
+      ? null
+      : (control || controlQueDisparoLaAccion() || $("#actualizar-resumen"));
     const promesa = (async () => {
       ajustarEstadoOcupado(1);
-      marcarControlPendiente(control, true, "Actualizando…");
+      marcarControlPendiente(iniciador, true, "Actualizando…");
       try {
         let datos;
         try {
@@ -170,13 +184,14 @@
           datos = await api("/api/administrador/resumen/");
         }
         estado.administrador = datos.administrador;
+        depurarSeleccion();
         renderTodo();
         return true;
       } catch (error) {
         toast(error.message, true);
         return false;
       } finally {
-        marcarControlPendiente(control, false);
+        marcarControlPendiente(iniciador, false);
         ajustarEstadoOcupado(-1);
       }
     })();
@@ -188,43 +203,33 @@
     }
   }
 
-  async function ejecutarConClave({ titulo, ayuda, url, method = "POST", cuerpo = {}, mensaje, refrescar = true }) {
+  async function ejecutarAccion({ url, method = "POST", cuerpo = {}, mensaje, refrescar = true, control = null }) {
     if (estado.operacionEnCurso) {
       toast("Espera a que termine la acción en curso.", true);
       return null;
     }
-    const control = controlQueDisparoLaAccion();
-    const clave = await pedirClave(titulo, ayuda);
-    if (!clave) return null;
-    if (estado.operacionEnCurso) {
-      toast("Espera a que termine la acción en curso.", true);
-      return null;
-    }
+    const iniciador = control || controlQueDisparoLaAccion();
     estado.operacionEnCurso = true;
     ajustarEstadoOcupado(1);
-    marcarControlPendiente(control, true);
-    const opciones = { method, body: JSON.stringify({ ...cuerpo, clave_administrador: clave }) };
+    marcarControlPendiente(iniciador, true);
+    const opciones = { method, body: JSON.stringify(cuerpo) };
     try {
       let datos;
       try {
         datos = await api(url, opciones);
       } catch (error) {
-        if (error.status !== 401) throw error;
-        await api("/api/administrador/acceso/", {
-          method: "POST",
-          body: JSON.stringify({ clave_administrador: clave }),
-        });
+        if (error.status !== 401 || !(await autorizarEntrada())) throw error;
         datos = await api(url, opciones);
       }
       if (mensaje) toast(mensaje);
       registrarImpresion(datos.impresiones);
-      if (refrescar) await cargarResumen();
+      if (refrescar) await cargarResumen(false);
       return datos;
     } catch (error) {
       toast(error.message, true);
       return null;
     } finally {
-      marcarControlPendiente(control, false);
+      marcarControlPendiente(iniciador, false);
       ajustarEstadoOcupado(-1);
       estado.operacionEnCurso = false;
     }
@@ -241,25 +246,317 @@
 
   function opcionesRepartidores(seleccionado = "") {
     const repartidores = estado.administrador?.repartidores || [];
-    return `<option value="">Seleccionar repartidor</option>${repartidores.map(item => `<option value="${item.id}" ${item.id === seleccionado ? "selected" : ""}>${escapar(item.nombre)}</option>`).join("")}`;
+    return '<option value="">Seleccionar repartidor</option>' + repartidores.map(item => '<option value="' + escapar(item.id) + '" ' + (String(item.id) === String(seleccionado) ? "selected" : "") + '>' + escapar(item.nombre) + '</option>').join("");
   }
 
   function opcionesPosiciones() {
-    const posiciones = estado.administrador?.posiciones_disponibles || [];
-    return `<option value="">Posición libre</option>${posiciones.map(item => `<option value="${item.id}">${escapar(item.canal_etiqueta)} · ${escapar(item.nombre)}</option>`).join("")}`;
+    const posiciones = posicionesCompletas().filter(item => item.disponible !== false && !item.ticket_id);
+    return '<option value="">Posición libre</option>' + posiciones.map(item => '<option value="' + escapar(item.id) + '">' + escapar(item.canal_etiqueta) + ' · ' + escapar(item.nombre) + '</option>').join("");
+  }
+
+  function tickets() {
+    return estado.administrador?.tickets || [];
+  }
+
+  function buscarTicket(id) {
+    return tickets().find(ticket => String(ticket.id) === String(id)) || null;
+  }
+
+  function depurarSeleccion() {
+    const ids = new Set(tickets().map(ticket => String(ticket.id)));
+    estado.ticketsSeleccionados.forEach(id => {
+      if (!ids.has(String(id))) estado.ticketsSeleccionados.delete(id);
+    });
+    if (estado.ticketSeleccionadoId && !ids.has(String(estado.ticketSeleccionadoId))) estado.ticketSeleccionadoId = "";
+    if (estado.ticketMoverId && !ids.has(String(estado.ticketMoverId))) estado.ticketMoverId = "";
+  }
+
+  function posicionesCompletas() {
+    const admin = estado.administrador || {};
+    if (Array.isArray(admin.posiciones)) return [...admin.posiciones];
+    const posiciones = [...(admin.posiciones_disponibles || [])];
+    const ids = new Set(posiciones.map(item => String(item.id)));
+    tickets().filter(ticket => !["cancelado", "pagado", "programado"].includes(ticket.estado)).forEach(ticket => {
+      if (!ticket.mesa_id || ids.has(String(ticket.mesa_id))) return;
+      posiciones.push({
+        id: ticket.mesa_id,
+        nombre: ticket.mesa,
+        canal: ticket.canal,
+        canal_etiqueta: ticket.canal_etiqueta,
+        disponible: false,
+        ticket_id: ticket.id,
+        ticket_folio: ticket.folio,
+        ticket_estado: ticket.estado,
+      });
+      ids.add(String(ticket.mesa_id));
+    });
+    return posiciones;
+  }
+
+  function ticketDePosicion(posicion) {
+    if (posicion.ticket && typeof posicion.ticket === "object") return posicion.ticket;
+    if (posicion.ticket_id) return buscarTicket(posicion.ticket_id);
+    return tickets().find(ticket => String(ticket.mesa_id) === String(posicion.id) && !["cancelado", "pagado", "programado"].includes(ticket.estado)) || null;
+  }
+
+  function tipoLote(ticket) {
+    if (!ticket || !["procesado", "cobrar"].includes(ticket.estado)) return "";
+    if (["comedor", "llevar", "recoger"].includes(ticket.canal)) return "cobrar";
+    if (ticket.canal === "domicilio") return "domicilio";
+    if (ticket.canal === "sucursales") return "sucursales";
+    return "";
+  }
+
+  function ticketsSeleccionadosActuales() {
+    return [...estado.ticketsSeleccionados]
+      .map(buscarTicket)
+      .filter(Boolean);
+  }
+
+  function renderDetallePedido() {
+    const contenedor = $("#detalle-ticket");
+    const ticket = buscarTicket(estado.ticketSeleccionadoId);
+    if (!ticket) {
+      contenedor.innerHTML = "";
+      $("#dialogo-detalle-pedido-titulo").textContent = "Detalle del pedido";
+      if ($("#dialogo-detalle-pedido").open) $("#dialogo-detalle-pedido").close();
+      return;
+    }
+    const atendio = ticket.atendio || ticket.detalles?.atendio || "Sin operador identificado";
+    const creado = ticket.creado_en || ticket.detalles?.creado_en || ticket.detalles?.creado;
+    $("#dialogo-detalle-pedido-titulo").textContent = "Detalle del pedido #" + ticket.folio;
+    contenedor.innerHTML =
+      '<article class="pedido-ficha">' +
+        '<div class="pedido-ficha-folio"><span>' + escapar(ticket.canal_etiqueta) + '</span><strong>#' + escapar(ticket.folio) + '</strong></div>' +
+        '<h3>' + escapar(ticket.mesa) + '</h3>' +
+        '<dl>' +
+          '<div><dt>Estado</dt><dd>' + escapar(ticket.estado_etiqueta) + '</dd></div>' +
+          '<div><dt>Total</dt><dd>' + dinero(ticket.total) + '</dd></div>' +
+          '<div><dt>Tomó el pedido</dt><dd>' + escapar(atendio) + '</dd></div>' +
+          '<div><dt>Hora de apertura</dt><dd>' + fechaHora(creado) + '</dd></div>' +
+          '<div><dt>Cliente</dt><dd>' + escapar(ticket.cliente_nombre || "No aplica") + '</dd></div>' +
+          '<div><dt>Repartidor</dt><dd>' + escapar(ticket.repartidor || "Sin asignar") + '</dd></div>' +
+        '</dl>' +
+        '<div class="pedido-ficha-acciones">' +
+          '<button class="boton peligro" data-pedido-accion="cancelar" data-ticket-id="' + escapar(ticket.id) + '" type="button">Cancelar pedido</button>' +
+        '</div>' +
+      '</article>';
+  }
+
+  function renderBarraLote() {
+    const seleccionados = ticketsSeleccionadosActuales();
+    const barra = $("#barra-lote");
+    const total = seleccionados.length;
+    const accionesIndividuales = $("#acciones-pedido-seleccionado");
+    $("#conteo-seleccionados").textContent = total;
+    $("#lote-resumen").textContent = total === 1 ? "1 pedido seleccionado" : total + " pedidos seleccionados";
+    barra.hidden = total === 0;
+    accionesIndividuales.hidden = total !== 1;
+    [...accionesIndividuales.querySelectorAll("[data-pedido-accion]")].forEach(boton => {
+      boton.dataset.ticketId = total === 1 ? seleccionados[0].id : "";
+    });
+    $$("[data-lote-grupo]").forEach(grupo => { grupo.hidden = true; });
+    if (!total) return;
+    const tipos = new Set(seleccionados.map(tipoLote));
+    const tipo = tipos.size === 1 ? [...tipos][0] : "";
+    if (tipo) {
+      const grupo = $('[data-lote-grupo="' + tipo + '"]');
+      if (grupo) grupo.hidden = false;
+    }
+    $("#lote-cobrar-conteo").textContent = total + (total === 1 ? " para cobrar" : " para cobrar");
+    $("#lote-domicilio-conteo").textContent = total + (total === 1 ? " domicilio" : " domicilios");
+    $("#lote-sucursales-conteo").textContent = total + (total === 1 ? " pedido de sucursal" : " pedidos de sucursales");
+    $("#lote-repartidor").innerHTML = opcionesRepartidores();
+  }
+
+  function renderPedidos() {
+    const contenedor = $("#mapa-posiciones");
+    if (!contenedor) return;
+    const ordenCanales = ["comedor", "llevar", "recoger", "domicilio", "sucursales"];
+    const etiquetas = {
+      comedor: "Comedor",
+      llevar: "Llevar",
+      recoger: "Recoger",
+      domicilio: "Domicilio",
+      sucursales: "Sucursales",
+    };
+    const posiciones = posicionesCompletas();
+    const canalesDisponibles = ordenCanales.filter(canal => posiciones.some(posicion => posicion.canal === canal));
+    if (!canalesDisponibles.includes(estado.canalPedidosAbierto)) estado.canalPedidosAbierto = "";
+    contenedor.innerHTML = canalesDisponibles
+      .map(canal => {
+        const grupo = posiciones.filter(posicion => posicion.canal === canal);
+        const abierto = estado.canalPedidosAbierto === canal;
+        const ocupadas = grupo.filter(posicion => ticketDePosicion(posicion)).length;
+        const libres = grupo.length - ocupadas;
+        const celdas = grupo.map(posicion => {
+          const ticket = ticketDePosicion(posicion);
+          const seleccionado = Boolean(ticket && estado.ticketsSeleccionados.has(String(ticket.id)));
+          const detalleActivo = Boolean(ticket && String(ticket.id) === String(estado.ticketSeleccionadoId));
+          const destino = Boolean(estado.ticketMoverId && !ticket);
+          const clases = [
+            "celda-posicion-admin",
+            ticket ? "ocupada" : "libre",
+            seleccionado ? "seleccionada" : "",
+            detalleActivo ? "detalle-activo" : "",
+            destino ? "destino-disponible" : "",
+          ].filter(Boolean).join(" ");
+          const resumen = ticket
+            ? '<small>Ticket ' + escapar(ticket.folio) + ' · ' + dinero(ticket.total) + '</small><span>' + escapar(ticket.estado_etiqueta) + '</span>'
+            : '<small>Disponible</small><span>Libre</span>';
+          return '<button class="' + clases + '" data-posicion-id="' + escapar(posicion.id) + '"' +
+            (ticket ? ' data-ticket-id="' + escapar(ticket.id) + '"' : "") +
+            ' type="button" aria-pressed="' + (seleccionado ? "true" : "false") + '"' +
+            (!ticket && !estado.ticketMoverId ? ' aria-disabled="true"' : "") + '>' +
+              '<b>' + escapar(posicion.nombre) + '</b>' + resumen +
+            '</button>';
+        }).join("");
+        const idBoton = "alternar-posiciones-" + canal;
+        const idPanel = "posiciones-" + canal;
+        return '<section class="mapa-grupo" data-canal="' + canal + '">' +
+          '<h3><button class="mapa-grupo-toggle" id="' + idBoton + '" data-acordeon-canal="' + canal + '" type="button" aria-expanded="' + (abierto ? "true" : "false") + '" aria-controls="' + idPanel + '">' +
+            '<span class="mapa-grupo-nombre">' + etiquetas[canal] + '</span>' +
+            '<span class="mapa-grupo-resumen"><strong>' + ocupadas + (ocupadas === 1 ? " ocupada" : " ocupadas") + '</strong><small>' + libres + (libres === 1 ? " libre" : " libres") + '</small></span>' +
+            '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>' +
+          '</button></h3>' +
+          '<div class="mapa-grupo-celdas" id="' + idPanel + '" role="region" aria-labelledby="' + idBoton + '"' + (abierto ? "" : " hidden") + '>' + celdas + '</div>' +
+        '</section>';
+      }).join("");
+    const avisoMover = $("#instruccion-mover");
+    avisoMover.hidden = !estado.ticketMoverId;
+    if (estado.ticketMoverId) {
+      const ticket = buscarTicket(estado.ticketMoverId);
+      avisoMover.textContent = "Mover ticket #" + (ticket?.folio || "") + ": selecciona ahora una casilla libre.";
+    }
+    renderDetallePedido();
+    renderBarraLote();
+  }
+
+  function alternarSeleccionTicket(ticketId) {
+    const ticket = buscarTicket(ticketId);
+    if (!ticket) return;
+    const id = String(ticket.id);
+    const yaSeleccionado = estado.ticketsSeleccionados.has(id);
+    const tipo = tipoLote(ticket);
+    if (yaSeleccionado) {
+      estado.ticketsSeleccionados.delete(id);
+      if (estado.ticketSeleccionadoId === id) {
+        const restantes = [...estado.ticketsSeleccionados];
+        estado.ticketSeleccionadoId = restantes[restantes.length - 1] || "";
+      }
+    } else {
+      const compatibles = tipo && ticketsSeleccionadosActuales().every(item => tipoLote(item) === tipo);
+      if (!compatibles) estado.ticketsSeleccionados.clear();
+      estado.ticketsSeleccionados.add(id);
+      estado.ticketSeleccionadoId = id;
+    }
+    estado.canalPedidosAbierto = ticket.canal;
+    renderPedidos();
+    requestAnimationFrame(() => {
+      $$("#mapa-posiciones [data-ticket-id]").find(celda => String(celda.dataset.ticketId) === id)?.focus();
+    });
+  }
+
+  async function moverTicketAPosicion(posicionId) {
+    const ticketId = estado.ticketMoverId;
+    if (!ticketId) return;
+    const resultado = await ejecutarAccion({
+      url: "/api/administrador/tickets/" + ticketId + "/reasignar/",
+      cuerpo: { mesa_id: posicionId },
+      mensaje: "Pedido movido a la nueva posición.",
+    });
+    if (resultado) {
+      estado.ticketMoverId = "";
+      estado.ticketSeleccionadoId = ticketId;
+      renderPedidos();
+    }
+  }
+
+  // Mantiene compatibles las acciones existentes mientras la autorización se
+  // conserva en la sesión administrativa. Ya no solicita una clave por acción.
+  function ejecutarConClave({ titulo: _titulo, ayuda: _ayuda, ...opciones }) {
+    return ejecutarAccion(opciones);
+  }
+
+  function limpiarFormularioMovimiento() {
+    estado.movimientoEditandoId = "";
+    $("#form-movimiento").reset();
+    $("#movimiento-id").value = "";
+    $("#titulo-form-movimiento").textContent = "Nuevo movimiento";
+    $("#guardar-movimiento").textContent = "Registrar movimiento";
+    $("#cancelar-edicion-movimiento").hidden = true;
+  }
+
+  async function alternarPantallaCompletaAdmin() {
+    try {
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        if (document.exitFullscreen) await document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+      } else if (document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen({ navigationUI: "hide" });
+      } else if (document.documentElement.webkitRequestFullscreen) {
+        document.documentElement.webkitRequestFullscreen();
+      } else {
+        toast("Este navegador no permite activar pantalla completa.", true);
+      }
+    } catch {
+      toast("No fue posible cambiar el modo de pantalla completa.", true);
+    }
+  }
+
+  function actualizarBotonPantallaCompleta() {
+    const boton = $("#pantalla-completa-admin");
+    const activo = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+    boton.setAttribute("aria-pressed", String(activo));
+    boton.querySelector("span").textContent = activo ? "Salir de pantalla completa" : "Pantalla completa";
+  }
+
+  async function ejecutarLote(boton) {
+    const accion = boton.dataset.accionLote;
+    const tipoEsperado = {
+      cobrar: "cobrar",
+      asignar_repartidor: "domicilio",
+      completar_sucursales: "sucursales",
+    }[accion];
+    const ids = ticketsSeleccionadosActuales()
+      .filter(ticket => tipoLote(ticket) === tipoEsperado)
+      .map(ticket => ticket.id);
+    if (!ids.length) return toast("La selección no contiene pedidos compatibles con esta acción.", true);
+    const cuerpo = { accion, ticket_ids: ids };
+    if (accion === "asignar_repartidor") {
+      cuerpo.repartidor_id = $("#lote-repartidor").value;
+      if (!cuerpo.repartidor_id) return toast("Selecciona un repartidor.", true);
+    }
+    const mensajes = {
+      cobrar: "Pedidos cobrados y posiciones liberadas.",
+      asignar_repartidor: "Domicilios asignados al repartidor.",
+      completar_sucursales: "Pedidos de sucursal completados.",
+    };
+    const resultado = await ejecutarAccion({
+      url: "/api/administrador/tickets/acciones-lote/",
+      cuerpo,
+      mensaje: mensajes[accion],
+      control: boton,
+    });
+    if (resultado) {
+      estado.ticketsSeleccionados.clear();
+      estado.ticketSeleccionadoId = "";
+      renderPedidos();
+    }
   }
 
   function tarjetaTicket(ticket, { asignar = false, programar = false } = {}) {
+    const programacion = programacionPredeterminada();
     const controles = asignar
       ? `<div class="ticket-controles"><select aria-label="Repartidor para ticket ${ticket.folio}">${opcionesRepartidores(ticket.repartidor_id)}</select><button class="boton mini primario" data-accion-ticket="asignar" type="button">Asignar</button></div>`
       : programar
-        ? `<div class="ticket-controles"><input type="date" min="${mananaISO()}" value="${mananaISO()}" aria-label="Fecha para ticket ${ticket.folio}"><button class="boton mini primario" data-accion-ticket="programar" type="button">Programar</button></div>`
+        ? `<div class="ticket-controles programacion-control"><input type="date" min="${programacion.minima}" value="${programacion.fecha}" aria-label="Fecha para ticket ${ticket.folio}"><input type="time" value="${programacion.hora}" aria-label="Hora para ticket ${ticket.folio}"><button class="boton mini primario" data-accion-ticket="programar" type="button">Programar</button></div>`
         : "";
     return `<article class="ticket-pendiente ${ticket.estado === "programado" ? "programado" : ""}" data-ticket-id="${ticket.id}">
       <div class="ticket-cabecera"><strong>${escapar(ticket.mesa || ticket.canal_etiqueta)}</strong><b>#${escapar(ticket.folio)}</b></div>
       <div class="ticket-cliente">${escapar(ticket.cliente_nombre || "Cliente sin nombre")}</div>
       <address>${escapar(ticket.cliente_domicilio || ticket.estado_etiqueta || "Sin domicilio capturado")}</address>
-      <div class="ticket-pie"><strong>${dinero(ticket.total)}</strong>${ticket.fecha_programada ? `<time datetime="${ticket.fecha_programada}">${fechaCorta(ticket.fecha_programada)}</time>` : `<time>${ticket.terminal ? "Terminal" : "Efectivo"}</time>`}${controles}</div>
+      <div class="ticket-pie"><strong>${dinero(ticket.total)}</strong>${ticket.fecha_programada ? `<time datetime="${ticket.fecha_programada}T${ticket.hora_programada || "00:00"}">${fechaCorta(ticket.fecha_programada)} · ${escapar(ticket.hora_programada || "Sin hora")}</time>` : `<time>${ticket.terminal ? "Terminal" : "Efectivo"}</time>`}${controles}</div>
     </article>`;
   }
 
@@ -285,7 +582,7 @@
 
   function renderTotales() {
     const totales = estado.administrador.totales_parciales || {};
-    const canales = ["comedor", "llevar", "domicilio", "recoger"];
+    const canales = ["comedor", "llevar", "domicilio", "recoger", "sucursales"];
     const total = canales.reduce((suma, canal) => suma + Number(totales[canal] || 0), 0);
     canales.forEach(canal => { $(`#total-${canal}`).textContent = dinero(totales[canal]); });
     $("#total-general").textContent = dinero(total);
@@ -341,8 +638,9 @@
 
   function renderMovimientos() {
     const movimientos = estado.administrador.movimientos || [];
-    $("#lista-movimientos").innerHTML = movimientos.length ? movimientos.map(item => `<article class="fila-movimiento ${item.tipo}">
+    $("#lista-movimientos").innerHTML = movimientos.length ? movimientos.map(item => `<article class="fila-movimiento ${item.tipo}" data-movimiento-id="${item.id}">
       <b>${item.tipo === "entrada" ? "+" : "−"}</b><div><strong>${escapar(item.concepto)}</strong><small>${fechaHora(item.creado_en)}</small></div><b>${dinero(item.importe)}</b>
+      <div class="movimiento-acciones"><button class="boton mini" data-editar-movimiento="${item.id}" type="button">Editar</button><button class="boton mini peligro" data-eliminar-movimiento="${item.id}" type="button">Eliminar</button></div>
     </article>`).join("") : '<p class="vacio">No hay entradas ni salidas en este turno.</p>';
   }
 
@@ -362,6 +660,7 @@
     renderTotales();
     renderPersonal();
     renderDomicilios();
+    renderPedidos();
     renderProgramados();
     renderMovimientos();
     renderSucursales();
@@ -380,8 +679,13 @@
     }
     if (accion === "programar") {
       const fecha = fila.querySelector('input[type="date"]')?.value;
-      if (!fecha) return toast("Selecciona la fecha de preparación o entrega.", true);
-      await ejecutarConClave({ titulo: "Programar domicilio", ayuda: `El pedido se activará al iniciar el programa el ${fechaCorta(fecha)}, sin esperar la hora.`, url: `/api/administrador/tickets/${ticketId}/programar/`, cuerpo: { fecha_programada: fecha }, mensaje: "Pedido agregado a la agenda futura." });
+      const hora = fila.querySelector('input[type="time"]')?.value;
+      if (!fecha || !hora) return toast("Selecciona la fecha y la hora de entrega.", true);
+      await ejecutarAccion({
+        url: `/api/administrador/tickets/${ticketId}/programar/`,
+        cuerpo: { fecha_programada: fecha, hora_programada: hora },
+        mensaje: `Pedido programado para el ${fechaCorta(fecha)} a las ${hora}.`,
+      });
       return;
     }
     if (accion === "reasignar") {
@@ -412,6 +716,97 @@
       await accionTicket(accion);
       return;
     }
+    const acordeonPedidos = evento.target.closest("[data-acordeon-canal]");
+    if (acordeonPedidos) {
+      const canal = acordeonPedidos.dataset.acordeonCanal;
+      estado.canalPedidosAbierto = estado.canalPedidosAbierto === canal ? "" : canal;
+      renderPedidos();
+      requestAnimationFrame(() => {
+        $$("#mapa-posiciones [data-acordeon-canal]").find(boton => boton.dataset.acordeonCanal === canal)?.focus();
+      });
+      return;
+    }
+    const accionPedido = evento.target.closest("[data-pedido-accion]");
+    if (accionPedido) {
+      const ticketId = accionPedido.dataset.ticketId;
+      const ticket = buscarTicket(ticketId);
+      if (!ticket) return;
+      if (accionPedido.dataset.pedidoAccion === "mover") {
+        estado.ticketMoverId = String(ticketId);
+        estado.ticketSeleccionadoId = String(ticketId);
+        estado.canalPedidosAbierto = ticket.canal;
+        if ($("#dialogo-detalle-pedido").open) $("#dialogo-detalle-pedido").close();
+        renderPedidos();
+        return;
+      }
+      if (accionPedido.dataset.pedidoAccion === "ver_detalles") {
+        estado.ticketSeleccionadoId = String(ticketId);
+        renderDetallePedido();
+        const dialogo = $("#dialogo-detalle-pedido");
+        if (!dialogo.open) dialogo.showModal();
+        return;
+      }
+      if (accionPedido.dataset.pedidoAccion === "cancelar") {
+        if (!window.confirm("¿Cancelar este pedido? La posición quedará libre y el pedido se conservará para auditoría.")) return;
+        const resultado = await ejecutarAccion({
+          url: "/api/administrador/tickets/" + ticketId + "/cancelar/",
+          mensaje: "Pedido cancelado y posición liberada.",
+          control: accionPedido,
+        });
+        if (resultado) {
+          estado.ticketsSeleccionados.delete(String(ticketId));
+          estado.ticketSeleccionadoId = "";
+          estado.ticketMoverId = "";
+          if ($("#dialogo-detalle-pedido").open) $("#dialogo-detalle-pedido").close();
+          renderPedidos();
+        }
+        return;
+      }
+    }
+    const celdaPosicion = evento.target.closest("#mapa-posiciones [data-posicion-id]");
+    if (celdaPosicion) {
+      const ticketId = celdaPosicion.dataset.ticketId;
+      if (estado.ticketMoverId) {
+        if (ticketId) return toast("Selecciona una casilla libre como destino.", true);
+        await moverTicketAPosicion(celdaPosicion.dataset.posicionId);
+        return;
+      }
+      if (ticketId) alternarSeleccionTicket(ticketId);
+      return;
+    }
+    const accionLote = evento.target.closest("[data-accion-lote]");
+    if (accionLote) {
+      await ejecutarLote(accionLote);
+      return;
+    }
+    const editarMovimiento = evento.target.closest("[data-editar-movimiento]");
+    if (editarMovimiento) {
+      const item = (estado.administrador.movimientos || []).find(movimiento => String(movimiento.id) === String(editarMovimiento.dataset.editarMovimiento));
+      if (!item) return;
+      estado.movimientoEditandoId = String(item.id);
+      $("#movimiento-id").value = item.id;
+      $("#movimiento-tipo").value = item.tipo;
+      $("#movimiento-concepto").value = item.concepto;
+      $("#movimiento-importe").value = item.importe;
+      $("#titulo-form-movimiento").textContent = "Editar movimiento";
+      $("#guardar-movimiento").textContent = "Guardar cambios";
+      $("#cancelar-edicion-movimiento").hidden = false;
+      $("#movimiento-concepto").focus();
+      return;
+    }
+    const eliminarMovimiento = evento.target.closest("[data-eliminar-movimiento]");
+    if (eliminarMovimiento) {
+      const movimientoId = eliminarMovimiento.dataset.eliminarMovimiento;
+      if (!window.confirm("¿Eliminar esta entrada o salida de caja?")) return;
+      const resultado = await ejecutarAccion({
+        url: "/api/administrador/movimientos/" + movimientoId + "/",
+        method: "DELETE",
+        mensaje: "Movimiento eliminado.",
+        control: eliminarMovimiento,
+      });
+      if (resultado && estado.movimientoEditandoId === String(movimientoId)) limpiarFormularioMovimiento();
+      return;
+    }
     const usuario = evento.target.closest("[data-editar-usuario]");
     if (usuario) {
       const datos = estado.administrador.usuarios.find(item => item.id === usuario.dataset.editarUsuario);
@@ -428,12 +823,20 @@
     }
     const accionGeneral = evento.target.closest("[data-accion]")?.dataset.accion;
     if (accionGeneral === "reporte-parcial") {
-      await ejecutarConClave({ titulo: "Imprimir reporte parcial", ayuda: "El ticket mostrará el total de Comedor, Llevar, Domicilio, Recoger y la suma general.", url: "/api/administrador/reportes/parcial/", mensaje: "Reporte parcial enviado a impresión." });
+      await ejecutarAccion({ url: "/api/administrador/reportes/parcial/", mensaje: "Reporte parcial enviado a impresión." });
       return;
     }
     if (accionGeneral === "corte-caja") {
       if (!window.confirm("¿Realizar el corte de caja? Iniciará un nuevo turno para los siguientes movimientos.")) return;
       await ejecutarConClave({ titulo: "Realizar corte de caja", ayuda: "Sólo continuará si no quedan cobros, repartidores o liquidaciones pendientes.", url: "/api/administrador/corte-caja/", mensaje: "Corte de caja generado." });
+      return;
+    }
+    if (accionGeneral === "reiniciar-folios") {
+      if (!window.confirm("¿Reiniciar los folios? El siguiente pedido será el número 1; no se eliminará ningún pedido existente.")) return;
+      await ejecutarAccion({
+        url: "/api/administrador/folios/reiniciar/",
+        mensaje: "Folios reiniciados. El siguiente pedido usará el número 1.",
+      });
       return;
     }
     const corteSucursal = evento.target.closest("[data-accion-sucursal='corte']");
@@ -455,7 +858,19 @@
   });
   $("#cancelar-clave").addEventListener("click", () => resolverClave(null));
   $("#dialogo-clave").addEventListener("cancel", evento => { evento.preventDefault(); resolverClave(null); });
-  $("#actualizar-resumen").addEventListener("click", cargarResumen);
+  $("#actualizar-resumen").addEventListener("click", evento => cargarResumen(evento.currentTarget));
+  $("#actualizar-pedidos").addEventListener("click", evento => cargarResumen(evento.currentTarget));
+  $("#limpiar-seleccion").addEventListener("click", () => {
+    estado.ticketsSeleccionados.clear();
+    estado.ticketSeleccionadoId = "";
+    estado.ticketMoverId = "";
+    if ($("#dialogo-detalle-pedido").open) $("#dialogo-detalle-pedido").close();
+    renderPedidos();
+  });
+  $("#cerrar-detalle-pedido").addEventListener("click", () => $("#dialogo-detalle-pedido").close());
+  $("#pantalla-completa-admin").addEventListener("click", alternarPantallaCompletaAdmin);
+  document.addEventListener("fullscreenchange", actualizarBotonPantallaCompleta);
+  document.addEventListener("webkitfullscreenchange", actualizarBotonPantallaCompleta);
   $("#nuevo-usuario").addEventListener("click", limpiarFormularioUsuario);
 
   $("#form-usuario").addEventListener("submit", async evento => {
@@ -480,14 +895,31 @@
 
   $("#form-movimiento").addEventListener("submit", async evento => {
     evento.preventDefault();
-    const resultado = await ejecutarConClave({ titulo: "Registrar movimiento de caja", ayuda: "Este importe formará parte del corte actual.", url: "/api/administrador/movimientos/", cuerpo: { tipo: $("#movimiento-tipo").value, concepto: $("#movimiento-concepto").value, importe: $("#movimiento-importe").value }, mensaje: "Movimiento registrado." });
-    if (resultado) evento.currentTarget.reset();
+    const id = estado.movimientoEditandoId || $("#movimiento-id").value;
+    const resultado = await ejecutarAccion({
+      url: id ? `/api/administrador/movimientos/${id}/` : "/api/administrador/movimientos/",
+      method: id ? "PATCH" : "POST",
+      cuerpo: {
+        tipo: $("#movimiento-tipo").value,
+        concepto: $("#movimiento-concepto").value,
+        importe: $("#movimiento-importe").value,
+      },
+      mensaje: id ? "Movimiento actualizado." : "Movimiento registrado.",
+    });
+    if (resultado) limpiarFormularioMovimiento();
   });
+  $("#cancelar-edicion-movimiento").addEventListener("click", limpiarFormularioMovimiento);
 
   $("#form-clave").addEventListener("submit", async evento => {
     evento.preventDefault();
+    const claveActual = $("#clave-actual").value;
     const nuevaClave = $("#nueva-clave").value;
-    const resultado = await ejecutarConClave({ titulo: "Cambiar clave", ayuda: "Ingresa primero la clave administrativa vigente.", url: "/api/administrador/clave/", cuerpo: { nueva_clave: nuevaClave }, mensaje: "Clave de administrador actualizada.", refrescar: false });
+    const resultado = await ejecutarAccion({
+      url: "/api/administrador/clave/",
+      cuerpo: { clave_administrador: claveActual, nueva_clave: nuevaClave },
+      mensaje: "Clave de administrador actualizada.",
+      refrescar: false,
+    });
     if (resultado) evento.currentTarget.reset();
   });
 

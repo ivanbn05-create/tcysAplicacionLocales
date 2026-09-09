@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from ipaddress import ip_address
 from pathlib import Path
 
@@ -59,6 +60,7 @@ class ServicioTocayosPOS(win32serviceutil.ServiceFramework):
     _svc_name_ = "LosTocayosPOS"
     _svc_display_name_ = "Los Tocayos POS"
     _svc_description_ = "Servidor local Waitress del punto de venta Los Tocayos."
+    _exe_name_ = str(BASE_DIR / ".venv" / "Scripts" / "pythonservice.exe")
 
     def __init__(self, args):
         super().__init__(args)
@@ -207,4 +209,13 @@ class ServicioTocayosPOS(win32serviceutil.ServiceFramework):
 
 
 if __name__ == "__main__":
+    if "--check-host" in sys.argv[1:] or any(arg in {"install", "update"} for arg in sys.argv[1:]):
+        from herramientas.host_servicio_windows import preparar_host
+
+        preparar_host()
+        print("Host de servicio verificado con un entorno de sistema minimo.")
+        if any(arg in {"install", "update"} for arg in sys.argv[1:]):
+            servicemanager.SetEventSourceName(ServicioTocayosPOS._svc_name_, True)
+    if sys.argv[1:] == ["--check-host"]:
+        raise SystemExit(0)
     win32serviceutil.HandleCommandLine(ServicioTocayosPOS)

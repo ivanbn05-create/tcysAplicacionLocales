@@ -34,6 +34,11 @@ urlpatterns = [
     ),
     path("api/tickets/abrir/", views.api_abrir_ticket, name="api_abrir_ticket"),
     path("api/tickets/<uuid:ticket_id>/", views.api_ticket, name="api_ticket"),
+    path(
+        "api/tickets/<uuid:ticket_id>/comandas/",
+        views.api_agregar_comanda,
+        name="api_agregar_comanda",
+    ),
     path("api/tickets/<uuid:ticket_id>/bloqueo/", views.api_bloqueo_ticket, name="api_bloqueo_ticket"),
     path("api/tickets/<uuid:ticket_id>/cliente/", views.api_ticket_cliente, name="api_ticket_cliente"),
     path("api/tickets/<uuid:ticket_id>/convertir/", views.api_convertir_ticket, name="api_convertir_ticket"),
@@ -95,6 +100,21 @@ urlpatterns = [
         name="api_admin_reporte_parcial",
     ),
     path("api/administrador/movimientos/", views.api_admin_movimientos, name="api_admin_movimientos"),
+    path(
+        "api/administrador/movimientos/<uuid:movimiento_id>/",
+        views.api_admin_movimiento,
+        name="api_admin_movimiento",
+    ),
+    path(
+        "api/administrador/tickets/acciones-lote/",
+        views.api_admin_acciones_tickets_lote,
+        name="api_admin_acciones_tickets_lote",
+    ),
+    path(
+        "api/administrador/folios/reiniciar/",
+        views.api_admin_reiniciar_folios,
+        name="api_admin_reiniciar_folios",
+    ),
     path("api/administrador/corte-caja/", views.api_admin_corte_caja, name="api_admin_corte_caja"),
     path(
         "api/administrador/corte-sucursal/",

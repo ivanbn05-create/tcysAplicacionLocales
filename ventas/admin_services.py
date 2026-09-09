@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth.hashers import check_password, make_password
@@ -19,7 +19,14 @@ from .models import (
     SucursalPedido,
     Ticket,
 )
-from .services import ErrorVenta, cancelar_ticket, guardar_ticket, registrar_evento
+from .services import (
+    ErrorVenta,
+    cancelar_ticket,
+    cobrar_ticket,
+    completar_ticket_sucursal,
+    guardar_ticket,
+    registrar_evento,
+)
 
 
 CANALES_CAJA = (
@@ -27,6 +34,7 @@ CANALES_CAJA = (
     Mesa.Canal.LLEVAR,
     Mesa.Canal.DOMICILIO,
     Mesa.Canal.RECOGER,
+    Mesa.Canal.SUCURSALES,
 )
 ESTADOS_ACTIVOS = (Ticket.Estado.ABIERTO, Ticket.Estado.PROCESADO, Ticket.Estado.COBRAR)
 
@@ -153,16 +161,34 @@ def _tickets_turno(sucursal, ahora=None):
 
 
 @transaction.atomic
-def activar_programados(sucursal, fecha=None):
-    fecha = fecha or timezone.localdate()
+def activar_programados(sucursal, ahora=None):
+    if isinstance(ahora, datetime):
+        instante = ahora
+        if timezone.is_naive(instante):
+            instante = timezone.make_aware(instante)
+    elif isinstance(ahora, date):
+        instante = timezone.make_aware(datetime.combine(ahora, time.max))
+    else:
+        instante = timezone.now()
+    local = timezone.localtime(instante)
     programados = list(
         Ticket.objects.select_for_update()
         .filter(
             sucursal=sucursal,
             estado=Ticket.Estado.PROGRAMADO,
-            fecha_programada__lte=fecha,
         )
-        .order_by("fecha_programada", "creado_en")
+        .filter(
+            Q(fecha_programada__lt=local.date())
+            | Q(
+                fecha_programada=local.date(),
+                hora_programada__lte=local.time(),
+            )
+            | Q(
+                fecha_programada=local.date(),
+                hora_programada__isnull=True,
+            )
+        )
+        .order_by("fecha_programada", "hora_programada", "creado_en")
     )
     if not programados:
         return 0
@@ -188,24 +214,35 @@ def activar_programados(sucursal, fecha=None):
         registrar_evento(
             ticket,
             "ticket.programado_activado",
-            {"fecha_programada": ticket.fecha_programada.isoformat(), "mesa": posicion.nombre},
+            {
+                "fecha_programada": ticket.fecha_programada.isoformat(),
+                "hora_programada": ticket.hora_programada.isoformat() if ticket.hora_programada else "",
+                "mesa": posicion.nombre,
+            },
         )
         activados += 1
     return activados
 
 
 @transaction.atomic
-def programar_ticket(ticket, fecha_programada):
+def programar_ticket(ticket, fecha_programada, hora_programada):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if ticket.canal != Mesa.Canal.DOMICILIO:
         raise ErrorVenta("Sólo los pedidos a domicilio pueden dejarse programados.")
-    if ticket.estado != Ticket.Estado.PROCESADO:
+    if ticket.estado != Ticket.Estado.PROCESADO or ticket.comanda_en_edicion:
         raise ErrorVenta("Primero procesa e imprime el pedido.")
     if ticket.liquidaciones_repartidor.exists() or ticket.cortes_caja.exists():
         raise ErrorVenta("El pedido ya pertenece a una liquidación o corte.")
-    if fecha_programada <= timezone.localdate():
-        raise ErrorVenta("La fecha programada debe ser posterior al día de hoy.")
+    programado_para = timezone.make_aware(
+        datetime.combine(fecha_programada, hora_programada),
+        timezone.get_current_timezone(),
+    )
+    if programado_para <= timezone.now():
+        raise ErrorVenta("La fecha y hora programadas deben ser posteriores al momento actual.")
     ticket.fecha_programada = fecha_programada
+    ticket.hora_programada = hora_programada
+    ticket.tipo_entrega = Ticket.TipoEntrega.PROGRAMADA
+    ticket.entrega_aproximada = hora_programada
     ticket.activado_programado_en = None
     ticket.estado = Ticket.Estado.PROGRAMADO
     ticket.repartidor = None
@@ -213,13 +250,20 @@ def programar_ticket(ticket, fecha_programada):
         ticket,
         [
             "fecha_programada",
+            "hora_programada",
+            "tipo_entrega",
+            "entrega_aproximada",
             "activado_programado_en",
             "estado",
             "repartidor",
         ],
         limpiar_bloqueo=True,
     )
-    registrar_evento(ticket, "ticket.programado", {"fecha": fecha_programada.isoformat()})
+    registrar_evento(
+        ticket,
+        "ticket.programado",
+        {"programado_para": programado_para.isoformat()},
+    )
     return ticket
 
 
@@ -263,7 +307,11 @@ def reasignar_ticket(ticket, mesa_destino):
 def asignar_repartidor(ticket, repartidor):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     repartidor = UsuarioPOS.objects.select_for_update().select_related("rol").get(pk=repartidor.pk)
-    if ticket.canal != Mesa.Canal.DOMICILIO or ticket.estado != Ticket.Estado.PROCESADO:
+    if (
+        ticket.canal != Mesa.Canal.DOMICILIO
+        or ticket.estado != Ticket.Estado.PROCESADO
+        or ticket.comanda_en_edicion
+    ):
         raise ErrorVenta("Sólo un domicilio procesado puede asignarse a repartidor.")
     if (
         repartidor.sucursal_id != ticket.sucursal_id
@@ -277,6 +325,50 @@ def asignar_repartidor(ticket, repartidor):
     guardar_ticket(ticket, ["repartidor"])
     registrar_evento(ticket, "ticket.repartidor_asignado", {"repartidor_id": str(repartidor.id)})
     return ticket
+
+
+@transaction.atomic
+def aplicar_accion_tickets_lote(
+    sucursal,
+    accion,
+    ticket_ids,
+    forma_pago=None,
+    repartidor=None,
+):
+    if accion not in {"cobrar", "completar_sucursales", "asignar_repartidor"}:
+        raise ErrorVenta("La acción en lote no es válida.")
+    if not ticket_ids:
+        raise ErrorVenta("Selecciona al menos un pedido.")
+    if len(ticket_ids) > 200:
+        raise ErrorVenta("Se permiten como máximo 200 pedidos por operación.")
+    tickets_encontrados = {
+        ticket.id: ticket
+        for ticket in Ticket.objects.select_for_update()
+        .filter(sucursal=sucursal, id__in=ticket_ids)
+        .prefetch_related("partidas")
+    }
+    if len(tickets_encontrados) != len(ticket_ids):
+        raise ErrorVenta("Uno o más pedidos ya no están disponibles.")
+    tickets = [tickets_encontrados[ticket_id] for ticket_id in ticket_ids]
+
+    resultado = []
+    if accion == "cobrar":
+        forma_pago = forma_pago or Ticket.FormaPago.EFECTIVO
+        if forma_pago not in Ticket.FormaPago.values:
+            raise ErrorVenta("Selecciona una forma de pago válida.")
+        if any(ticket.canal in {Mesa.Canal.DOMICILIO, Mesa.Canal.SUCURSALES} for ticket in tickets):
+            raise ErrorVenta("La selección incluye pedidos que no se cobran con esta acción.")
+        for ticket in tickets:
+            resultado.append(cobrar_ticket(ticket, forma_pago, ticket.total))
+    elif accion == "completar_sucursales":
+        for ticket in tickets:
+            resultado.append(completar_ticket_sucursal(ticket))
+    else:
+        if repartidor is None:
+            raise ErrorVenta("Selecciona un repartidor.")
+        for ticket in tickets:
+            resultado.append(asignar_repartidor(ticket, repartidor))
+    return resultado
 
 
 @transaction.atomic
@@ -335,6 +427,8 @@ def crear_liquidacion_repartidor(sucursal, repartidor, fondo=Decimal("0.00")):
     )
     if not tickets:
         raise ErrorVenta("El repartidor no tiene domicilios pendientes de liquidar.")
+    if any(ticket.comanda_en_edicion for ticket in tickets):
+        raise ErrorVenta("Procesa todas las comandas antes de liquidar al repartidor.")
     total_terminal = sum((ticket.total for ticket in tickets if ticket.terminal), Decimal("0.00"))
     total_efectivo = sum((ticket.total for ticket in tickets if not ticket.terminal), Decimal("0.00"))
     total_pedidos = total_terminal + total_efectivo
@@ -374,16 +468,32 @@ def crear_liquidacion_repartidor(sucursal, repartidor, fondo=Decimal("0.00")):
         total_a_entregar=total_pedidos + fondo,
     )
     liquidacion.tickets.add(*tickets)
+    ahora = timezone.now()
+    for ticket in tickets:
+        ticket.estado = Ticket.Estado.PAGADO
+        ticket.forma_pago = (
+            Ticket.FormaPago.TARJETA if ticket.terminal else Ticket.FormaPago.EFECTIVO
+        )
+        ticket.importe_recibido = ticket.total
+        ticket.pagado_en = ahora
+        guardar_ticket(
+            ticket,
+            ["estado", "forma_pago", "importe_recibido", "pagado_en"],
+            limpiar_bloqueo=True,
+        )
+        registrar_evento(
+            ticket,
+            "ticket.liquidado_repartidor",
+            {"liquidacion_id": str(liquidacion.id), "total": str(ticket.total)},
+        )
     return liquidacion, reporte
 
 
 def _tickets_reporte(sucursal):
-    hoy = timezone.localdate()
     return (
         _tickets_turno(sucursal)
         .exclude(estado=Ticket.Estado.CANCELADO)
-        .exclude(canal=Mesa.Canal.SUCURSALES)
-        .exclude(estado=Ticket.Estado.PROGRAMADO, fecha_programada__gt=hoy)
+        .exclude(estado=Ticket.Estado.PROGRAMADO)
         .prefetch_related("partidas")
     )
 
@@ -416,6 +526,16 @@ def crear_reporte_parcial(sucursal):
 
 @transaction.atomic
 def agregar_movimiento(sucursal, tipo, concepto, importe):
+    tipo, concepto, importe = _datos_movimiento(tipo, concepto, importe)
+    return MovimientoCaja.objects.create(
+        sucursal=sucursal,
+        tipo=tipo,
+        concepto=concepto,
+        importe=importe,
+    )
+
+
+def _datos_movimiento(tipo, concepto, importe):
     if tipo not in MovimientoCaja.Tipo.values:
         raise ErrorVenta("Selecciona si el movimiento es entrada o salida.")
     concepto = str(concepto or "").strip()[:180]
@@ -427,12 +547,34 @@ def agregar_movimiento(sucursal, tipo, concepto, importe):
         raise ErrorVenta("El importe no es válido.") from exc
     if importe <= 0 or importe > Decimal("99999999.99"):
         raise ErrorVenta("El importe debe ser mayor que cero.")
-    return MovimientoCaja.objects.create(
+    return tipo, concepto, importe
+
+
+@transaction.atomic
+def actualizar_movimiento(sucursal, movimiento, tipo, concepto, importe):
+    movimiento = MovimientoCaja.objects.select_for_update().get(
+        pk=movimiento.pk,
         sucursal=sucursal,
-        tipo=tipo,
-        concepto=concepto,
-        importe=importe,
     )
+    if movimiento.cortes_caja.exists():
+        raise ErrorVenta("El movimiento pertenece a un corte y ya no puede editarse.")
+    tipo, concepto, importe = _datos_movimiento(tipo, concepto, importe)
+    movimiento.tipo = tipo
+    movimiento.concepto = concepto
+    movimiento.importe = importe
+    movimiento.save(update_fields=["tipo", "concepto", "importe"])
+    return movimiento
+
+
+@transaction.atomic
+def eliminar_movimiento(sucursal, movimiento):
+    movimiento = MovimientoCaja.objects.select_for_update().get(
+        pk=movimiento.pk,
+        sucursal=sucursal,
+    )
+    if movimiento.cortes_caja.exists():
+        raise ErrorVenta("El movimiento pertenece a un corte y ya no puede eliminarse.")
+    movimiento.delete()
 
 
 def bloqueos_corte(sucursal):
@@ -465,6 +607,16 @@ def bloqueos_corte(sucursal):
     ]
     if domicilios_sin_liquidar:
         bloqueos.append(f"Faltan {len(domicilios_sin_liquidar)} domicilio(s) en totales de repartidor.")
+    sucursales_sin_completar = [
+        ticket
+        for ticket in tickets
+        if ticket.canal == Mesa.Canal.SUCURSALES
+        and ticket.estado != Ticket.Estado.PAGADO
+    ]
+    if sucursales_sin_completar:
+        bloqueos.append(
+            f"Faltan {len(sucursales_sin_completar)} pedido(s) de sucursal por completar."
+        )
     return bloqueos
 
 
@@ -603,6 +755,8 @@ def crear_corte_sucursal(sucursal, cliente_sucursal):
 
 
 def _ticket_admin_payload(ticket):
+    atendio = ticket.atendio.nombre if ticket.atendio_id else ""
+    creado_en = ticket.creado_en.isoformat()
     return {
         "id": str(ticket.id),
         "folio": ticket.folio,
@@ -620,7 +774,17 @@ def _ticket_admin_payload(ticket):
         "repartidor_id": str(ticket.repartidor_id) if ticket.repartidor_id else "",
         "repartidor": ticket.repartidor.nombre if ticket.repartidor_id else "",
         "fecha_programada": ticket.fecha_programada.isoformat() if ticket.fecha_programada else "",
-        "creado_en": ticket.creado_en.isoformat(),
+        "hora_programada": ticket.hora_programada.strftime("%H:%M") if ticket.hora_programada else "",
+        "atendio_id": str(ticket.atendio_id) if ticket.atendio_id else "",
+        "atendio": atendio,
+        "creado_en": creado_en,
+        "detalles": {
+            "atendio": atendio,
+            "creado": creado_en,
+            "creado_en": creado_en,
+        },
+        "comanda_actual": ticket.comanda_actual,
+        "comanda_en_edicion": ticket.comanda_en_edicion,
     }
 
 
@@ -633,7 +797,7 @@ def resumen_administrador(sucursal):
     )
     tickets_turno = list(
         _tickets_turno(sucursal)
-        .select_related("mesa", "repartidor")
+        .select_related("mesa__cliente_sucursal", "repartidor", "atendio")
         .prefetch_related("partidas")
         .exclude(estado__in=[Ticket.Estado.CANCELADO, Ticket.Estado.PROGRAMADO])
         .order_by("creado_en")
@@ -643,24 +807,32 @@ def resumen_administrador(sucursal):
             sucursal=sucursal,
             estado=Ticket.Estado.PROGRAMADO,
         )
-        .select_related("mesa", "repartidor")
+        .select_related("mesa__cliente_sucursal", "repartidor", "atendio")
         .prefetch_related("partidas")
-        .order_by("fecha_programada", "creado_en")
+        .order_by("fecha_programada", "hora_programada", "creado_en")
     )
     tickets = [*tickets_turno, *programados]
     activos = [ticket for ticket in tickets if ticket.estado in ESTADOS_ACTIVOS]
-    ocupadas = {ticket.mesa_id for ticket in activos}
+    activos_por_mesa = {ticket.mesa_id: ticket for ticket in activos}
     posiciones = [
         {
             "id": str(mesa.id),
             "nombre": mesa.nombre,
             "canal": mesa.canal,
             "canal_etiqueta": mesa.get_canal_display(),
+            "disponible": mesa.id not in activos_por_mesa,
+            "ticket_id": (
+                str(activos_por_mesa[mesa.id].id) if mesa.id in activos_por_mesa else ""
+            ),
+            "ticket_folio": (
+                activos_por_mesa[mesa.id].folio if mesa.id in activos_por_mesa else None
+            ),
+            "ticket_estado": (
+                activos_por_mesa[mesa.id].estado if mesa.id in activos_por_mesa else ""
+            ),
         }
         for mesa in Mesa.objects.filter(sucursal=sucursal, activa=True)
-        .exclude(canal=Mesa.Canal.SUCURSALES)
         .order_by("canal", "orden", "nombre")
-        if mesa.id not in ocupadas
     ]
     sucursales = list(
         SucursalPedido.objects.filter(sucursal=sucursal, activa=True).order_by("tipo", "nombre")
@@ -682,7 +854,10 @@ def resumen_administrador(sucursal):
             _ticket_admin_payload(ticket) for ticket in programados
         ],
         "bloqueos_corte": bloqueos_corte(sucursal),
-        "posiciones_disponibles": posiciones,
+        "posiciones": posiciones,
+        "posiciones_disponibles": [
+            posicion for posicion in posiciones if posicion["disponible"]
+        ],
         "movimientos": [
             {
                 "id": str(movimiento.id),

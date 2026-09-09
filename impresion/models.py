@@ -47,6 +47,7 @@ class TrabajoImpresion(models.Model):
     )
     formato = models.CharField(max_length=20, choices=Formato.choices)
     destino = models.CharField(max_length=10, choices=Destino.choices)
+    comanda_numero = models.PositiveIntegerField(null=True, blank=True)
     estado = models.CharField(max_length=12, choices=Estado.choices, default=Estado.PENDIENTE)
     archivo = models.CharField(max_length=300, blank=True)
     intentos = models.PositiveIntegerField(default=0)

@@ -265,11 +265,6 @@ def guardar_cliente(sucursal, datos, cliente=None):
     notas = str(datos.get("notas", "")).strip()
     if len(notas) > MAX_NOTAS_CLIENTE:
         raise ErrorCliente(f"Las notas no pueden superar {MAX_NOTAS_CLIENTE} caracteres.")
-    if not telefonos and not comentarios_multiples:
-        raise ErrorCliente("Agrega al menos un teléfono.")
-    if not domicilios:
-        raise ErrorCliente("Agrega al menos un domicilio.")
-
     if cliente:
         cliente = Cliente.objects.select_for_update().get(pk=cliente.pk, sucursal=sucursal, activo=True)
         cliente.nombre = nombre
@@ -304,6 +299,22 @@ def guardar_cliente(sucursal, datos, cliente=None):
     cliente.domicilios.update(activo=False, principal=False)
     for indice, item in enumerate(domicilios):
         domicilio = cliente.domicilios.filter(pk=item["id"]).first() if item["id"] else None
+        if not domicilio:
+            normalizado = normalizar_texto(
+                " ".join(
+                    item[campo]
+                    for campo in [
+                        "calle",
+                        "numero_exterior",
+                        "numero_interior",
+                        "colonia",
+                        "codigo_postal",
+                        "municipio",
+                        "referencia",
+                    ]
+                )
+            )
+            domicilio = cliente.domicilios.filter(normalizado=normalizado).first()
         if not domicilio:
             domicilio = DomicilioCliente(sucursal=sucursal, cliente=cliente)
         for campo in [

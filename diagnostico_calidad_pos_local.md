@@ -2,6 +2,12 @@
 
 Fecha de revisión: 23 de agosto de 2026.
 
+> **Documento histórico.** Refleja el estado observado en esa fecha. Varias
+> brechas aquí descritas se corrigieron posteriormente, por lo que no debe usarse
+> como lista vigente de pendientes. Consultar `DESPLIEGUE_WINDOWS.md` y
+> `ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md` para el estado
+> actual.
+
 Este diagnóstico complementa `propuesta_arquitectura_pos_multisucursal.md`. La prioridad actual sigue siendo estabilizar la operación local; no introduce todavía VPS, sincronización ni infraestructura distribuida.
 
 ## Mejoras aplicadas en esta entrega

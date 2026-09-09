@@ -226,6 +226,7 @@ class Command(BaseCommand):
                     cliente_sucursal.tipo,
                     origen_producto,
                     producto_sucursal.nombre_ticket,
+                    origen_sucursal,
                 )
                 if configuracion is None:
                     continue

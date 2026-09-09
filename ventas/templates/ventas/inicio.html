@@ -50,6 +50,15 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
             </span><strong>Administrador</strong><small>Gestión del turno · acceso con clave</small>
           </button>
         </div>
+        {% if request.user.is_authenticated %}
+          <form class="session-logout acceso-cerrar-sesion" method="post" action="{% url 'ventas:logout' %}">
+            {% csrf_token %}
+            <button class="cerrar-sesion-principal" type="submit">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></svg>
+              <span>Cerrar sesión</span>
+            </button>
+          </form>
+        {% endif %}
       </div>
     </section>
   {% endif %}
@@ -63,14 +72,6 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
         <button class="control-operacion salir-mesero salir-mesero-cabecera" data-salir-mesero type="button" aria-label="Salir al menú principal" title="Salir al menú principal">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></svg><span>Salir</span>
         </button>
-      {% endif %}
-      {% if request.user.is_authenticated %}
-        <form class="session-logout" method="post" action="{% url 'ventas:logout' %}">
-          {% csrf_token %}
-          <button class="control-operacion cerrar-sesion" type="submit" aria-label="Cerrar sesión" title="Cerrar sesión">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></svg><span>Cerrar sesión</span>
-          </button>
-        </form>
       {% endif %}
       {% if modo_tableta %}
         <button id="salir-tableta" class="control-operacion salir-tableta" type="button" aria-label="Salir de pantalla completa" title="Salir">
@@ -143,7 +144,15 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
         <aside class="panel-orden">
           <div class="orden-encabezado">
             <div><p class="eyebrow">Comanda en tiempo real</p><strong id="orden-resumen">0 partidas</strong></div>
-            <button id="reimprimir" class="boton enlace oculto" type="button">Reimprimir</button>
+            <nav id="navegador-comandas" class="navegador-comandas" aria-label="Navegar entre comandas">
+              <button id="comanda-anterior" type="button" aria-label="Ver comanda anterior" title="Comanda anterior">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg>
+              </button>
+              <output id="contador-comandas" aria-live="polite" aria-atomic="true">1/1</output>
+              <button id="comanda-siguiente" type="button" aria-label="Ver comanda siguiente" title="Comanda siguiente">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+              </button>
+            </nav>
           </div>
           <div id="comanda-preview" class="comanda-preview" aria-live="polite">
             <div id="comanda-papel-preview"></div>
@@ -192,32 +201,14 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
           <div class="acciones">
             <button id="procesar" class="boton accion-procesar" type="button">Procesar orden</button>
             <button id="cancelar-orden" class="boton accion-cancelar" type="button">Cancelar orden</button>
+            <button id="ticket-cuenta" class="boton accion-ticket oculto" type="button">Ticket</button>
+            <button id="agregar-comanda" class="boton accion-agregar oculto" type="button">Agregar</button>
             <button id="cobrar" class="boton cobro oculto" type="button">Cobrar</button>
           </div>
         </aside>
       </div>
     </section>
   </main>
-
-  <dialog id="dialogo-cobro" aria-labelledby="titulo-dialogo-cobro">
-    <form method="dialog" id="form-cobro" class="dialogo-contenido">
-      <button class="cerrar-dialogo" value="cancel" aria-label="Cerrar">×</button>
-      <p class="eyebrow">Cierre de cuenta</p>
-      <h2 id="titulo-dialogo-cobro">Cobrar <span id="cobro-total">$0.00</span></h2>
-      <fieldset>
-        <legend>Forma de pago</legend>
-        <label class="opcion-pago"><input type="radio" name="forma_pago" value="efectivo" checked><span>Efectivo</span></label>
-        <label class="opcion-pago"><input type="radio" name="forma_pago" value="tarjeta"><span>Tarjeta</span></label>
-      </fieldset>
-      <fieldset id="opciones-impresion" class="opciones-impresion">
-        <legend>Ticket de cuenta</legend>
-        <label class="opcion-pago"><input type="radio" name="imprimir_ticket" value="si" checked><span>Sí, imprimir</span></label>
-        <label class="opcion-pago"><input type="radio" name="imprimir_ticket" value="no"><span>No imprimir</span></label>
-      </fieldset>
-      <label>Importe recibido<input id="importe-recibido" type="number" min="0" step="0.01" inputmode="decimal"></label>
-      <button class="boton cobro" type="submit">Confirmar cobro</button>
-    </form>
-  </dialog>
 
   <dialog id="dialogo-cliente" class="dialogo-cliente" aria-labelledby="titulo-form-cliente">
     <form id="form-cliente" class="dialogo-contenido cliente-formulario">
@@ -228,6 +219,7 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
       </div>
       <input id="cliente-form-id" type="hidden">
       <label>Nombre del cliente<input id="cliente-form-nombre" autocomplete="name" required></label>
+      <p class="ayuda-campo">Sólo el nombre es obligatorio. Teléfono y domicilio pueden agregarse después.</p>
       <label class="casilla-multiples"><input id="cliente-form-multiples" type="checkbox"><span>Solicitar nombre y celular del contacto en cada pedido</span></label>
 
       <section class="grupo-formulario">
@@ -250,9 +242,29 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
       <div id="aviso-duplicados" class="aviso-duplicados oculto"></div>
       <div class="acciones-formulario">
         <button id="descartar-cliente" class="boton secundario" type="button">Cancelar</button>
-        <button class="boton cobro" id="guardar-cliente" type="submit">Guardar y seleccionar</button>
+        <button class="boton cobro" id="guardar-cliente" type="submit">Guardar cliente</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="dialogo-forma-pago" aria-labelledby="titulo-forma-pago">
+    <div class="dialogo-contenido dialogo-forma-pago">
+      <button id="cancelar-forma-pago" class="cerrar-dialogo" type="button" aria-label="Cancelar">×</button>
+      <div>
+        <h2 id="titulo-forma-pago">¿Cómo se cobró?</h2>
+        <p class="forma-pago-ayuda">Elige la forma de pago para conservar el registro correcto del turno.</p>
+      </div>
+      <div class="opciones-forma-pago" role="group" aria-label="Forma de pago">
+        <button class="forma-pago-opcion" data-forma-pago="efectivo" type="button">
+          <strong>Efectivo</strong>
+          <small>Pago recibido en caja</small>
+        </button>
+        <button class="forma-pago-opcion" data-forma-pago="tarjeta" type="button">
+          <strong>Terminal</strong>
+          <small>Pago registrado con tarjeta</small>
+        </button>
+      </div>
+    </div>
   </dialog>
 
   <dialog id="dialogo-clave-pos" aria-labelledby="titulo-clave-pos">
@@ -266,7 +278,7 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
       </div>
       <p id="ayuda-clave-pos" class="clave-pos-ayuda">Ingresa tu código de 4 dígitos.</p>
       <label>Código de 4 dígitos
-        <input id="clave-pos" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" required>
+        <input id="clave-pos" class="pin-enmascarado" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="ayuda-clave-pos error-clave-pos" required>
       </label>
       <p id="error-clave-pos" class="error-clave-pos" role="alert" hidden></p>
       <button class="boton cobro" type="submit">Confirmar</button>

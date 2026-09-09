@@ -1,7 +1,7 @@
 """Puente idempotente de sólo lectura con ``tcysPedidosSucursales``.
 
 Supabase es la fuente operativa; la SQLite hermana se conserva como respaldo de
-desarrollo. Únicamente se incorporan pedidos confirmados del día local. Cada
+desarrollo. Únicamente se incorporan pedidos confirmados de hoy o ayer. Cada
 pedido aparece abierto en el primer espacio libre de su sucursal para que el
 operador pueda revisarlo e imprimirlo.
 """
@@ -52,6 +52,71 @@ TABLAS_SUPABASE_PERMITIDAS = {
 
 class PedidoRemotoInvalido(ValueError):
     """El pedido remoto no cumple las reglas de integridad del POS."""
+
+
+def _nombre_normalizado(valor):
+    texto = str(valor or "").strip()
+    if not texto or len(texto) > 200:
+        return ""
+    return normalizar_texto(texto)
+
+
+def _resolver_sucursal_remota(clientes, origen_id, nombre_remoto):
+    """Resuelve por identidad estable aunque el catálogo remoto reordene sus IDs."""
+
+    nombre = _nombre_normalizado(nombre_remoto)
+    candidato = next((cliente for cliente in clientes if cliente.origen_id == origen_id), None)
+    if candidato and (not nombre or _nombre_normalizado(candidato.nombre) == nombre):
+        return candidato
+    if nombre:
+        coincidencias = [cliente for cliente in clientes if _nombre_normalizado(cliente.nombre) == nombre]
+        if len(coincidencias) == 1:
+            return coincidencias[0]
+    raise PedidoRemotoInvalido("La sucursal remota no está autorizada en este POS.")
+
+
+def _resolver_producto_remoto(productos, origen_id, nombre_remoto, nombre_ticket_remoto):
+    """Prefiere el ID, pero verifica y recupera por nombre ante un reordenamiento."""
+
+    nombre = _nombre_normalizado(nombre_remoto)
+    nombre_ticket = _nombre_normalizado(nombre_ticket_remoto)
+    def identidades_locales(producto):
+        return {
+            valor
+            for valor in (
+                _nombre_normalizado(producto.nombre),
+                _nombre_normalizado(producto.nombre_ticket),
+            )
+            if valor
+        }
+
+    candidato = next((producto for producto in productos if producto.origen_id == origen_id), None)
+    if candidato:
+        if nombre and _nombre_normalizado(candidato.nombre) == nombre:
+            return candidato
+        if not nombre and (
+            not nombre_ticket
+            or nombre_ticket in identidades_locales(candidato)
+        ):
+            return candidato
+
+    # El nombre completo es la identidad más segura. El nombre corto del ticket
+    # sólo se usa como respaldo cuando la fuente no entrega el nombre completo.
+    if nombre:
+        coincidencias = [
+            producto for producto in productos
+            if _nombre_normalizado(producto.nombre) == nombre
+        ]
+    elif nombre_ticket:
+        coincidencias = [
+            producto for producto in productos
+            if nombre_ticket in identidades_locales(producto)
+        ]
+    else:
+        coincidencias = []
+    if len(coincidencias) == 1:
+        return coincidencias[0]
+    raise PedidoRemotoInvalido("El pedido contiene un producto no autorizado.")
 
 
 def _fecha_local(valor):
@@ -136,7 +201,14 @@ def _parametros_conexion_postgres():
 
 
 def _comprobar_rol_y_tls(conexion, usuario_configurado):
-    if not conexion.info.ssl_in_use:
+    # Psycopg 3.3 expone el estado TLS en PGconn; versiones anteriores lo
+    # publicaban también a través de ConnectionInfo. Se conserva el fallback
+    # para que instalaciones ya desplegadas no dependan de una versión exacta.
+    pgconn = getattr(conexion, "pgconn", None)
+    ssl_in_use = getattr(pgconn, "ssl_in_use", None)
+    if ssl_in_use is None:
+        ssl_in_use = getattr(conexion.info, "ssl_in_use", False)
+    if not ssl_in_use:
         raise ValueError("La conexión de Supabase no negoció TLS.")
     rol_esperado = usuario_configurado.split(".", 1)[0].lower()
     privilegios = conexion.execute(
@@ -445,42 +517,35 @@ def _importar_pedido(sucursal_local, pedido, items, origen):
     if not items or len(items) > MAX_ITEMS_POR_PEDIDO:
         raise PedidoRemotoInvalido("El pedido no tiene una cantidad válida de conceptos.")
 
-    clientes = SucursalPedido.objects.select_for_update().filter(sucursal=sucursal_local, activa=True)
+    clientes = list(
+        SucursalPedido.objects.select_for_update().filter(sucursal=sucursal_local, activa=True)
+    )
     try:
         sucursal_origen_id = int(pedido["sucursal_cliente_id"])
     except (KeyError, TypeError, ValueError) as exc:
         raise PedidoRemotoInvalido("La sucursal remota no tiene un identificador válido.") from exc
-    cliente_sucursal = clientes.filter(origen_id=sucursal_origen_id).first()
-    if not cliente_sucursal:
-        raise PedidoRemotoInvalido("La sucursal remota no está autorizada en este POS.")
     sucursal_nombre = str(pedido.get("sucursal_nombre") or "").strip()
-    if sucursal_nombre and normalizar_texto(sucursal_nombre) != normalizar_texto(cliente_sucursal.nombre):
-        raise PedidoRemotoInvalido("La identidad de la sucursal remota no coincide con el catálogo local.")
+    cliente_sucursal = _resolver_sucursal_remota(
+        clientes,
+        sucursal_origen_id,
+        sucursal_nombre,
+    )
 
     productos_disponibles = list(ProductoSucursal.objects.filter(sucursal=sucursal_local, activo=True))
-    productos_por_id = {producto.origen_id: producto for producto in productos_disponibles}
 
     items_validados = []
     productos_usados = set()
     for item in items:
         try:
-            producto = productos_por_id.get(int(item["producto_id"]))
-        except (KeyError, TypeError, ValueError):
-            producto = None
-        if not producto:
-            raise PedidoRemotoInvalido("El pedido contiene un producto no autorizado.")
-        nombres_remotos = {
-            normalizar_texto(str(nombre))
-            for nombre in [item.get("producto_nombre"), item.get("producto_nombre_ticket")]
-            if nombre and len(str(nombre)) <= 200
-        }
-        nombres_locales = {
-            normalizar_texto(nombre)
-            for nombre in [producto.nombre, producto.nombre_ticket]
-            if nombre
-        }
-        if nombres_remotos and nombres_remotos.isdisjoint(nombres_locales):
-            raise PedidoRemotoInvalido("La identidad del producto remoto no coincide con el catálogo local.")
+            producto_origen_id = int(item["producto_id"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise PedidoRemotoInvalido("El producto remoto no tiene un identificador válido.") from exc
+        producto = _resolver_producto_remoto(
+            productos_disponibles,
+            producto_origen_id,
+            item.get("producto_nombre"),
+            item.get("producto_nombre_ticket"),
+        )
         if producto.id in productos_usados:
             raise PedidoRemotoInvalido("El pedido contiene productos duplicados.")
         productos_usados.add(producto.id)
@@ -613,10 +678,11 @@ def sincronizar_pedidos_confirmados(sucursal_local, forzar=False):
     try:
         _ultima_revision = ahora
         hoy = ahora_local.date()
+        fechas_permitidas = {hoy - timedelta(days=1), hoy}
         if postgres_configurado:
             origen = ORIGEN_SUPABASE
-            inicio_local = timezone.make_aware(datetime.combine(hoy, hora.min))
-            pedidos_confirmados = _leer_confirmados_postgres(inicio_local, inicio_local + timedelta(days=1))
+            inicio_local = timezone.make_aware(datetime.combine(hoy - timedelta(days=1), hora.min))
+            pedidos_confirmados = _leer_confirmados_postgres(inicio_local, inicio_local + timedelta(days=2))
         else:
             origen = ORIGEN_SQLITE
             pedidos_confirmados = _leer_confirmados_sqlite(ruta)
@@ -624,7 +690,7 @@ def sincronizar_pedidos_confirmados(sucursal_local, forzar=False):
         rechazados = 0
         for pedido, items in pedidos_confirmados:
             try:
-                if _fecha_local(pedido.get("fecha_confirmacion")) != hoy:
+                if _fecha_local(pedido.get("fecha_confirmacion")) not in fechas_permitidas:
                     continue
                 if _importar_pedido(sucursal_local, pedido, items, origen):
                     importados += 1

@@ -213,6 +213,13 @@ dialog::backdrop { background: rgba(6,22,36,.68); backdrop-filter: blur(4px); }
 .aviso-duplicados ul { margin: 0 0 10px; padding-left: 20px; }
 .acciones-formulario { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; position: sticky; bottom: -30px; padding: 10px 0 0; background: var(--papel); }
 .cerrar-dialogo { position: absolute; top: 12px; right: 13px; width: 36px; height: 36px; border: 0; border-radius: 50%; color: var(--muted); background: #eee9df; font-size: 1.4rem; }
+.dialogo-forma-pago { width: min(460px, calc(100vw - 28px)); }
+.forma-pago-ayuda { margin: 8px 38px 0 0; color: var(--muted); line-height: 1.45; }
+.opciones-forma-pago { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.forma-pago-opcion { min-height: 92px; padding: 16px; display: grid; place-content: center; gap: 5px; border: 2px solid var(--borde); border-radius: 12px; color: var(--carbon); background: #fff; text-align: center; }
+.forma-pago-opcion:hover, .forma-pago-opcion:focus-visible { border-color: var(--rojo); background: var(--rojo-claro); }
+.forma-pago-opcion strong { font-size: 1rem; }
+.forma-pago-opcion small { color: var(--muted); font-size: .7rem; font-weight: 700; }
 fieldset { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0; border: 0; }
 legend { margin-bottom: 8px; color: var(--muted); font-size: .75rem; font-weight: 800; text-transform: uppercase; }
 .opcion-pago input { position: absolute; opacity: 0; }
@@ -373,6 +380,11 @@ body.en-operacion main, .modo-tableta main { width: 100%; padding: max(6px, env(
 .accion-procesar { color: var(--carbon); background: var(--amarillo); }
 .accion-cancelar { color: #fff; background: var(--rojo); }
 .acciones #cobrar { grid-column: 1 / -1; }
+.acciones #cobrar { color: #fff; background: var(--rojo); }
+
+@media (max-width: 520px) {
+  .opciones-forma-pago { grid-template-columns: 1fr; }
+}
 
 .panel-productos.modo-calculadora { overflow: hidden; }
 .productos.modo-calculadora { display: block; padding: 0 2px 2px; overflow: hidden; }

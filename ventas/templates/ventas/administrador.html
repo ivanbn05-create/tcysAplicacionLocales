@@ -16,7 +16,7 @@ OWN-WORLD: Cabecera amarilla, riel carbón, tickets de papel, reglas finas, Beba
 STORY: Validar clave → resolver domicilios y programados → gestionar personal y movimientos → imprimir reportes y cerrar el turno.
 FIRST VIEWPORT: Cabecera de 62 px, riel lateral estable y bandeja 2:1; domicilios sin repartidor dominan la izquierda y bloqueos de cierre la derecha.
 FORM: Bandeja de pendientes, candidato 5 de 7, semilla 63e84054; comp `.impeccable/mocks/decision/admin-bandeja-pendientes.png` aprobado.
-FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizontal overflow or runtime console errors, with decisions recorded in DESIGN.md
 -->
   <form class="csrf-holder" aria-hidden="true">{% csrf_token %}</form>
 
@@ -37,6 +37,10 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
       <span>Turno en servicio</span>
       <strong id="turno-inicio">Cargando…</strong>
     </div>
+    <button class="boton-topbar" id="pantalla-completa-admin" type="button" aria-label="Entrar a pantalla completa" aria-pressed="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"/></svg>
+      <span>Pantalla completa</span>
+    </button>
     <a class="boton-topbar" href="{% url 'ventas:inicio' %}" aria-label="Volver al POS">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></svg>
       <span>Volver al POS</span>
@@ -47,6 +51,9 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
     <nav class="admin-rail" aria-label="Secciones de administrador">
       <button class="rail-item activo" data-panel="inicio" type="button" aria-current="page">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg><span>Inicio</span>
+      </button>
+      <button class="rail-item" data-panel="pedidos" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h10v4H7zM5 5H3v16h18V5h-2M8 11h8M8 15h8M8 19h5"/></svg><span>Pedidos</span>
       </button>
       <button class="rail-item" data-panel="personal" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M2.5 20a5.5 5.5 0 0 1 11 0M13 20a4 4 0 0 1 8 0"/></svg><span>Personal</span>
@@ -67,8 +74,8 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h18v12H3zM2 5h20l-2 4H4zM6 21v-7h5v7M15 13h3v4h-3M4 9c1.3 2 2.7 2 4 0 1.3 2 2.7 2 4 0 1.3 2 2.7 2 4 0 1.3 2 2.7 2 4 0"/></svg><span>Sucursales</span>
       </button>
       <div class="rail-ayuda">
-        <strong>Clave por acción</strong>
-        <span>La autorización no se conserva en pantalla.</span>
+        <strong>Sesión autorizada</strong>
+        <span>La clave sólo vuelve a solicitarse al cambiarla o si la sesión vence.</span>
       </div>
     </nav>
 
@@ -108,6 +115,40 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
         </nav>
       </section>
 
+      <section class="admin-panel" data-admin-panel="pedidos" hidden>
+        <header class="panel-titulo">
+          <div><h1>Pedidos y posiciones</h1><p>Consulta el piso real, revisa cada ticket y resuelve varios pedidos en una sola acción.</p></div>
+          <button class="boton secundario" id="actualizar-pedidos" type="button">Actualizar</button>
+        </header>
+        <div class="pedidos-estacion">
+          <section class="hoja pedidos-mapa" aria-labelledby="pedidos-mapa-titulo">
+            <header class="hoja-titulo"><div><span>01</span><h2 id="pedidos-mapa-titulo">Posiciones reales</h2></div><b id="conteo-seleccionados">0</b></header>
+            <p id="instruccion-mover" class="aviso-mover" role="status" hidden>Modo Mover activo: elige una casilla libre como destino.</p>
+            <div id="mapa-posiciones" class="mapa-posiciones"></div>
+          </section>
+        </div>
+        <section id="barra-lote" class="barra-lote" aria-label="Acciones para pedidos seleccionados" hidden>
+          <div class="barra-lote-resumen"><strong id="lote-resumen">0 pedidos seleccionados</strong><button class="boton mini" id="limpiar-seleccion" type="button">Limpiar selección</button></div>
+          <div id="acciones-pedido-seleccionado" class="acciones-pedido-seleccionado" hidden>
+            <button class="boton" data-pedido-accion="mover" type="button">Mover</button>
+            <button class="boton primario" data-pedido-accion="ver_detalles" type="button">Ver detalles</button>
+          </div>
+          <div class="accion-lote" data-lote-grupo="cobrar">
+            <span id="lote-cobrar-conteo">0 para cobrar</span>
+            <button class="boton primario" data-accion-lote="cobrar" type="button">Cobrar seleccionados</button>
+          </div>
+          <div class="accion-lote" data-lote-grupo="domicilio">
+            <span id="lote-domicilio-conteo">0 domicilios</span>
+            <select id="lote-repartidor" aria-label="Repartidor para asignación por lote"></select>
+            <button class="boton primario" data-accion-lote="asignar_repartidor" type="button">Asignar repartidor</button>
+          </div>
+          <div class="accion-lote" data-lote-grupo="sucursales">
+            <span id="lote-sucursales-conteo">0 de sucursales</span>
+            <button class="boton oscuro" data-accion-lote="completar_sucursales" type="button">Completar seleccionados</button>
+          </div>
+        </section>
+      </section>
+
       <section class="admin-panel" data-admin-panel="personal" hidden>
         <header class="panel-titulo"><div><h1>Personal operativo</h1><p>Meseros para identificar comandas y repartidores para liquidar domicilios.</p></div></header>
         <div class="dos-columnas">
@@ -121,7 +162,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
               <input id="usuario-id" type="hidden">
               <label>Nombre<input id="usuario-nombre" maxlength="100" autocomplete="off" required></label>
               <label>Función<select id="usuario-tipo" required><option value="mesero">Mesero</option><option value="repartidor">Repartidor</option></select></label>
-              <label>Código de 4 dígitos<input id="usuario-clave" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="new-password" required></label>
+              <label>Código de 4 dígitos<input id="usuario-clave" class="pin-enmascarado" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
               <label class="casilla"><input id="usuario-activo" type="checkbox" checked><span>Usuario activo</span></label>
               <p class="ayuda-campo">Al editar, deja el código vacío para conservar el actual.</p>
               <button class="boton primario" type="submit">Guardar usuario</button>
@@ -154,7 +195,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
       </section>
 
       <section class="admin-panel" data-admin-panel="programados" hidden>
-        <header class="panel-titulo"><div><h1>Pedidos programados</h1><p>Se activan por fecha, al abrir el programa ese día, en la primera casilla de domicilio libre.</p></div></header>
+        <header class="panel-titulo"><div><h1>Pedidos programados</h1><p>Define fecha y hora de entrega; se activarán en la primera casilla de domicilio disponible.</p></div></header>
         <div class="dos-columnas">
           <section class="hoja">
             <header class="hoja-titulo"><div><span>01</span><h2>Domicilios procesados</h2></div></header>
@@ -171,12 +212,16 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
         <header class="panel-titulo"><div><h1>Entradas y salidas</h1><p>Registra movimientos de efectivo que formarán parte del siguiente corte.</p></div></header>
         <div class="dos-columnas">
           <section class="hoja">
-            <header class="hoja-titulo"><div><span>01</span><h2>Nuevo movimiento</h2></div></header>
+            <header class="hoja-titulo"><div><span>01</span><h2 id="titulo-form-movimiento">Nuevo movimiento</h2></div></header>
             <form id="form-movimiento" class="formulario-admin">
+              <input id="movimiento-id" type="hidden">
               <label>Tipo<select id="movimiento-tipo" required><option value="entrada">Entrada +</option><option value="salida">Salida −</option></select></label>
               <label>Concepto<input id="movimiento-concepto" maxlength="180" required placeholder="Ej. Cambio inicial"></label>
               <label>Importe<input id="movimiento-importe" type="number" min="0.01" step="0.01" inputmode="decimal" required></label>
-              <button class="boton primario" type="submit">Registrar movimiento</button>
+              <div class="acciones-formulario">
+                <button class="boton primario" id="guardar-movimiento" type="submit">Registrar movimiento</button>
+                <button class="boton" id="cancelar-edicion-movimiento" type="button" hidden>Cancelar edición</button>
+              </div>
             </form>
           </section>
           <section class="hoja">
@@ -193,6 +238,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
           <div><span>Llevar</span><strong id="total-llevar">$0.00</strong></div>
           <div><span>Domicilio</span><strong id="total-domicilio">$0.00</strong></div>
           <div><span>Recoger</span><strong id="total-recoger">$0.00</strong></div>
+          <div><span>Sucursales</span><strong id="total-sucursales">$0.00</strong></div>
           <div class="total-general"><span>Total</span><strong id="total-general">$0.00</strong></div>
         </section>
         <div class="dos-columnas">
@@ -209,11 +255,19 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
             <hr>
             <form id="form-clave" class="formulario-admin formulario-clave">
               <h3>Cambiar clave de administrador</h3>
-              <label>Nueva clave<input id="nueva-clave" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="new-password" required></label>
+              <label>Clave actual<input id="clave-actual" class="pin-enmascarado" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
+              <label>Nueva clave<input id="nueva-clave" class="pin-enmascarado" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
               <button class="boton secundario" type="submit">Cambiar clave</button>
             </form>
           </section>
         </div>
+        <section class="hoja zona-peligro" aria-labelledby="reiniciar-folios-titulo">
+          <div>
+            <h2 id="reiniciar-folios-titulo">Reiniciar folios</h2>
+            <p>El siguiente pedido usará el folio 1. Los pedidos existentes conservan su número y no se eliminan.</p>
+          </div>
+          <button class="boton peligro" data-accion="reiniciar-folios" type="button">Reiniciar al folio 1</button>
+        </section>
         <a id="ultima-impresion" class="ultima-impresion" href="#" target="_blank" rel="noopener" hidden>Ver la última vista previa generada</a>
       </section>
 
@@ -224,13 +278,24 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
     </main>
   </div>
 
+  <dialog id="dialogo-detalle-pedido" aria-labelledby="dialogo-detalle-pedido-titulo">
+    <section class="dialogo-pedido">
+      <button class="cerrar-dialogo" id="cerrar-detalle-pedido" type="button" aria-label="Cerrar detalle del pedido"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      <header class="dialogo-pedido-cabecera">
+        <span>Pedido seleccionado</span>
+        <h2 id="dialogo-detalle-pedido-titulo">Detalle del pedido</h2>
+      </header>
+      <div id="detalle-ticket" class="detalle-ticket"></div>
+    </section>
+  </dialog>
+
   <dialog id="dialogo-clave" aria-labelledby="dialogo-clave-titulo">
     <form id="form-dialogo-clave" class="dialogo-clave">
       <button class="cerrar-dialogo" id="cancelar-clave" type="button" aria-label="Cancelar">×</button>
       <svg class="dialogo-sello" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1"/><circle cx="16" cy="8" r="1"/><circle cx="8" cy="16" r="1"/><circle cx="16" cy="16" r="1"/></svg>
       <h2 id="dialogo-clave-titulo">Autorizar acción</h2>
       <p id="dialogo-clave-ayuda">Ingresa la clave de administrador.</p>
-      <label>Clave de 4 dígitos<input id="clave-administrador" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" required></label>
+      <label>Clave de 4 dígitos<input id="clave-administrador" class="pin-enmascarado" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
       <p id="error-clave" class="error-clave" role="alert" hidden></p>
       <button class="boton primario" type="submit">Confirmar</button>
     </form>

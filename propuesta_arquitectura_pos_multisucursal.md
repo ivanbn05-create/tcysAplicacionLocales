@@ -1,5 +1,12 @@
 # Propuesta de arquitectura técnica para POS multi-sucursal
 
+> **Estado del documento (2026-09-09): antecedente técnico.** Conserva la visión
+> extensa de Edge, concurrencia, impresión y operación offline. Las decisiones
+> vigentes de despliegue, instalador, módulos y servidor central están en
+> [ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md](ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md),
+> que prevalece en caso de contradicción. En particular, KVM 4 dejó de ser el
+> tamaño inicial propuesto: la decisión vigente es Hostinger KVM 2.
+
 ## 1. Propósito de este documento
 
 Este documento sirve como contexto técnico persistente para un agente de código que continúe el desarrollo de la aplicación aunque no tenga acceso a conversaciones anteriores.
@@ -1409,32 +1416,43 @@ En una fase posterior:
 
 # 47. VPS central
 
-La arquitectura inicialmente propuesta para el VPS:
+La estimación inicial de este documento fue Hostinger KVM 4. Tras contrastar la
+carga prevista, el costo de Supabase y los planes actuales de Hostinger, la
+decisión adoptada el 2026-09-09 es:
 
 ```text
-Hostinger KVM 4
+Hostinger KVM 2
 
-4 vCPU
-16 GB RAM
-200 GB NVMe
+2 vCPU
+8 GB RAM
+100 GB NVMe
+8 TB de transferencia
 ```
 
-Stack posible:
+KVM 1 se considera suficiente para construcción o piloto; KVM 2 es la base
+prudente de producción por el margen que ofrece para PostgreSQL, respaldos,
+migraciones y reportes. KVM 4 queda como posible ampliación futura basada en
+métricas, no como requisito inicial.
+
+Stack inicial posible:
 
 ```text
-Nginx
+Nginx o Caddy
 Django
 Django REST Framework
-Gunicorn/Uvicorn
+Gunicorn
 PostgreSQL
-Redis
-Celery
-Docker
+worker/programador sencillo
+Docker Compose central o systemd (pendiente de decidir)
 ```
 
-No todos los componentes deben introducirse desde el día uno.
+Redis y Celery se difieren hasta demostrar una necesidad. El
+`docker-compose.yml` actual no es el despliegue central: contiene impresión y
+la semilla local de Arboledas, y carece de proxy TLS y respaldo PostgreSQL
+externo.
 
-Evitar complejidad sin necesidad.
+Hostinger KVM es autoadministrado. El proyecto será responsable de seguridad,
+parches, respaldo, monitoreo, restauración y mantenimiento.
 
 ---
 
@@ -2258,4 +2276,6 @@ Si un agente recibe este documento sin contexto adicional, debe asumir lo siguie
 - El volumen de carga esperado es bajo.
 - La robustez operativa importa más que la potencia del servidor.
 
-Este documento debe utilizarse como referencia arquitectónica principal durante las fases posteriores del proyecto.
+Este documento debe utilizarse como referencia técnica histórica. Para decisiones
+vigentes y prioridades de implementación debe consultarse primero
+`ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md`.

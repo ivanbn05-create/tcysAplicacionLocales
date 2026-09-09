@@ -16,6 +16,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import Client, TestCase, override_settings
 from django.utils import timezone
+from openpyxl import Workbook
 from PIL import Image
 
 from catalogo.models import Producto
@@ -23,8 +24,10 @@ from impresion.models import TrabajoImpresion
 from catalogo.configuracion_menu import configuracion_producto
 from impresion.render import (
     _agrupar_partidas_total,
+    _centrado,
     _datos_comanda_por_nombres,
     _identificador_ticket,
+    _partidas_destino,
     _segmentos_bebidas,
     _texto_entrega,
     _texto_salsas,
@@ -37,10 +40,15 @@ from impresion.render import (
 from impresion.services import encolar_impresiones
 from personas.models import Rol, Sucursal, UsuarioPOS
 
-from .integracion_sucursales import _parametros_conexion_postgres, sincronizar_pedidos_confirmados
+from .integracion_sucursales import (
+    _comprobar_rol_y_tls,
+    _parametros_conexion_postgres,
+    sincronizar_pedidos_confirmados,
+)
 from .admin_services import activar_programados
 from .models import (
     Cliente,
+    ConsecutivoFolio,
     EventoOutbox,
     Mesa,
     ModificadorTicket,
@@ -52,11 +60,13 @@ from .models import (
     Ticket,
     ReporteAdministrativo,
     LiquidacionRepartidor,
+    MovimientoCaja,
 )
 from .orden import ordenar_partidas
 from .services import (
     ErrorVenta,
     abrir_ticket,
+    agregar_comanda,
     agregar_partida,
     agregar_partida_sucursal,
     alternar_comentario_general,
@@ -161,6 +171,11 @@ class FlujoPOSTests(TestCase):
         )
         self.assertEqual(ProductoSucursal.objects.filter(sucursal=self.sucursal, activo=True).count(), 38)
         self.assertEqual(PrecioProductoSucursal.objects.filter(sucursal=self.sucursal).count(), 372)
+        aguilas = SucursalPedido.objects.get(sucursal=self.sucursal, origen_id=1)
+        fortin = SucursalPedido.objects.get(sucursal=self.sucursal, origen_id=2)
+        bistek = ProductoSucursal.objects.get(sucursal=self.sucursal, origen_id=24)
+        self.assertEqual(bistek.precio_actual(aguilas).importe, Decimal("200.00"))
+        self.assertEqual(bistek.precio_actual(fortin).importe, Decimal("220.00"))
 
         precios = {
             producto.codigo: producto.precio_actual().importe
@@ -271,7 +286,7 @@ class FlujoPOSTests(TestCase):
         self.assertNotIn(25, {producto["origen_id"] for producto in catalogo})
         self.assertNotIn(26, {producto["origen_id"] for producto in catalogo})
 
-    def test_integracion_local_importa_todos_los_confirmados_del_dia_una_sola_vez(self):
+    def test_integracion_local_importa_confirmados_de_hoy_y_ayer_una_sola_vez(self):
         ruta = Path(self.temporal.name) / "pedidos-externos.sqlite3"
         conexion = sqlite3.connect(ruta)
         conexion.executescript(
@@ -293,9 +308,12 @@ class FlujoPOSTests(TestCase):
             );
             """
         )
+        hoy = timezone.make_aware(datetime.combine(timezone.localdate(), time(10, 0)))
+        ayer = timezone.make_aware(datetime.combine(timezone.localdate() - timedelta(days=1), time(10, 0)))
+        anteayer = timezone.make_aware(datetime.combine(timezone.localdate() - timedelta(days=2), time(10, 0)))
         conexion.execute(
             "INSERT INTO pedidos_pedido VALUES (?, ?, ?, ?, ?, ?)",
-            (901, 3, "codigo-prueba", "confirmado", timezone.now().isoformat(), 0),
+            (901, 3, "codigo-prueba", "confirmado", hoy.isoformat(), 0),
         )
         conexion.execute(
             "INSERT INTO pedidos_itempedido VALUES (?, ?, ?, ?, ?)",
@@ -303,11 +321,19 @@ class FlujoPOSTests(TestCase):
         )
         conexion.execute(
             "INSERT INTO pedidos_pedido VALUES (?, ?, ?, ?, ?, ?)",
-            (1901, 3, "codigo-prueba-dos", "confirmado", timezone.now().isoformat(), 0),
+            (1901, 3, "codigo-prueba-dos", "confirmado", ayer.isoformat(), 0),
         )
         conexion.execute(
             "INSERT INTO pedidos_itempedido VALUES (?, ?, ?, ?, ?)",
             (2, 1901, 1, "1.000", "193.00"),
+        )
+        conexion.execute(
+            "INSERT INTO pedidos_pedido VALUES (?, ?, ?, ?, ?, ?)",
+            (2901, 3, "codigo-antiguo", "confirmado", anteayer.isoformat(), 0),
+        )
+        conexion.execute(
+            "INSERT INTO pedidos_itempedido VALUES (?, ?, ?, ?, ?)",
+            (3, 2901, 1, "1.000", "193.00"),
         )
         conexion.commit()
         conexion.close()
@@ -324,6 +350,7 @@ class FlujoPOSTests(TestCase):
             segundo = sincronizar_pedidos_confirmados(self.sucursal, forzar=True)
         self.assertEqual(primero["importados"], 2)
         self.assertEqual(segundo["importados"], 0)
+        self.assertFalse(PedidoSucursalImportado.objects.filter(origen_id=2901).exists())
         importacion = PedidoSucursalImportado.objects.select_related("ticket").get(origen_id=901)
         self.assertEqual(importacion.ticket.estado, Ticket.Estado.ABIERTO)
         self.assertEqual(importacion.ticket.mesa.cliente_sucursal.origen_id, 3)
@@ -373,6 +400,9 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(primero["fuente"], "Supabase")
         self.assertEqual(segundo["importados"], 0)
         self.assertEqual(lector.call_count, 2)
+        desde, hasta = lector.call_args_list[0].args
+        self.assertEqual(timezone.localtime(desde).date(), timezone.localdate() - timedelta(days=1))
+        self.assertEqual(timezone.localtime(hasta).date(), timezone.localdate() + timedelta(days=1))
         importacion = PedidoSucursalImportado.objects.select_related("ticket__mesa__cliente_sucursal").get(
             origen_id=902
         )
@@ -431,6 +461,48 @@ class FlujoPOSTests(TestCase):
         partida = importacion.ticket.partidas.get()
         self.assertEqual(partida.cantidad, Decimal("2.000"))
         self.assertEqual(partida.precio_unitario, Decimal("193.00"))
+
+    def test_integracion_resuelve_catalogos_remotos_reordenados_por_nombre(self):
+        pedidos = [
+            (
+                {
+                    "id": 916,
+                    "sucursal_cliente_id": 7,
+                    "sucursal_nombre": "Eventos MO",
+                    "codigo_publico": "catalogo-reordenado",
+                    "estado": "confirmado",
+                    "fecha_confirmacion": timezone.now(),
+                },
+                [
+                    {
+                        "producto_id": 7,
+                        "producto_nombre": "LITRO DE BARBACOA",
+                        "producto_nombre_ticket": "BARBACOA",
+                        "cantidad": Decimal("1.000"),
+                        "precio_unitario": Decimal("193.00"),
+                    }
+                ],
+            )
+        ]
+        with (
+            override_settings(
+                PEDIDOS_SUCURSALES_AUTO_SYNC=True,
+                PEDIDOS_SUCURSALES_FUENTE="supabase",
+                PEDIDOS_SUCURSALES_DATABASE_URL="",
+                PEDIDOS_SUCURSALES_POSTGRES={"password": "configurada"},
+                PEDIDOS_SUCURSALES_DB=Path(self.temporal.name) / "no-existe.sqlite3",
+            ),
+            patch("ventas.integracion_sucursales._leer_confirmados_postgres", return_value=pedidos),
+        ):
+            resultado = sincronizar_pedidos_confirmados(self.sucursal, forzar=True)
+
+        self.assertEqual(resultado["importados"], 1)
+        self.assertEqual(resultado["rechazados"], 0)
+        importacion = PedidoSucursalImportado.objects.select_related(
+            "ticket__mesa__cliente_sucursal"
+        ).get(origen_id=916)
+        self.assertEqual(importacion.ticket.mesa.cliente_sucursal.origen_id, 4)
+        self.assertEqual(importacion.ticket.partidas.get().producto_sucursal.origen_id, 1)
 
     def test_integracion_supabase_bloquea_rol_privilegiado_y_tls_debil(self):
         with override_settings(
@@ -504,6 +576,20 @@ class FlujoPOSTests(TestCase):
         ):
             with self.assertRaisesMessage(ValueError, "no pertenece a Supabase"):
                 _parametros_conexion_postgres()
+
+    def test_integracion_tls_usa_pgconn_en_psycopg_moderno(self):
+        class ConexionPsycopgModerna:
+            pgconn = type("PGconn", (), {"ssl_in_use": True})()
+
+            @property
+            def info(self):
+                raise AssertionError("ConnectionInfo.ssl_in_use no debe consultarse")
+
+            def execute(self, *_args, **_kwargs):
+                raise RuntimeError("consulta de privilegios alcanzada")
+
+        with self.assertRaisesMessage(RuntimeError, "consulta de privilegios alcanzada"):
+            _comprobar_rol_y_tls(ConexionPsycopgModerna(), "pos_local_reader.proyecto")
 
     def test_integracion_supabase_acepta_solo_configuracion_dedicada_con_ca_existente(self):
         ca = Path(self.temporal.name) / "supabase-ca.crt"
@@ -771,6 +857,12 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(ticket.total, Decimal("75.00"))
 
         procesar_ticket(ticket)
+        formato_administrativo = self.client.post(
+            f"/api/tickets/{ticket.id}/imprimir/",
+            data=json.dumps({"formato": TrabajoImpresion.Formato.PARCIAL}),
+            content_type="application/json",
+        )
+        self.assertEqual(formato_administrativo.status_code, 400)
         respuesta = self.client.post(
             f"/api/tickets/{ticket.id}/imprimir/",
             data=json.dumps({"formato": "comanda"}),
@@ -794,6 +886,96 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(ticket.estado, Ticket.Estado.PAGADO)
         self.assertGreaterEqual(EventoOutbox.objects.filter(agregado_id=ticket.id).count(), 6)
 
+    def test_agregar_comanda_congela_la_anterior_y_solo_imprime_la_actual(self):
+        ticket, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="MESA-3"))
+        ticket.captura_por_nombres = True
+        ticket.nombres_comensales = {"1": "Ana"}
+        ticket.comentario_general = "Primera instrucción"
+        ticket.save(update_fields=["captura_por_nombres", "nombres_comensales", "comentario_general"])
+        primera = agregar_partida(ticket, self.producto)
+        procesar_ticket(ticket)
+        ticket.refresh_from_db()
+        trabajo_primero = encolar_impresiones(ticket, TrabajoImpresion.Formato.COMANDA)[0]
+        self.assertEqual(trabajo_primero.comanda_numero, 1)
+
+        respuesta = self.client.post(
+            f"/api/tickets/{ticket.id}/comandas/",
+            data="{}",
+            content_type="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.comanda_actual, 2)
+        self.assertTrue(ticket.comanda_en_edicion)
+        self.assertEqual(ticket.nombres_comensales, {})
+        with self.assertRaisesMessage(ErrorVenta, "sólo lectura"):
+            actualizar_partida(primera, Decimal("2"))
+
+        ticket.nombres_comensales = {"1": "Beto"}
+        ticket.comentario_general = "Segunda instrucción"
+        ticket.save(update_fields=["nombres_comensales", "comentario_general"])
+        segunda = agregar_partida(ticket, self.producto)
+        procesar_ticket(ticket)
+        ticket.refresh_from_db()
+        trabajo_segundo = encolar_impresiones(ticket, TrabajoImpresion.Formato.COMANDA)[0]
+
+        self.assertEqual(trabajo_segundo.comanda_numero, 2)
+        self.assertEqual(ticket.contextos_comandas["1"]["nombres_comensales"], {"1": "Ana"})
+        self.assertEqual(ticket.contextos_comandas["1"]["comentario_general"], "Primera instrucción")
+        self.assertEqual(ticket.contextos_comandas["2"]["nombres_comensales"], {"1": "Beto"})
+        self.assertEqual(_datos_comanda_por_nombres(ticket, 1)["filas"][0]["nombre"], "Ana")
+        self.assertEqual(_datos_comanda_por_nombres(ticket, 2)["filas"][0]["nombre"], "Beto")
+        self.assertEqual([item.id for item in _partidas_destino(ticket, "cocina", 1)], [primera.id])
+        self.assertEqual([item.id for item in _partidas_destino(ticket, "cocina", 2)], [segunda.id])
+
+    def test_cancelar_comanda_agregada_conserva_el_pedido_procesado(self):
+        ticket, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="MESA-4"))
+        ticket.captura_por_nombres = True
+        ticket.nombres_comensales = {"1": "Ana"}
+        ticket.comentario_general = "Primera instrucción"
+        ticket.save(update_fields=["captura_por_nombres", "nombres_comensales", "comentario_general"])
+        primera = agregar_partida(ticket, self.producto)
+        procesar_ticket(ticket)
+        agregar_comanda(ticket)
+        ticket.refresh_from_db()
+        ticket.nombres_comensales = {"1": "Descartar"}
+        ticket.comentario_general = "Segunda instrucción"
+        ticket.save(update_fields=["nombres_comensales", "comentario_general"])
+        agregar_partida(ticket, self.producto)
+
+        respuesta = self.client.post(
+            f"/api/tickets/{ticket.id}/cancelar/",
+            data="{}",
+            content_type="application/json",
+        )
+
+        self.assertEqual(respuesta.status_code, 200)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.PROCESADO)
+        self.assertEqual(ticket.comanda_actual, 1)
+        self.assertFalse(ticket.comanda_en_edicion)
+        self.assertEqual(list(ticket.partidas.values_list("id", flat=True)), [primera.id])
+        self.assertEqual(ticket.nombres_comensales, {"1": "Ana"})
+        self.assertEqual(ticket.comentario_general, "Primera instrucción")
+        self.assertEqual(set(ticket.contextos_comandas), {"1"})
+
+    def test_etiqueta_de_comanda_aparece_solo_desde_la_segunda(self):
+        ticket, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="MESA-5"))
+        agregar_partida(ticket, self.producto)
+        procesar_ticket(ticket)
+        with patch("impresion.render._centrado", wraps=_centrado) as centrado_primera:
+            render_comanda(ticket, "cocina", 1)
+        textos_primera = [llamada.args[2] for llamada in centrado_primera.call_args_list]
+        self.assertNotIn("COMANDA 1", textos_primera)
+
+        agregar_comanda(ticket)
+        ticket.refresh_from_db()
+        agregar_partida(ticket, self.producto)
+        with patch("impresion.render._centrado", wraps=_centrado) as centrado_segunda:
+            render_comanda(ticket, "cocina", 2)
+        textos_segunda = [llamada.args[2] for llamada in centrado_segunda.call_args_list]
+        self.assertIn("COMANDA 2", textos_segunda)
+
     def test_apertura_disponible_en_los_tres_canales(self):
         for canal in [Mesa.Canal.COMEDOR, Mesa.Canal.DOMICILIO, Mesa.Canal.SUCURSALES]:
             mesa = Mesa.objects.filter(sucursal=self.sucursal, canal=canal).first()
@@ -804,6 +986,22 @@ class FlujoPOSTests(TestCase):
             )
             self.assertEqual(respuesta.status_code, 200)
             self.assertEqual(respuesta.json()["ticket"]["canal"], canal)
+
+    def test_domicilio_nuevo_inicia_con_todo_y_entrega_a_cincuenta_minutos(self):
+        instante = timezone.make_aware(datetime(2026, 9, 3, 13, 10, 35))
+        mesa = Mesa.objects.get(sucursal=self.sucursal, clave="DOM-99")
+        with patch("ventas.services.timezone.now", return_value=instante):
+            ticket, creado = abrir_ticket(mesa)
+        self.assertTrue(creado)
+        self.assertEqual(
+            ticket.comentarios_generales,
+            [{"codigo": "C/T", "nombre": "CON TODO"}],
+        )
+        self.assertEqual(
+            ticket.salsas_verduras,
+            [{"prefijo": "", "elementos": ["Con Todo"]}],
+        )
+        self.assertEqual(ticket.entrega_aproximada, time(14, 0))
 
     def test_clientes_se_buscan_por_cualquier_dato_y_pueden_compartir_contacto(self):
         primero = self.client.post(
@@ -832,6 +1030,98 @@ class FlujoPOSTests(TestCase):
             self.assertEqual(respuesta.status_code, 200)
             nombres = [resultado["nombre"] for resultado in respuesta.json()["resultados"]]
             self.assertIn("María López", nombres)
+
+    def test_cliente_puede_registrarse_solo_con_nombre(self):
+        respuesta = self.client.post(
+            "/api/clientes/",
+            data=json.dumps({"nombre": "Cliente sólo nombre"}),
+            content_type="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 201)
+        cliente = Cliente.objects.get(pk=respuesta.json()["cliente"]["id"])
+        self.assertEqual(cliente.nombre, "Cliente sólo nombre")
+        self.assertFalse(cliente.telefonos.exists())
+        self.assertFalse(cliente.domicilios.exists())
+
+    def test_domicilio_acepta_cliente_solo_con_nombre_y_reimprime_total(self):
+        creado = self.client.post(
+            "/api/clientes/",
+            data=json.dumps({"nombre": "Cliente mínimo"}),
+            content_type="application/json",
+        ).json()["cliente"]
+        mesa = Mesa.objects.get(sucursal=self.sucursal, clave="DOM-4")
+        ticket, _ = abrir_ticket(mesa)
+        agregar_partida(ticket, self.producto)
+
+        asignado = self.client.post(
+            f"/api/tickets/{ticket.id}/cliente/",
+            data=json.dumps(
+                {
+                    "cliente_id": creado["id"],
+                    "telefono_id": "",
+                    "domicilio_id": "",
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(asignado.status_code, 200)
+        procesado = self.client.post(
+            f"/api/tickets/{ticket.id}/procesar/",
+            data="{}",
+            content_type="application/json",
+        )
+        self.assertEqual(procesado.status_code, 200)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.cliente_nombre, "Cliente mínimo")
+        self.assertEqual(ticket.cliente_telefono, "")
+        self.assertEqual(ticket.cliente_domicilio, "")
+
+        impreso = self.client.post(
+            f"/api/tickets/{ticket.id}/imprimir/",
+            data=json.dumps({"formato": "cuenta"}),
+            content_type="application/json",
+        )
+        self.assertEqual(impreso.status_code, 200)
+        self.assertTrue(
+            TrabajoImpresion.objects.filter(
+                ticket=ticket,
+                formato=TrabajoImpresion.Formato.CUENTA,
+            ).exists()
+        )
+
+    def test_importador_legado_incluye_nombres_sin_contacto_y_es_idempotente(self):
+        existente = self.client.post(
+            "/api/clientes/",
+            data=json.dumps(self.datos_cliente(nombre="Cliente existente")),
+            content_type="application/json",
+        )
+        self.assertEqual(existente.status_code, 201)
+        archivo = Path(self.temporal.name) / "Clientes-Domicilio-Completo.xlsx"
+        libro = Workbook()
+        hoja = libro.active
+        hoja.title = "Clientes"
+        hoja.append([
+            "Nombre", "Domicilio", "Colonia", "Ciudad", "Extra",
+            "Telefono", "Referencia", "Extra 2", "Extra 3",
+        ])
+        hoja.append(["Cliente sólo legado", "", "", "", "", "", "", "", ""])
+        hoja.append([
+            "Cliente existente", "Avenida Patria 5860", "Jardines", "Zapopan", "",
+            "3312345678", "Recepción principal", "", "",
+        ])
+        libro.save(archivo)
+        libro.close()
+
+        call_command("importar_clientes_legado", archivo, sucursal=self.sucursal.clave, verbosity=0)
+        call_command("importar_clientes_legado", archivo, sucursal=self.sucursal.clave, verbosity=0)
+
+        legado = Cliente.objects.get(nombre_normalizado="cliente solo legado")
+        self.assertFalse(legado.telefonos.exists())
+        self.assertFalse(legado.domicilios.exists())
+        self.assertEqual(Cliente.objects.filter(nombre_normalizado="cliente existente").count(), 1)
+        self.assertIn("Importado desde Clientes-Domicilio-Completo.xlsx", legado.notas)
+        cliente_existente = Cliente.objects.get(nombre_normalizado="cliente existente")
+        self.assertNotIn("Importado desde Clientes-Domicilio-Completo.xlsx", cliente_existente.notas)
 
     def test_duplicado_solo_se_advierte_por_nombre_y_puede_confirmarse(self):
         datos = self.datos_cliente(nombre="José Álvarez")
@@ -1004,7 +1294,10 @@ class FlujoPOSTests(TestCase):
         self.assertContains(respuesta, "102e4b50")
         self.assertContains(respuesta, 'data-canal="comedor" type="button" aria-pressed="true"')
         self.assertEqual(respuesta.content.decode().count('class="canal-marcador"'), 3)
-        self.assertContains(respuesta, 'aria-labelledby="titulo-dialogo-cobro"')
+        self.assertContains(respuesta, 'id="ticket-cuenta"')
+        self.assertContains(respuesta, 'id="agregar-comanda"')
+        self.assertContains(respuesta, 'id="contador-comandas"')
+        self.assertNotContains(respuesta, 'aria-labelledby="titulo-dialogo-cobro"')
         self.assertContains(respuesta, 'id="switch-tipo-pedido"')
         self.assertContains(respuesta, 'id="switch-modo-nombres"')
         self.assertContains(respuesta, 'id="datos-servicio-directo"')
@@ -1403,12 +1696,32 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(respuesta.json()["impresiones"], [])
         self.assertFalse(TrabajoImpresion.objects.filter(ticket=ticket, formato="cuenta").exists())
 
-    def test_cobro_rechaza_importes_ausentes_insuficientes_no_finitos_y_con_decimales_extra(self):
+    def test_cobro_registra_pago_con_terminal(self):
+        mesa = Mesa.objects.get(sucursal=self.sucursal, clave="MESA-11")
+        ticket, _ = abrir_ticket(mesa)
+        agregar_partida(ticket, self.producto)
+        procesar_ticket(ticket)
+        respuesta = self.client.post(
+            f"/api/tickets/{ticket.id}/cobrar/",
+            data=json.dumps(
+                {
+                    "forma_pago": "tarjeta",
+                    "clave_administrador": "1212",
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.forma_pago, Ticket.FormaPago.TARJETA)
+        self.assertEqual(ticket.importe_recibido, ticket.total)
+
+    def test_cobro_usa_total_exacto_si_se_omite_importe_y_rechaza_importes_invalidos(self):
         mesa = Mesa.objects.get(sucursal=self.sucursal, clave="MESA-10")
         ticket, _ = abrir_ticket(mesa)
         agregar_partida(ticket, self.producto)
         procesar_ticket(ticket)
-        casos = [None, "-1", "24.99", "NaN", "Infinity", "25.001"]
+        casos = ["-1", "24.99", "NaN", "Infinity", "25.001"]
         for recibido in casos:
             respuesta = self.client.post(
                 f"/api/tickets/{ticket.id}/cobrar/",
@@ -1427,12 +1740,11 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(tarjeta_inexacta.status_code, 400)
         valida = self.client.post(
             f"/api/tickets/{ticket.id}/cobrar/",
-            data=json.dumps(
-                {"forma_pago": "efectivo", "importe_recibido": "25.00", "imprimir_ticket": False, "clave_administrador": "1212"}
-            ),
+            data=json.dumps({"clave_administrador": "1212"}),
             content_type="application/json",
         )
         self.assertEqual(valida.status_code, 200)
+        self.assertEqual(valida.json()["impresiones"], [])
 
     def test_conversion_domicilio_recoger_mueve_la_misma_orden_y_usa_el_primer_lugar_libre(self):
         ocupado, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="REC-1"))
@@ -1618,7 +1930,7 @@ class FlujoPOSTests(TestCase):
             ),
             content_type="application/json",
         )
-        self.assertEqual(anterior.status_code, 400)
+        self.assertEqual(anterior.status_code, 201)
         nueva = self.client.post(
             "/api/administrador/movimientos/",
             data=json.dumps(
@@ -1686,7 +1998,8 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(total.total_terminal, Decimal("0.00"))
         self.assertEqual(total.total_a_entregar, Decimal("75.00"))
         ticket.refresh_from_db()
-        self.assertEqual(ticket.estado, Ticket.Estado.PROCESADO)
+        self.assertEqual(ticket.estado, Ticket.Estado.PAGADO)
+        self.assertNotIn(str(ticket.mesa_id), self.client.get("/api/estado/").json()["tickets"])
 
     def test_programado_se_activa_por_fecha_en_la_primera_casilla_de_domicilio_libre(self):
         ocupado, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="DOM-1"))
@@ -1703,13 +2016,21 @@ class FlujoPOSTests(TestCase):
         programacion = self.client.post(
             f"/api/administrador/tickets/{ticket.id}/programar/",
             data=json.dumps(
-                {"fecha_programada": fecha_programada.isoformat(), "clave_administrador": "1212"}
+                {
+                    "fecha_programada": fecha_programada.isoformat(),
+                    "hora_programada": "14:00",
+                    "clave_administrador": "1212",
+                }
             ),
             content_type="application/json",
         )
         self.assertEqual(programacion.status_code, 200)
         ticket.refresh_from_db()
         self.assertEqual(ticket.estado, Ticket.Estado.PROGRAMADO)
+        self.assertEqual(ticket.hora_programada, time(14, 0))
+        self.assertEqual(ticket.tipo_entrega, Ticket.TipoEntrega.PROGRAMADA)
+        self.assertEqual(ticket.entrega_aproximada, time(14, 0))
+        self.assertIn(fecha_programada.strftime("%d/%m/%Y"), _texto_entrega(ticket))
         self.assertEqual(activar_programados(self.sucursal, timezone.localdate()), 0)
         self.assertEqual(activar_programados(self.sucursal, fecha_programada), 1)
         ticket.refresh_from_db()
@@ -1718,7 +2039,7 @@ class FlujoPOSTests(TestCase):
         self.assertIsNotNone(ticket.activado_programado_en)
         self.assertEqual(ticket.entrega_aproximada, time(14, 0))
 
-    def test_reporte_parcial_suma_cuatro_canales_sin_separar_estados(self):
+    def test_reporte_parcial_suma_cinco_canales_sin_separar_estados(self):
         casos = [
             ("MESA-18", Ticket.Estado.ABIERTO),
             ("LLEV-9", Ticket.Estado.PROCESADO),
@@ -1740,10 +2061,34 @@ class FlujoPOSTests(TestCase):
         reporte = ReporteAdministrativo.objects.get(pk=respuesta.json()["reporte_id"])
         self.assertEqual(
             reporte.datos["canales"],
-            {"comedor": "25.00", "llevar": "25.00", "domicilio": "25.00", "recoger": "25.00"},
+            {
+                "comedor": "25.00",
+                "llevar": "25.00",
+                "domicilio": "25.00",
+                "recoger": "25.00",
+                "sucursales": "0.00",
+            },
         )
         self.assertEqual(reporte.datos["total"], "100.00")
         self.assertNotIn("estados", reporte.datos)
+
+    def test_corte_de_caja_bloquea_sucursales_pendientes(self):
+        posicion = Mesa.objects.filter(
+            sucursal=self.sucursal,
+            canal=Mesa.Canal.SUCURSALES,
+        ).first()
+        producto = ProductoSucursal.objects.filter(sucursal=self.sucursal).first()
+        ticket, _ = abrir_ticket(posicion)
+        agregar_partida_sucursal(ticket, producto, Decimal("1"))
+        procesar_ticket(ticket)
+        self.assertEqual(self._autorizar_administrador().status_code, 200)
+        respuesta = self.client.post(
+            "/api/administrador/corte-caja/",
+            data="{}",
+            content_type="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("sucursal", respuesta.json()["error"].lower())
 
     def test_admin_reasigna_descuenta_y_cancela_un_pedido_procesado_sin_borrar_auditoria(self):
         ticket, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="MESA-12"))
@@ -1775,6 +2120,152 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(ticket.estado, Ticket.Estado.CANCELADO)
         self.assertEqual(ticket.canal, Mesa.Canal.LLEVAR)
         self.assertEqual(ticket.partidas.count(), 1)
+
+    def test_admin_edita_y_elimina_movimientos_sin_repetir_clave(self):
+        self.assertEqual(self._autorizar_administrador().status_code, 200)
+        alta = self.client.post(
+            "/api/administrador/movimientos/",
+            data=json.dumps({"tipo": "entrada", "concepto": "Cambio", "importe": "100"}),
+            content_type="application/json",
+        )
+        self.assertEqual(alta.status_code, 201)
+        movimiento_id = alta.json()["movimiento"]["id"]
+        edicion = self.client.patch(
+            f"/api/administrador/movimientos/{movimiento_id}/",
+            data=json.dumps({"tipo": "salida", "concepto": "Compra urgente", "importe": "45.50"}),
+            content_type="application/json",
+        )
+        self.assertEqual(edicion.status_code, 200)
+        movimiento = MovimientoCaja.objects.get(pk=movimiento_id)
+        self.assertEqual(movimiento.tipo, MovimientoCaja.Tipo.SALIDA)
+        self.assertEqual(movimiento.concepto, "Compra urgente")
+        self.assertEqual(movimiento.importe, Decimal("45.50"))
+        eliminacion = self.client.delete(f"/api/administrador/movimientos/{movimiento_id}/")
+        self.assertEqual(eliminacion.status_code, 200)
+        self.assertFalse(MovimientoCaja.objects.filter(pk=movimiento_id).exists())
+
+    def test_reinicio_de_folios_abre_serie_nueva_desde_uno(self):
+        primero, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="MESA-20"))
+        serie_anterior = primero.serie_folio
+        self.assertEqual(self._autorizar_administrador().status_code, 200)
+        respuesta = self.client.post(
+            "/api/administrador/folios/reiniciar/",
+            data="{}",
+            content_type="application/json",
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.json()["siguiente_folio"], 1)
+        consecutivo = ConsecutivoFolio.objects.get(sucursal=self.sucursal)
+        self.assertEqual(consecutivo.serie, serie_anterior + 1)
+        self.assertEqual(consecutivo.ultimo, 0)
+        segundo, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="MESA-21"))
+        self.assertEqual(segundo.folio, 1)
+        self.assertEqual(segundo.serie_folio, serie_anterior + 1)
+        self.assertTrue(
+            EventoOutbox.objects.filter(
+                sucursal=self.sucursal,
+                tipo="folios.reiniciados",
+            ).exists()
+        )
+
+    def test_acciones_en_lote_cobran_asignan_y_completan_segun_canal(self):
+        ordinarios = []
+        for clave in ("MESA-22", "MESA-23"):
+            ticket, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave=clave))
+            agregar_partida(ticket, self.producto)
+            procesar_ticket(ticket)
+            ordinarios.append(ticket)
+
+        rol = Rol.objects.get(sucursal=self.sucursal, tipo=Rol.Tipo.REPARTIDOR)
+        repartidor = UsuarioPOS.objects.create(
+            sucursal=self.sucursal,
+            rol=rol,
+            nombre="Repartidor lote",
+            clave="",
+        )
+        repartidor.set_clave("8764")
+        repartidor.save(update_fields=["clave"])
+        domicilios = []
+        for indice, clave in enumerate(("DOM-95", "DOM-96"), start=1):
+            ticket, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave=clave))
+            agregar_partida(ticket, self.producto)
+            ticket = self._asignar_cliente_domicilio(
+                ticket,
+                nombre=f"Cliente lote {indice}",
+                exterior=str(900 + indice),
+            )
+            procesar_ticket(ticket)
+            domicilios.append(ticket)
+
+        posiciones_sucursal = list(
+            Mesa.objects.filter(sucursal=self.sucursal, canal=Mesa.Canal.SUCURSALES)[:2]
+        )
+        producto_sucursal = ProductoSucursal.objects.filter(sucursal=self.sucursal).first()
+        pedidos_sucursal = []
+        for posicion in posiciones_sucursal:
+            ticket, _ = abrir_ticket(posicion)
+            agregar_partida_sucursal(ticket, producto_sucursal, Decimal("1"))
+            procesar_ticket(ticket)
+            pedidos_sucursal.append(ticket)
+
+        self.assertEqual(self._autorizar_administrador().status_code, 200)
+        cobro = self.client.post(
+            "/api/administrador/tickets/acciones-lote/",
+            data=json.dumps({
+                "accion": "cobrar",
+                "ticket_ids": [str(ticket.id) for ticket in ordinarios],
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(cobro.status_code, 200)
+        asignacion = self.client.post(
+            "/api/administrador/tickets/acciones-lote/",
+            data=json.dumps({
+                "accion": "asignar_repartidor",
+                "ticket_ids": [str(ticket.id) for ticket in domicilios],
+                "repartidor_id": str(repartidor.id),
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(asignacion.status_code, 200)
+        sucursales = self.client.post(
+            "/api/administrador/tickets/acciones-lote/",
+            data=json.dumps({
+                "accion": "completar_sucursales",
+                "ticket_ids": [str(ticket.id) for ticket in pedidos_sucursal],
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(sucursales.status_code, 200)
+
+        for ticket in ordinarios + pedidos_sucursal:
+            ticket.refresh_from_db()
+            self.assertEqual(ticket.estado, Ticket.Estado.PAGADO)
+        for ticket in domicilios:
+            ticket.refresh_from_db()
+            self.assertEqual(ticket.repartidor, repartidor)
+
+        agregar_comanda(domicilios[0])
+        incompleta = self.client.post(
+            "/api/administrador/liquidaciones/",
+            data=json.dumps({"repartidor_id": str(repartidor.id), "fondo": "0"}),
+            content_type="application/json",
+        )
+        self.assertEqual(incompleta.status_code, 400)
+        self.assertIn("comandas", incompleta.json()["error"].lower())
+        agregar_partida(domicilios[0], self.producto)
+        procesar_ticket(domicilios[0])
+        completa = self.client.post(
+            "/api/administrador/liquidaciones/",
+            data=json.dumps({"repartidor_id": str(repartidor.id), "fondo": "0"}),
+            content_type="application/json",
+        )
+        self.assertEqual(completa.status_code, 201)
+        estado = self.client.get("/api/estado/").json()["tickets"]
+        for ticket in domicilios:
+            ticket.refresh_from_db()
+            self.assertEqual(ticket.estado, Ticket.Estado.PAGADO)
+            self.assertNotIn(str(ticket.mesa_id), estado)
 
     def test_corte_de_sucursal_agrupa_partidas_y_cierra_sus_pedidos(self):
         cliente = SucursalPedido.objects.get(sucursal=self.sucursal, origen_id=3)
@@ -1930,6 +2421,7 @@ class SeguridadPOSTests(TestCase):
             folio=1,
             canal=Mesa.Canal.COMEDOR,
             estado=Ticket.Estado.PROCESADO,
+            comanda_en_edicion=False,
         )
 
         sin_clave = self.client.post(

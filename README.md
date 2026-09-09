@@ -4,7 +4,21 @@ Primera versión local del punto de venta de Los Tocayos. Permite operar pedidos
 comedor, domicilio y sucursales, capturar partidas por comensal, procesar la orden,
 cobrarla y generar comandas/cuentas térmicas en modo ráster.
 
+La dirección futura de paquete único, módulos por sucursal, actualización segura,
+sincronización y servidor central Hostinger KVM 2 está documentada en
+[ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md](ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md).
+Esa arquitectura está aceptada, pero el backend central todavía no está
+implementado.
+
 ## Producción local en Windows
+
+La guia operativa esta en [DESPLIEGUE_WINDOWS.md](DESPLIEGUE_WINDOWS.md): incluye
+la recuperacion de ACL, los requisitos de Python/pywin32, la comprobacion del
+servicio y las limitaciones para otras sucursales.
+
+**Antes de repetir el instalador:** todavia ejecuta una carga de datos ligada a
+Arboledas que puede sobrescribir catalogos y precios. No es aun un actualizador
+generico para sucursales personalizadas. `-PrepareOnly` tambien modifica la base.
 
 Instala Python para **todos los usuarios** y abre PowerShell como administrador. El
 instalador genera `DJANGO_SECRET_KEY` si falta, obliga `DEBUG=false`, valida una lista
@@ -61,9 +75,10 @@ Administradores. Cada ejecución usa la API de respaldo online de SQLite para ob
 una copia consistente aunque Waitress esté activo, guarda
 `backups\db-YYYYMMDD-HHMMSS.sqlite3`, su `.sha256` y un `.json` con resultado, hash,
 integridad y prueba de restauración. El registro operativo queda en
-`logs\sqlite-backup.log` como JSON Lines. Para cambiar horario o retención, vuelve a
-ejecutar el instalador con otros valores; para omitir la tarea en un entorno puntual,
-usa `-SkipBackupTask`, que retira la tarea si ya existía.
+`logs\sqlite-backup.log` como JSON Lines. `-BackupTime` y `-BackupRetentionDays`
+definen horario y retención al instalar. No vuelvas a ejecutar todo el instalador
+solo para cambiar esos valores sin revisar la advertencia sobre catalogos.
+`-SkipBackupTask` omite el respaldo programado y retira la tarea si ya existía.
 
 Para lanzar una comprobación manual sin reconfigurar el servicio:
 
@@ -140,8 +155,11 @@ el servidor local existentes; no requiere Docker ni conexión a un VPS.
 El modo táctil se abre con `TocayosPOS.exe --tableta`. Consulta
 `desktop/README.md` para configurar un servidor de red o iniciar sólo el servicio.
 
-El diagnóstico técnico de la fase local y los riesgos pendientes antes de un piloto
-multiusuario están en `diagnostico_calidad_pos_local.md`.
+`diagnostico_calidad_pos_local.md` conserva el diagnóstico histórico del
+2026-08-23. Varias brechas que enumera —autenticación, Waitress, locks, worker y
+respaldo— se corrigieron después; no debe utilizarse como matriz vigente. El
+estado actual de despliegue está en `DESPLIEGUE_WINDOWS.md` y en la arquitectura
+canónica enlazada al inicio.
 
 ## Captura en tabletas
 
@@ -277,9 +295,9 @@ con cantidad, precio e importe por concepto. El catálogo y sus precios vigentes
 cargan con `cargar_datos_iniciales` y permanecen separados del menú de comedor.
 
 El POS consulta Supabase en modo de sólo lectura e importa una sola vez los pedidos
-confirmados del día. Se asignan al primer espacio libre de la sucursal correspondiente
-y quedan abiertos para revisión antes de imprimir. La conexión compartida se configura
-en `.env`; la contraseña nunca se guarda en Git:
+confirmados de hoy o del día anterior. Se asignan al primer espacio libre de la
+sucursal correspondiente y quedan abiertos para revisión antes de imprimir. La conexión
+compartida se configura en `.env`; la contraseña nunca se guarda en Git:
 
 ```env
 PEDIDOS_SUCURSALES_FUENTE=supabase
@@ -304,11 +322,13 @@ módulo de prueba. Antes de activar Supabase aplica y verifica, en orden, los ar
 TLS sin validación de host/CA, permisos extra, RLS ausente y funciones públicas
 `SECURITY DEFINER` accesibles.
 
-La auditoría remota fechada y su alcance están en
-`seguridad\supabase\AUDITORIA_2026-08-26.md`. La exposición detectada no queda
-corregida en el proyecto remoto por el solo hecho de incorporar estos archivos:
-requiere el inventario, respaldo, aplicación controlada de los SQL y las revisiones
-del Dashboard descritas en `seguridad\supabase\README.md`.
+La auditoría inicial y su alcance están en
+`seguridad\supabase\AUDITORIA_2026-08-26.md`. La aplicación controlada de la
+remediación y la verificación final —20/20 tablas con RLS, retiro de `public` de
+Data API y lector dedicado de sólo lectura— quedaron registradas en
+`seguridad\supabase\REMEDIACION_SUPABASE_2026-08-29.md`. Esta integración sigue
+siendo únicamente la fuente externa de pedidos confirmados; no es el backend
+central multisucursal previsto.
 
 La sincronización también puede ejecutarse manualmente:
 

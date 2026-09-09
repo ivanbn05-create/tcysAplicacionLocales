@@ -1,3 +1,26 @@
+<#
+.SYNOPSIS
+Prepara e instala el POS local como servicio Windows con permisos restringidos.
+.DESCRIPTION
+Ejecutar con Windows PowerShell 5.1 como administrador y Python de maquina.
+Valida Python, dependencias y el host pywin32 antes del endurecimiento completo.
+Conserva entornos virtuales rotos, restringe datos privados y verifica /salud/.
+Trabaja sobre los archivos locales; no descarga ni actualiza codigo desde GitHub.
+.PARAMETER RepairPermissions
+Recupera acceso efectivo de Administradores y SYSTEM sin ampliar LocalService.
+No permite leer este script si su propia ACL ya impide abrirlo; ver la guia.
+.PARAMETER PrepareOnly
+Prepara dependencias, configuracion y base sin solicitar cuentas ni instalar el
+servicio. No es una simulacion: puede detener el servicio y modifica la base.
+.NOTES
+La carga cargar_datos_iniciales sigue ligada a ARBOLEDAS y puede sobrescribir
+catalogos y precios. Este script aun no es un actualizador generico por sucursal.
+Revisar DESPLIEGUE_WINDOWS.md antes de repetirlo sobre datos personalizados.
+No compartir .env, contrasenas, bases ni certificados privados.
+.EXAMPLE
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\tcysAplicacionLocales\instalar-servicio-lan.ps1" -AllowedHosts "localhost,127.0.0.1,192.168.0.30" -ListenAddress "0.0.0.0" -AllowInsecureHttpLan -Port 8000
+Instala HTTP LAN con consentimiento explicito, firewall privado y subred local.
+#>
 param(
     [string]$AllowedHosts = "localhost,127.0.0.1,192.168.0.30",
     [string]$SecretKey,
@@ -10,7 +33,9 @@ param(
     [switch]$SkipFirewall,
     [ValidatePattern("^(?:[01]\d|2[0-3]):[0-5]\d$")][string]$BackupTime = "03:15",
     [ValidateRange(1, 3650)][int]$BackupRetentionDays = 30,
-    [switch]$SkipBackupTask
+    [switch]$SkipBackupTask,
+    [switch]$RepairPermissions,
+    [switch]$PrepareOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,7 +63,7 @@ function Get-DotEnvValue {
         return $null
     }
     $patron = "^\s*" + [Regex]::Escape($Name) + "\s*=(.*)$"
-    foreach ($linea in Get-Content -LiteralPath $Path) {
+    foreach ($linea in Get-Content -LiteralPath $Path -Encoding UTF8) {
         if ($linea -match $patron) {
             return $Matches[1].Trim().Trim('"').Trim("'")
         }
@@ -52,10 +77,10 @@ function Set-DotEnvValue {
     if ($Value -match "[\r\n]") {
         throw "$Name contiene un salto de línea no permitido."
     }
-    $lineas = if (Test-Path -LiteralPath $Path) { @(Get-Content -LiteralPath $Path) } else { @() }
+    $lineas = if (Test-Path -LiteralPath $Path) { @(Get-Content -LiteralPath $Path -Encoding UTF8) } else { @() }
     $patron = "^\s*" + [Regex]::Escape($Name) + "\s*="
     $encontrado = $false
-    $actualizadas = foreach ($linea in $lineas) {
+    $actualizadas = @(foreach ($linea in $lineas) {
         if ($linea -match $patron) {
             if (-not $encontrado) {
                 "$Name=$Value"
@@ -65,7 +90,7 @@ function Set-DotEnvValue {
         else {
             $linea
         }
-    }
+    })
     if (-not $encontrado) {
         $actualizadas += "$Name=$Value"
     }
@@ -109,55 +134,185 @@ function Test-AllowedHost {
 function Protect-ApplicationTree {
     param([string]$Path)
 
-    $system = "*S-1-5-18:(OI)(CI)F"
-    $admins = "*S-1-5-32-544:(OI)(CI)F"
-    $localService = "*S-1-5-19:(OI)(CI)RX"
-    # Quita ACE explícitas heredadas del checkout antes de aplicar la allow-list.
-    & icacls.exe $Path "/reset" "/T" "/C" | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "No fue posible restablecer las ACL del árbol de la aplicación."
+    Assert-ProjectPath -Path $Path
+    # Protege primero los datos privados; nunca se restablecen a ACL del padre.
+    $privados = @(".env", "db.sqlite3", "db.sqlite3-wal", "db.sqlite3-shm", "db.sqlite3-journal", "backups", ".git", "tmp")
+    $privados += @(Get-ChildItem -LiteralPath $Path -Directory -Force |
+        Where-Object Name -Like ".venv-roto-*" | Select-Object -ExpandProperty Name)
+    foreach ($nombre in $privados) {
+        $acceso = if ($nombre -eq ".env") { "Read" } else { "None" }
+        Protect-Path -Path (Join-Path $Path $nombre) -LocalServiceAccess $acceso
     }
-    & icacls.exe $Path "/setowner" "*S-1-5-32-544" "/T" "/C" | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "No fue posible asignar la propiedad del árbol al grupo Administradores."
+    foreach ($nombre in @("runtime", "logs", "media")) {
+        Protect-Path -Path (Join-Path $Path $nombre) -LocalServiceAccess "Modify"
     }
-    & icacls.exe $Path `
-        "/inheritance:r" `
-        "/remove:g" "*S-1-5-11" "*S-1-5-32-545" `
-        "/grant:r" $system $admins $localService `
-        "/T" "/C" | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "No fue posible proteger el árbol de la aplicación."
+    Set-ProductionAcl -Path $Path -LocalServiceAccess "Read"
+    foreach ($item in Get-ChildItem -LiteralPath $Path -Force) {
+        if ($item.Name -notin ($privados + @("runtime", "logs", "media"))) {
+            Protect-Path -Path $item.FullName -LocalServiceAccess "Read"
+        }
     }
 }
 
-function Protect-Path {
-    param([string]$Path, [ValidateSet("Read", "Modify", "None")][string]$LocalServiceAccess)
+function Assert-ProjectPath {
+    param([string]$Path, [switch]$ParentVerified)
 
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return
+    $rootPath = [IO.Path]::GetFullPath($raiz).TrimEnd('\')
+    $fullPath = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    if ($fullPath -ne $rootPath -and
+        -not $fullPath.StartsWith($rootPath + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "La ruta queda fuera del proyecto: $Path."
     }
-    $item = Get-Item -LiteralPath $Path
-    $system = if ($item.PSIsContainer) { "*S-1-5-18:(OI)(CI)F" } else { "*S-1-5-18:F" }
-    $admins = if ($item.PSIsContainer) { "*S-1-5-32-544:(OI)(CI)F" } else { "*S-1-5-32-544:F" }
-    $argumentos = @($Path, "/inheritance:r", "/grant:r", $system, $admins)
-    if ($LocalServiceAccess -ne "None") {
-        $permiso = if ($LocalServiceAccess -eq "Modify") { "M" } else { "R" }
-        if ($item.PSIsContainer) {
-            $permiso = "(OI)(CI)$permiso"
+    # Rechaza junctions/symlinks, incluso en los padres, antes de modificar ACL.
+    $cursor = $fullPath
+    while ($cursor) {
+        if (Test-Path -LiteralPath $cursor) {
+            $item = Get-Item -LiteralPath $cursor -Force
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "No se modifican enlaces ni junctions: $cursor."
+            }
         }
-        $argumentos += "*S-1-5-19:$permiso"
+        if ($ParentVerified) { break }
+        $cursor = Split-Path -Parent $cursor
     }
-    else {
-        $argumentos += @("/remove:g", "*S-1-5-19")
+}
+
+function Set-ProductionAcl {
+    param([string]$Path, [ValidateSet("Read", "Modify", "None")][string]$LocalServiceAccess, [switch]$ParentVerified)
+
+    Assert-ProjectPath -Path $Path -ParentVerified:$ParentVerified
+    $item = Get-Item -LiteralPath $Path -Force
+    $acl = if ($item.PSIsContainer) {
+        New-Object Security.AccessControl.DirectorySecurity
+    } else {
+        New-Object Security.AccessControl.FileSecurity
     }
-    $argumentos += "/C"
+    $acl.SetAccessRuleProtection($true, $false)
+    $adminSid = New-Object Security.Principal.SecurityIdentifier("S-1-5-32-544")
+    $acl.SetOwner($adminSid)
+    $inheritance = if ($item.PSIsContainer) { "ContainerInherit, ObjectInherit" } else { "None" }
+    $rights = @{ "S-1-5-18" = "FullControl"; "S-1-5-32-544" = "FullControl" }
+    if ($LocalServiceAccess -ne "None") {
+        $rights["S-1-5-19"] = if ($LocalServiceAccess -eq "Modify") {
+            "Modify"
+        } elseif ($item.PSIsContainer -or $item.Name -ne ".env") {
+            "ReadAndExecute"
+        } else {
+            "Read"
+        }
+    }
+    foreach ($sid in $rights.Keys) {
+        $identity = New-Object Security.Principal.SecurityIdentifier($sid)
+        # Los archivos reciben ACE efectivas, nunca marcas de herencia de carpetas.
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule(
+            $identity, $rights[$sid], $inheritance, "None", "Allow")
+        $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
+function Protect-Path {
+    param([string]$Path, [ValidateSet("Read", "Modify", "None")][string]$LocalServiceAccess, [switch]$ParentVerified)
+
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    Set-ProductionAcl -Path $Path -LocalServiceAccess $LocalServiceAccess -ParentVerified:$ParentVerified
+    $item = Get-Item -LiteralPath $Path -Force
     if ($item.PSIsContainer) {
-        $argumentos += "/T"
+        foreach ($child in Get-ChildItem -LiteralPath $Path -Force) {
+            Protect-Path -Path $child.FullName -LocalServiceAccess $LocalServiceAccess -ParentVerified
+        }
     }
-    & icacls.exe @argumentos | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "No fue posible restringir permisos NTFS en $Path."
+}
+
+function Test-MachinePythonPath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not [IO.Path]::IsPathRooted($Path)) { return $false }
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $userRoots = @((Join-Path $env:SystemDrive "Users"), $env:USERPROFILE, $env:LOCALAPPDATA, $env:APPDATA)
+    foreach ($userRoot in $userRoots) {
+        if ($userRoot -and $fullPath.StartsWith(
+            $userRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { return $false }
+    }
+    return Test-Path -LiteralPath $fullPath -PathType Leaf
+}
+
+function Get-MachinePython {
+    $candidates = @()
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        $candidates += @(& py -0p 2>$null | ForEach-Object {
+            if ($_ -match '([A-Za-z]:\\.+?python(?:3)?\.exe)\s*$') { $Matches[1] }
+        })
+    }
+    $candidates += @(Get-ChildItem 'HKLM:\SOFTWARE\Python\PythonCore\*\InstallPath' -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.GetValue('ExecutablePath') })
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not (Test-MachinePythonPath -Path $candidate)) { continue }
+        try {
+            $base = & $candidate -I -c "import sys; from pathlib import Path; assert sys.version_info >= (3, 10); print(Path(sys.base_prefix) / 'python.exe')" 2>$null
+            if ($LASTEXITCODE -eq 0 -and (Test-MachinePythonPath -Path ([string]$base))) {
+                return $candidate
+            }
+        } catch { continue }
+    }
+    throw "No hay un Python de maquina ejecutable (3.10+). Instala Python para todos los usuarios y comprueba py -0p. No se han cambiado ACL ni detenido el servicio."
+}
+
+function Restore-AdministrativeAccess {
+    param([string]$Path = $raiz, [switch]$ParentVerified)
+
+    Assert-ProjectPath -Path $Path -ParentVerified:$ParentVerified
+    $item = Get-Item -LiteralPath $Path -Force
+    $acl = Get-Acl -LiteralPath $Path
+    $inheritance = if ($item.PSIsContainer) { "ContainerInherit, ObjectInherit" } else { "None" }
+    # Conserva las demas identidades. La reparacion nunca concede acceso al servicio.
+    foreach ($sid in @("S-1-5-18", "S-1-5-32-544")) {
+        $identity = New-Object Security.Principal.SecurityIdentifier($sid)
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule(
+            $identity, "FullControl", $inheritance, "None", "Allow")
+        $acl.SetAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+    if ($item.PSIsContainer) {
+        foreach ($child in Get-ChildItem -LiteralPath $Path -Force) {
+            Restore-AdministrativeAccess -Path $child.FullName -ParentVerified
+        }
+    }
+}
+
+function Test-VirtualEnvironment {
+    param([string]$Path)
+
+    try {
+        if (-not (Test-Path -LiteralPath (Join-Path $Path 'pyvenv.cfg') -PathType Leaf)) { return $false }
+        $executable = Join-Path $Path 'Scripts\python.exe'
+        if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { return $false }
+        $base = & $executable -I -c "import sys, pip; from pathlib import Path; assert sys.prefix != sys.base_prefix; print(Path(sys.base_prefix) / 'python.exe')" 2>$null
+        return $LASTEXITCODE -eq 0 -and (Test-MachinePythonPath -Path ([string]$base))
+    } catch { return $false }
+}
+
+function Initialize-VirtualEnvironment {
+    param([string]$MachinePython)
+
+    $venvPath = Join-Path $raiz '.venv'
+    Assert-ProjectPath -Path $venvPath
+    if ((Test-Path -LiteralPath $venvPath) -and -not (Test-VirtualEnvironment -Path $venvPath)) {
+        $savedPath = Join-Path $raiz ('.venv-roto-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        Assert-ProjectPath -Path $savedPath
+        try {
+            Move-Item -LiteralPath $venvPath -Destination $savedPath
+        } catch {
+            throw "La .venv esta rota o no es accesible. No se borro nada. Desde PowerShell Administrador revisa sus ACL y renombra exactamente $venvPath antes de repetir."
+        }
+        Write-Host "Entorno anterior conservado en $savedPath" -ForegroundColor Yellow
+    }
+    if (-not (Test-Path -LiteralPath $venvPath)) {
+        & $MachinePython -I -m venv $venvPath
+        if ($LASTEXITCODE -ne 0) { throw "No fue posible crear .venv; puede repetirse el instalador para recuperarla." }
+    }
+    if (-not (Test-VirtualEnvironment -Path $venvPath)) {
+        throw "La .venv no supero la validacion de Python/pip. No se han endurecido las ACL del proyecto."
     }
 }
 
@@ -295,12 +450,42 @@ if (-not $Https -and -not [Net.IPAddress]::IsLoopback($direccionEscucha) -and
     throw "HTTP LAN no cifra credenciales ni pedidos. Usa -Https o confirma el riesgo con -AllowInsecureHttpLan."
 }
 
+# Esta comprobacion precede a cualquier cambio de ACL, .env o servicio.
+$machinePython = Get-MachinePython
+Assert-ProjectPath -Path $raiz
+if ($RepairPermissions) { Restore-AdministrativeAccess }
+foreach ($archivo in @("requirements.txt", "manage.py", "servicio_windows.py")) {
+    $stream = [IO.File]::OpenRead((Join-Path $raiz $archivo))
+    $stream.Dispose()
+}
+
 $existente = Get-Service -Name $nombreServicio -ErrorAction SilentlyContinue
 if ($existente -and $existente.Status -ne "Stopped") {
     Write-Host "Deteniendo la versión anterior antes de actualizar archivos o base de datos..." -ForegroundColor Yellow
     Stop-Service -Name $nombreServicio
     $existente.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(30))
 }
+
+Initialize-VirtualEnvironment -MachinePython $machinePython
+$pythonEscucha = [string](& $python -I -c "import sys; print(sys._base_executable)")
+if ($LASTEXITCODE -ne 0 -or -not (Test-MachinePythonPath -Path $pythonEscucha.Trim())) {
+    throw "No fue posible resolver el ejecutable de Python que escuchara en la LAN."
+}
+$pythonEscucha = $pythonEscucha.Trim()
+Write-Host "Instalando dependencias de produccion..." -ForegroundColor Yellow
+& $python -c "import pip; p=tuple(int(x) for x in pip.__version__.split('.')[:2]); raise SystemExit(0 if p >= (26, 2) else 1)"
+if ($LASTEXITCODE -ne 0) {
+    & $python -m pip install --upgrade "pip>=26.2,<27"
+    if ($LASTEXITCODE -ne 0) { throw "No fue posible actualizar pip a una version corregida." }
+}
+& $python -m pip install -r (Join-Path $raiz "requirements.txt")
+if ($LASTEXITCODE -ne 0) { throw "Fallo la instalacion de dependencias; no se endurecieron las ACL." }
+& $python -m pip check
+if ($LASTEXITCODE -ne 0) { throw "Las dependencias instaladas no son compatibles." }
+& $python $servicioPython --check-host
+if ($LASTEXITCODE -ne 0) { throw "El host del servicio no puede cargar Python y sus DLL. No se han endurecido las ACL." }
+& $python (Join-Path $raiz "herramientas\validar_despliegue.py")
+if ($LASTEXITCODE -ne 0) { throw "Fallo la validacion aislada; no se modifico .env ni se endurecieron las ACL." }
 
 $claveExistente = Get-DotEnvValue -Path $entorno -Name "DJANGO_SECRET_KEY"
 if ([string]::IsNullOrWhiteSpace($SecretKey)) {
@@ -315,6 +500,11 @@ if ($SecretKey.Length -lt 50 -or
     throw "SecretKey debe tener al menos 50 caracteres aleatorios y no ser un marcador de ejemplo."
 }
 
+# Un .env nuevo se restringe antes de escribir secretos. Los existentes no se copian.
+if (-not (Test-Path -LiteralPath $entorno)) {
+    New-Item -ItemType File -Path $entorno | Out-Null
+}
+Protect-Path -Path $entorno -LocalServiceAccess "Read"
 Set-DotEnvValue -Path $entorno -Name "DJANGO_SECRET_KEY" -Value $SecretKey
 Set-DotEnvValue -Path $entorno -Name "DJANGO_DEBUG" -Value "false"
 Set-DotEnvValue -Path $entorno -Name "DJANGO_ALLOWED_HOSTS" -Value $AllowedHosts
@@ -337,7 +527,8 @@ $backupLog = Join-Path $raiz "logs\sqlite-backup.log"
 if ($usaSqlite) {
     New-Item -ItemType Directory -Force -Path $runtime | Out-Null
     if (-not (Test-Path -LiteralPath $sqliteDestino) -and (Test-Path -LiteralPath (Join-Path $raiz "db.sqlite3"))) {
-        Copy-Item -LiteralPath (Join-Path $raiz "db.sqlite3") -Destination $sqliteDestino
+        & $python -c "import sqlite3, sys; from pathlib import Path; from contextlib import closing; src=Path(sys.argv[1]).resolve().as_uri() + '?mode=ro'; exec('with closing(sqlite3.connect(src, uri=True)) as source, closing(sqlite3.connect(sys.argv[2])) as dest:\n source.backup(dest)')" (Join-Path $raiz "db.sqlite3") $sqliteDestino
+        if ($LASTEXITCODE -ne 0) { throw "No fue posible copiar SQLite de forma consistente a runtime." }
     }
     Set-DotEnvValue -Path $entorno -Name "SQLITE_PATH" -Value "runtime/db.sqlite3"
 }
@@ -346,53 +537,27 @@ if ($usaSqlite) {
     New-Item -ItemType Directory -Force -Path (Join-Path $raiz $_) | Out-Null
 }
 
-# Desde este punto sólo Administradores puede modificar código, dependencias o
-# configuración. LocalService obtiene lectura/ejecución y escritura únicamente
-# en los directorios operativos declarados.
-Protect-ApplicationTree -Path $raiz
-Protect-Path -Path (Join-Path $raiz ".env") -LocalServiceAccess "Read"
-Protect-Path -Path (Join-Path $raiz "db.sqlite3") -LocalServiceAccess "None"
+# Los respaldos y certificados permanecen restringidos incluso si falla una migracion.
 Protect-Path -Path $backupRoot -LocalServiceAccess "None"
-@("runtime", "logs", "media") | ForEach-Object {
-    Protect-Path -Path (Join-Path $raiz $_) -LocalServiceAccess "Modify"
-}
-
-if (-not (Test-Path -LiteralPath $python)) {
-    Write-Host "Creando entorno virtual..." -ForegroundColor Yellow
-    if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
-        throw "Instala Python para todos los usuarios y vuelve a ejecutar el instalador."
-    }
-    & py -m venv (Join-Path $raiz ".venv")
-    if ($LASTEXITCODE -ne 0) { throw "No fue posible crear el entorno virtual." }
-}
-
-$pythonBase = (& $python -c "import sys; print(sys.base_prefix)").Trim()
-if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($pythonBase)) {
-    throw "No fue posible validar el Python base del entorno virtual."
-}
-$pythonBaseCompleto = [IO.Path]::GetFullPath($pythonBase)
-$perfilesUsuarios = [IO.Path]::GetFullPath((Join-Path $env:SystemDrive "Users"))
-if ($pythonBaseCompleto.StartsWith($perfilesUsuarios + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "El entorno virtual depende de un Python instalado en un perfil de usuario. Instala Python para todos los usuarios, elimina .venv y repite."
-}
-
-Write-Host "Instalando dependencias de producción..." -ForegroundColor Yellow
-& $python -c "import pip; p=tuple(int(x) for x in pip.__version__.split('.')[:2]); raise SystemExit(0 if p >= (26, 2) else 1)"
-if ($LASTEXITCODE -ne 0) {
-    & $python -m pip install --upgrade "pip>=26.2,<27"
-    if ($LASTEXITCODE -ne 0) { throw "No fue posible actualizar pip a una versión corregida." }
-}
-& $python -m pip install -r (Join-Path $raiz "requirements.txt")
-if ($LASTEXITCODE -ne 0) { throw "Falló la instalación de dependencias." }
+Protect-Path -Path (Join-Path $raiz "certs") -LocalServiceAccess "Read"
 
 & $python manage.py check --deploy
 if ($LASTEXITCODE -ne 0) { throw "La configuración Django de producción no es válida." }
+if ($usaSqlite -and (Test-Path -LiteralPath $sqliteDestino)) {
+    Write-Host "Respaldo verificable antes de migrar..." -ForegroundColor Yellow
+    Invoke-SqliteBackup -PythonPath $python -DatabasePath $sqliteDestino -BackupRoot $backupRoot -LogPath $backupLog -RetentionDays $BackupRetentionDays
+}
 & $python manage.py migrate --noinput
 if ($LASTEXITCODE -ne 0) { throw "Fallaron las migraciones." }
 & $python manage.py cargar_datos_iniciales
 if ($LASTEXITCODE -ne 0) { throw "Falló la carga de catálogos iniciales." }
 & $python manage.py collectstatic --noinput
 if ($LASTEXITCODE -ne 0) { throw "Falló la recopilación de archivos estáticos." }
+
+if ($PrepareOnly) {
+    Write-Host "Preparacion completa. Repite sin -PrepareOnly para crear las cuentas faltantes e instalar el servicio." -ForegroundColor Green
+    return
+}
 
 & $python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','pos.settings'); import django; django.setup(); from django.contrib.auth import get_user_model; raise SystemExit(0 if get_user_model().objects.filter(is_active=True, is_superuser=True).exists() else 1)"
 if ($LASTEXITCODE -ne 0) {
@@ -410,15 +575,6 @@ if ($LASTEXITCODE -ne 0) {
     if ($LASTEXITCODE -ne 0) {
         throw "Debe existir al menos una cuenta operativa vinculada a un perfil POS."
     }
-}
-
-# Reaplica la allow-list después de instalar paquetes o generar estáticos.
-Protect-ApplicationTree -Path $raiz
-Protect-Path -Path (Join-Path $raiz ".env") -LocalServiceAccess "Read"
-Protect-Path -Path (Join-Path $raiz "db.sqlite3") -LocalServiceAccess "None"
-Protect-Path -Path $backupRoot -LocalServiceAccess "None"
-@("runtime", "logs", "media") | ForEach-Object {
-    Protect-Path -Path (Join-Path $raiz $_) -LocalServiceAccess "Modify"
 }
 
 if ($usaSqlite -and -not $SkipBackupTask) {
@@ -465,12 +621,18 @@ if (-not $SkipFirewall -and -not $Https) {
         -LocalPort $Port `
         -Profile Private `
         -RemoteAddress LocalSubnet `
-        -Program $python | Out-Null
+        -Program $pythonEscucha | Out-Null
 }
 elseif ($Https) {
     Get-NetFirewallRule -DisplayName $nombreFirewall -ErrorAction SilentlyContinue |
         Remove-NetFirewallRule
 }
+
+# Solo tras dependencias, pruebas, checks, migraciones y registro del servicio.
+# Cada ACL conserva acceso efectivo para Administradores y SYSTEM, aun si falla
+# la siguiente operacion. Nunca se restaura una ACL vacia del intento anterior.
+Write-Host "Aplicando permisos de produccion..." -ForegroundColor Yellow
+Protect-ApplicationTree -Path $raiz
 
 Start-Service -Name $nombreServicio
 (Get-Service -Name $nombreServicio).WaitForStatus("Running", [TimeSpan]::FromSeconds(30))

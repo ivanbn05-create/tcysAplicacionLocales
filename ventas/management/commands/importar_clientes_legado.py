@@ -8,7 +8,12 @@ from django.db import transaction
 from openpyxl import load_workbook
 
 from personas.models import Sucursal
-from ventas.clientes import guardar_cliente
+from ventas.clientes import (
+    MAX_DOMICILIOS_POR_CLIENTE,
+    MAX_TELEFONOS_POR_CLIENTE,
+    cliente_payload,
+    guardar_cliente,
+)
 from ventas.models import Cliente
 from ventas.normalizacion import normalizar_texto, normalizar_telefono
 
@@ -42,6 +47,30 @@ def separar_domicilio(valor):
     return calle, exterior.group(1), interior
 
 
+def clave_domicilio(datos):
+    return normalizar_texto(
+        " ".join(
+            str(datos.get(campo, ""))
+            for campo in (
+                "calle",
+                "numero_exterior",
+                "numero_interior",
+                "colonia",
+                "codigo_postal",
+                "municipio",
+                "referencia",
+            )
+        )
+    )
+
+
+def notas_con_origen(notas):
+    notas = str(notas or "").strip()
+    if MARCADOR_ORIGEN in notas:
+        return notas
+    return "\n".join(parte for parte in (notas, MARCADOR_ORIGEN) if parte)
+
+
 class Command(BaseCommand):
     help = "Importa clientes completos del directorio XLSX legado, agrupados por nombre."
 
@@ -49,6 +78,11 @@ class Command(BaseCommand):
         parser.add_argument("archivo", type=Path)
         parser.add_argument("--sucursal", default="ARBOLEDAS")
         parser.add_argument("--dry-run", action="store_true")
+        parser.add_argument(
+            "--actualizar-existentes",
+            action="store_true",
+            help="Fusiona datos del XLSX en clientes que ya coinciden por nombre.",
+        )
 
     @transaction.atomic
     def handle(self, *args, **options):
@@ -75,7 +109,7 @@ class Command(BaseCommand):
             referencia = texto(referencia)
             telefono_normalizado = normalizar_telefono(telefono)
             contacto_rotativo = PATRON_CONTACTO.search(referencia) if len(telefono_normalizado) < 7 else None
-            if not nombre or not domicilio or (len(telefono_normalizado) < 7 and not contacto_rotativo):
+            if not nombre:
                 omitidos += 1
                 continue
             clave = normalizar_texto(nombre)
@@ -95,35 +129,71 @@ class Command(BaseCommand):
                 )
             if contacto_rotativo:
                 grupo["comentarios_multiples"] = True
-            calle, exterior, interior = separar_domicilio(domicilio)
-            domicilio_clave = normalizar_texto(" ".join([domicilio, texto(colonia), texto(ciudad)]))
-            grupo["domicilios"].setdefault(
-                domicilio_clave,
-                {
-                    "etiqueta": "Principal",
-                    "calle": calle,
-                    "numero_exterior": exterior,
-                    "numero_interior": interior,
-                    "colonia": texto(colonia),
-                    "codigo_postal": "",
-                    "municipio": texto(ciudad),
-                    "referencia": referencia,
-                },
-            )
+            if domicilio:
+                calle, exterior, interior = separar_domicilio(domicilio)
+                domicilio_clave = normalizar_texto(" ".join([domicilio, texto(colonia), texto(ciudad)]))
+                grupo["domicilios"].setdefault(
+                    domicilio_clave,
+                    {
+                        "etiqueta": "Principal",
+                        "calle": calle,
+                        "numero_exterior": exterior,
+                        "numero_interior": interior,
+                        "colonia": texto(colonia),
+                        "codigo_postal": "",
+                        "municipio": texto(ciudad),
+                        "referencia": referencia,
+                    },
+                )
 
-        creados = actualizados = 0
+        libro.close()
+
+        creados = actualizados = existentes = 0
         for grupo in grupos.values():
-            cliente = Cliente.objects.filter(
-                sucursal=sucursal,
-                nombre_normalizado=normalizar_texto(grupo["nombre"]),
-                notas__contains=MARCADOR_ORIGEN,
-            ).first()
+            candidatos = list(
+                Cliente.objects.filter(
+                    sucursal=sucursal,
+                    nombre_normalizado=normalizar_texto(grupo["nombre"]),
+                    activo=True,
+                )
+                .prefetch_related("telefonos", "domicilios")
+                .order_by("-actualizado_en")[:10]
+            )
+            cliente = next(
+                (item for item in candidatos if MARCADOR_ORIGEN in item.notas),
+                candidatos[0] if candidatos else None,
+            )
+            if cliente and not options["actualizar_existentes"]:
+                existentes += 1
+                continue
+            telefonos = OrderedDict()
+            domicilios = OrderedDict()
+            notas = MARCADOR_ORIGEN
+            comentarios_multiples = grupo["comentarios_multiples"]
+            if cliente:
+                existente = cliente_payload(cliente)
+                notas = notas_con_origen(existente["notas"])
+                comentarios_multiples = (
+                    existente["comentarios_multiples"] or comentarios_multiples
+                )
+                for telefono in existente["telefonos"]:
+                    telefonos[normalizar_telefono(telefono["numero"])] = telefono
+                for domicilio in existente["domicilios"]:
+                    domicilios[clave_domicilio(domicilio)] = domicilio
+            for telefono in grupo["telefonos"].values():
+                telefonos.setdefault(
+                    normalizar_telefono(telefono["numero"]),
+                    telefono,
+                )
+            for domicilio in grupo["domicilios"].values():
+                domicilios.setdefault(clave_domicilio(domicilio), domicilio)
+
             datos = {
                 "nombre": grupo["nombre"],
-                "notas": MARCADOR_ORIGEN,
-                "comentarios_multiples": grupo["comentarios_multiples"],
-                "telefonos": list(grupo["telefonos"].values()),
-                "domicilios": list(grupo["domicilios"].values()),
+                "notas": notas,
+                "comentarios_multiples": comentarios_multiples,
+                "telefonos": list(telefonos.values())[:MAX_TELEFONOS_POR_CLIENTE],
+                "domicilios": list(domicilios.values())[:MAX_DOMICILIOS_POR_CLIENTE],
             }
             guardar_cliente(sucursal, datos, cliente=cliente)
             if cliente:
@@ -137,6 +207,7 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"{creados} clientes nuevos y {actualizados} actualizados {modo}; "
+                f"{existentes} ya existentes sin cambios; "
                 f"{omitidos} filas incompletas omitidas."
             )
         )

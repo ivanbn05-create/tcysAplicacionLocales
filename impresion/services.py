@@ -72,9 +72,10 @@ def purgar_vistas_previas(forzar=False):
         _purga_lock.release()
 
 
-def encolar_impresiones(ticket, formato):
+def encolar_impresiones(ticket, formato, comanda_numero=None):
     purgar_vistas_previas()
     destinos = []
+    numero_trabajo = None
     if formato in {
         TrabajoImpresion.Formato.CUENTA,
         TrabajoImpresion.Formato.DOMICILIO,
@@ -82,7 +83,12 @@ def encolar_impresiones(ticket, formato):
     }:
         destinos = [TrabajoImpresion.Destino.CAJA]
     else:
-        productos = list(ticket.partidas.select_related("producto__categoria").all())
+        numero_trabajo = int(comanda_numero or ticket.comanda_actual or 1)
+        productos = list(
+            ticket.partidas.select_related("producto__categoria").filter(
+                comanda_numero=numero_trabajo,
+            )
+        )
         if ticket.canal in {"comedor", "llevar", "domicilio", "recoger"} and productos:
             destinos.append(TrabajoImpresion.Destino.COCINA)
         else:
@@ -91,7 +97,13 @@ def encolar_impresiones(ticket, formato):
             if any(p.producto.destino_impresion == "barra" for p in productos):
                 destinos.append(TrabajoImpresion.Destino.BARRA)
     trabajos = [
-        TrabajoImpresion.objects.create(sucursal=ticket.sucursal, ticket=ticket, formato=formato, destino=destino)
+        TrabajoImpresion.objects.create(
+            sucursal=ticket.sucursal,
+            ticket=ticket,
+            formato=formato,
+            destino=destino,
+            comanda_numero=numero_trabajo,
+        )
         for destino in destinos
     ]
     if settings.PRINT_SYNC:
@@ -181,7 +193,11 @@ def procesar_trabajo(trabajo):
         elif trabajo.formato == TrabajoImpresion.Formato.SUCURSAL:
             imagen = render_sucursal(ticket)
         else:
-            imagen = render_comanda(ticket, trabajo.destino)
+            imagen = render_comanda(
+                ticket,
+                trabajo.destino,
+                trabajo.comanda_numero,
+            )
         if trabajo.reporte_id:
             relativo, _ = guardar_png_reporte(
                 imagen,
