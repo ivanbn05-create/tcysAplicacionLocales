@@ -92,7 +92,7 @@ class Command(BaseCommand):
         try:
             sucursal = Sucursal.objects.get(clave=options["sucursal"])
         except Sucursal.DoesNotExist as exc:
-            raise CommandError("Primero ejecuta cargar_datos_iniciales.") from exc
+            raise CommandError("Primero aprovisiona la sucursal solicitada.") from exc
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)

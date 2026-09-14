@@ -161,7 +161,11 @@ New-Shortcut `
     -Arguments "--tableta" `
     -Description "Interfaz táctil de Los Tocayos"
 
-$powershell = Join-Path $PSHOME "powershell.exe"
+$systemDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::System)
+$powershell = Join-Path $systemDirectory "WindowsPowerShell\v1.0\powershell.exe"
+if (-not (Test-Path -LiteralPath $powershell -PathType Leaf)) {
+    throw "No se encontró Windows PowerShell en la ruta del sistema."
+}
 New-Shortcut `
     -Path (Join-Path $menuInicio "Configurar servidor.lnk") `
     -Target $powershell `
@@ -176,7 +180,11 @@ New-Shortcut `
 $registro = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\LosTocayosPOS"
 New-Item -Path $registro -Force | Out-Null
 Set-ItemProperty -Path $registro -Name DisplayName -Value $nombre
-Set-ItemProperty -Path $registro -Name DisplayVersion -Value "0.3.0"
+$displayVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($ejecutableDestino).FileVersion
+if ([string]::IsNullOrWhiteSpace($displayVersion)) {
+    throw "TocayosPOS.exe no contiene una versión de archivo válida."
+}
+Set-ItemProperty -Path $registro -Name DisplayVersion -Value $displayVersion
 Set-ItemProperty -Path $registro -Name Publisher -Value "Los Tocayos"
 Set-ItemProperty -Path $registro -Name InstallLocation -Value $instalacion
 Set-ItemProperty -Path $registro -Name DisplayIcon -Value $ejecutableDestino

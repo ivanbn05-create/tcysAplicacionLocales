@@ -1,27 +1,30 @@
 <#
 .SYNOPSIS
-Prepara e instala el POS local como servicio Windows con permisos restringidos.
+Motor de instalación y actualización supervisada del servidor POS local.
 .DESCRIPTION
 Ejecutar con Windows PowerShell 5.1 como administrador y Python de maquina.
-Valida Python, dependencias y el host pywin32 antes del endurecimiento completo.
-Conserva entornos virtuales rotos, restringe datos privados y verifica /salud/.
-Trabaja sobre los archivos locales; no descarga ni actualiza codigo desde GitHub.
+El modo se declara expresamente: Instalar crea una instalación y Actualizar conserva
+la identidad, secretos y configuración existentes. Trabaja sobre una release ya
+colocada en este directorio; no descarga ni actualiza código desde GitHub.
 .PARAMETER RepairPermissions
-Recupera acceso efectivo de Administradores y SYSTEM sin ampliar LocalService.
-No permite leer este script si su propia ACL ya impide abrirlo; ver la guia.
-.PARAMETER PrepareOnly
-Prepara dependencias, configuracion y base sin solicitar cuentas ni instalar el
-servicio. No es una simulacion: puede detener el servicio y modifica la base.
+Ejecuta únicamente la reparación de acceso para Administradores y SYSTEM y termina.
 .NOTES
-La carga cargar_datos_iniciales sigue ligada a ARBOLEDAS y puede sobrescribir
-catalogos y precios. Este script aun no es un actualizador generico por sucursal.
-Revisar DESPLIEGUE_WINDOWS.md antes de repetirlo sobre datos personalizados.
+La semilla histórica sigue ligada a ARBOLEDAS y sólo puede solicitarse de forma
+explícita en una instalación inicial. Nunca forma parte de una actualización.
+El cambio atómico entre releases y el rollback de código aún están pendientes.
 No compartir .env, contrasenas, bases ni certificados privados.
 .EXAMPLE
-powershell -NoProfile -ExecutionPolicy Bypass -File "C:\tcysAplicacionLocales\instalar-servicio-lan.ps1" -AllowedHosts "localhost,127.0.0.1,192.168.0.30" -ListenAddress "0.0.0.0" -AllowInsecureHttpLan -Port 8000
-Instala HTTP LAN con consentimiento explicito, firewall privado y subred local.
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\tcysAplicacionLocales\instalar-servidor.ps1" -SucursalClave "ARBOLEDAS" -SucursalNombre "Arboledas" -AllowedHosts "localhost,127.0.0.1,192.168.0.30" -ListenAddress "0.0.0.0" -AllowInsecureHttpLan
 #>
+[CmdletBinding(DefaultParameterSetName = "Operacion")]
 param(
+    [Parameter(Mandatory = $true, ParameterSetName = "Operacion")]
+    [ValidateSet("Instalar", "Actualizar")]
+    [string]$Modo,
+    [string]$SucursalClave,
+    [string]$SucursalNombre,
+    [string]$SucursalId,
+    [switch]$InicializarDatosArboledas,
     [string]$AllowedHosts = "localhost,127.0.0.1,192.168.0.30",
     [string]$SecretKey,
     [ValidateRange(1, 65535)][int]$Port = 8000,
@@ -30,12 +33,19 @@ param(
     [string]$TrustedProxy,
     [switch]$Https,
     [switch]$AllowInsecureHttpLan,
+    [ValidateSet("archivo", "tcp")][string]$PrintBackend = "archivo",
+    [string]$PrinterCajaHost,
+    [string]$PrinterCocinaHost,
+    [string]$PrinterBarraHost,
+    [ValidateRange(1, 65535)][int]$PrinterPort = 9100,
     [switch]$SkipFirewall,
     [ValidatePattern("^(?:[01]\d|2[0-3]):[0-5]\d$")][string]$BackupTime = "03:15",
     [ValidateRange(1, 3650)][int]$BackupRetentionDays = 30,
     [switch]$SkipBackupTask,
-    [switch]$RepairPermissions,
-    [switch]$PrepareOnly
+    [switch]$AllowOnlineDependencies,
+    [switch]$AllowUnverifiedDevelopmentTree,
+    [Parameter(Mandatory = $true, ParameterSetName = "Reparacion")]
+    [switch]$RepairPermissions
 )
 
 $ErrorActionPreference = "Stop"
@@ -69,6 +79,408 @@ function Get-DotEnvValue {
         }
     }
     return $null
+}
+
+function Get-RequiredDotEnvValue {
+    param([string]$Path, [string]$Name)
+
+    $value = Get-DotEnvValue -Path $Path -Name $Name
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        throw "La actualización requiere $Name en .env. Corrige el aprovisionamiento antes de detener el servicio."
+    }
+    return $value
+}
+
+function ConvertTo-SucursalClave {
+    param([string]$Value)
+
+    $clave = ([string]$Value).Trim().ToUpperInvariant()
+    if ($clave -notmatch '^[A-Z0-9](?:[A-Z0-9_-]{0,28}[A-Z0-9])?$') {
+        throw "SucursalClave debe tener entre 1 y 30 caracteres: letras A-Z, números, guion o guion bajo; debe comenzar y terminar con letra o número."
+    }
+    return $clave
+}
+
+function ConvertTo-SucursalNombre {
+    param([string]$Value)
+
+    $nombre = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($nombre) -or $nombre.Length -gt 120 -or $nombre -match '[\x00-\x1f\x7f]') {
+        throw "SucursalNombre es obligatorio, admite hasta 120 caracteres y no permite caracteres de control."
+    }
+    return $nombre
+}
+
+function ConvertFrom-DotEnvBoolean {
+    param([string]$Value, [string]$Name)
+
+    switch (([string]$Value).Trim().ToLowerInvariant()) {
+        "true" { return $true }
+        "false" { return $false }
+        default { throw "$Name debe ser true o false en .env." }
+    }
+}
+
+function ConvertFrom-DotEnvInteger {
+    param([string]$Value, [string]$Name, [int]$Minimum, [int]$Maximum)
+
+    $number = 0
+    if (-not [int]::TryParse(([string]$Value).Trim(), [ref]$number) -or
+        $number -lt $Minimum -or $number -gt $Maximum) {
+        throw "$Name debe ser un entero entre $Minimum y $Maximum en .env."
+    }
+    return $number
+}
+
+function ConvertFrom-DotEnvDatabaseEngine {
+    param([AllowEmptyString()][string]$Value)
+
+    $engine = ([string]$Value).Trim().ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($engine)) {
+        return "sqlite"
+    }
+    if ($engine -notin @("sqlite", "postgres")) {
+        throw "DB_ENGINE debe ser sqlite o postgres en .env; no se modificará el servicio."
+    }
+    return $engine
+}
+
+function Set-SafePythonProcessEnvironment {
+    foreach ($variable in Get-ChildItem Env:) {
+        if ($variable.Name -match '^(?:PYTHON|PIP_)' -or
+            $variable.Name -in @("VIRTUAL_ENV", "__PYVENV_LAUNCHER__")) {
+            [Environment]::SetEnvironmentVariable($variable.Name, $null, "Process")
+        }
+    }
+    [Environment]::SetEnvironmentVariable("PYTHONNOUSERSITE", "1", "Process")
+    [Environment]::SetEnvironmentVariable("PYTHONDONTWRITEBYTECODE", "1", "Process")
+    [Environment]::SetEnvironmentVariable("PYTHONUTF8", "1", "Process")
+    # NUL es os.devnull en Windows: impide que pip.ini global o de usuario
+    # agregue índices, destinos u opciones ajenos al contrato de la release.
+    [Environment]::SetEnvironmentVariable("PIP_CONFIG_FILE", "NUL", "Process")
+    [Environment]::SetEnvironmentVariable("PIP_DISABLE_PIP_VERSION_CHECK", "1", "Process")
+    [Environment]::SetEnvironmentVariable("PIP_NO_INPUT", "1", "Process")
+}
+
+function Set-CanonicalProcessEnvironment {
+    param([string]$Path)
+
+    Set-SafePythonProcessEnvironment
+    $patronConfiguracion = '^(?:DJANGO_|WAITRESS_|POSTGRES_|POS_|PRINT_|PRINTER_|PEDIDOS_SUCURSALES_|THERMAL_|ALLOW_INSECURE_HTTP_LAN$|DB_ENGINE$|SQLITE_PATH$|SUCURSAL_CLAVE$)'
+    foreach ($variable in Get-ChildItem Env:) {
+        if ($variable.Name -match $patronConfiguracion) {
+            [Environment]::SetEnvironmentVariable($variable.Name, $null, "Process")
+        }
+    }
+    $vistas = @{}
+    foreach ($linea in Get-Content -LiteralPath $Path -Encoding UTF8) {
+        if ($linea -notmatch '^\s*([A-Z][A-Z0-9_]*)\s*=(.*)$') { continue }
+        $nombre = $Matches[1]
+        $valorBruto = $Matches[2]
+        if ($nombre -notmatch $patronConfiguracion -or $vistas.ContainsKey($nombre)) { continue }
+        $valor = $valorBruto.Trim().Trim('"').Trim("'")
+        [Environment]::SetEnvironmentVariable($nombre, $valor, "Process")
+        $vistas[$nombre] = $true
+    }
+    [Environment]::SetEnvironmentVariable("DJANGO_SETTINGS_MODULE", "pos.settings", "Process")
+    [Environment]::SetEnvironmentVariable("DJANGO_ALLOW_INSECURE_DEVELOPMENT", $null, "Process")
+    [Environment]::SetEnvironmentVariable("DJANGO_ALLOW_INSECURE_TEST_SETTINGS", $null, "Process")
+}
+
+function Get-ServiceExecutablePath {
+    param([string]$PathName)
+
+    $valor = ([string]$PathName).Trim()
+    if ($valor.StartsWith('"')) {
+        if ($valor -notmatch '^"([^"]+)"(?:\s|$)') { throw "PathName del servicio no es válido." }
+        return [IO.Path]::GetFullPath($Matches[1])
+    }
+    $ejecutable = ($valor -split '\s+', 2)[0]
+    if ([string]::IsNullOrWhiteSpace($ejecutable)) { throw "PathName del servicio está vacío." }
+    return [IO.Path]::GetFullPath($ejecutable)
+}
+
+function Assert-ServiceBelongsToProject {
+    param([string]$ServiceName)
+
+    $registro = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction Stop
+    $actual = Get-ServiceExecutablePath -PathName $registro.PathName
+    $esperado = [IO.Path]::GetFullPath((Join-Path $raiz ".venv\Scripts\pythonservice.exe"))
+    if (-not $actual.Equals($esperado, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "El servicio $ServiceName pertenece a otra instalación ($actual). No se modificará desde $raiz."
+    }
+}
+
+function Test-ReleasePayloadPathAllowed {
+    param([string]$RelativePath)
+
+    $normalized = ([string]$RelativePath).Replace('\', '/')
+    $parts = @($normalized -split '/')
+    if (-not $parts.Count) { return $false }
+    $reservedDirectories = @(
+        '.cache', '.git', '.hg', '.mypy_cache', '.nox', '.pytest_cache',
+        '.ruff_cache', '.svn', '.tox', '.venv', '__pycache__', 'backups',
+        'cache', 'data', 'datos', 'desktop', 'htmlcov', 'logs', 'media',
+        'node_modules', 'release', 'releases', 'runtime', 'secrets',
+        'staticfiles', 'temp', 'tmp'
+    )
+    for ($index = 0; $index -lt $parts.Count - 1; $index++) {
+        $part = $parts[$index].ToLowerInvariant()
+        if (($part -in $reservedDirectories -or $part.StartsWith('.venv-')) -and
+            $normalized -cne 'datos/Listado-Productos.xlsx') {
+            return $false
+        }
+    }
+    $name = $parts[-1].ToLowerInvariant()
+    if ($name -eq '.env.example') { return $true }
+    if ($name -in @(
+        '.coverage', '.env', 'credentials.json', 'id_dsa', 'id_ecdsa',
+        'id_ed25519', 'id_rsa', 'secrets.json'
+    ) -or $name.StartsWith('.env.')) {
+        return $false
+    }
+    foreach ($suffix in @(
+        '.bak', '.cred', '.credentials', '.db', '.jks', '.key', '.log',
+        '.p12', '.pem', '.pfx', '.pyc', '.pyo', '.secret', '.sqlite',
+        '.sqlite-journal', '.sqlite-shm', '.sqlite-wal', '.sqlite3',
+        '.sqlite3-journal', '.sqlite3-shm', '.sqlite3-wal', '.tmp'
+    )) {
+        if ($name.EndsWith($suffix)) { return $false }
+    }
+    return $true
+}
+
+function Test-OperationalStatePath {
+    param([string]$RelativePath)
+
+    $normalized = ([string]$RelativePath).Replace('\', '/')
+    $parts = @($normalized -split '/')
+    $first = $parts[0].ToLowerInvariant()
+    if ($first -in @('.git', '.venv', 'backups', 'logs', 'media', 'runtime', 'staticfiles', 'tmp') -or
+        $first.StartsWith('.venv-roto-')) {
+        return $true
+    }
+    $lower = $normalized.ToLowerInvariant()
+    return $lower -in @('.env', 'db.sqlite3', 'db.sqlite3-wal', 'db.sqlite3-shm', 'db.sqlite3-journal')
+}
+
+function Test-ReleaseTreeManifest {
+    param(
+        [string]$Root,
+        [switch]$AllowDevelopmentTree
+    )
+
+    $versionPath = Join-Path $Root "VERSION"
+    if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf)) {
+        throw "La release no contiene VERSION."
+    }
+    $version = ([IO.File]::ReadAllText($versionPath, [Text.Encoding]::ASCII)).Trim()
+    if ($version -notmatch '^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$' -or $version.Contains("..")) {
+        throw "VERSION no tiene un formato válido."
+    }
+
+    $manifestPath = Join-Path $Root "_release\manifest.json"
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        if ($AllowDevelopmentTree) {
+            Write-Warning "Árbol de desarrollo sin manifiesto: se omite sólo por autorización explícita."
+            return $version
+        }
+        throw "Falta _release\manifest.json. Usa una release verificada o autoriza expresamente el árbol de desarrollo."
+    }
+    if ((Get-Item -LiteralPath $manifestPath).Length -gt 16MB) {
+        throw "El manifiesto de release excede el límite permitido."
+    }
+    try {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    catch {
+        throw "El manifiesto de release no es JSON válido."
+    }
+    $expectedProperties = @(
+        'artifact_name', 'content_policy', 'created_utc', 'dependency_bundle',
+        'file_count', 'files', 'format_version', 'payload_size', 'product',
+        'release_version', 'source_commit', 'source_date_epoch', 'source_dirty',
+        'target'
+    ) | Sort-Object
+    $actualProperties = @($manifest.PSObject.Properties.Name | Sort-Object)
+    if (($expectedProperties -join "`n") -cne ($actualProperties -join "`n")) {
+        throw "El manifiesto no contiene exactamente el esquema esperado."
+    }
+    if ($manifest.product -ne "LosTocayosPOS-Servidor" -or
+        $manifest.format_version -ne 2 -or
+        $manifest.content_policy -ne "edge-server-v2" -or
+        $manifest.release_version -ne $version -or
+        $manifest.artifact_name -cne "LosTocayosPOS-Servidor-$version.zip") {
+        throw "El manifiesto no coincide con el producto, formato o VERSION."
+    }
+    $targetProperties = @($manifest.target.PSObject.Properties.Name | Sort-Object)
+    $expectedTargetProperties = @('abi', 'bits', 'implementation', 'platform', 'python') | Sort-Object
+    if (($targetProperties -join "`n") -cne ($expectedTargetProperties -join "`n") -or
+        $manifest.target.implementation -cne 'cp' -or
+        $manifest.target.python -cne '3.13' -or
+        $manifest.target.abi -cne 'cp313' -or
+        $manifest.target.platform -cne 'win_amd64' -or
+        $manifest.target.bits -ne 64) {
+        throw "La release no declara el destino Windows CPython 3.13 de 64 bits."
+    }
+    if ($manifest.source_dirty -isnot [bool] -or $manifest.source_dirty) {
+        throw "La release procede de un árbol sucio o no verificable. Sólo se instalan releases construidas desde un checkout Git limpio."
+    }
+    if ([string]$manifest.source_commit -cnotmatch '^(?:[0-9a-f]{40}|[0-9a-f]{64})$' -or
+        ($manifest.source_date_epoch -isnot [int] -and $manifest.source_date_epoch -isnot [long]) -or
+        [long]$manifest.source_date_epoch -lt 315532800 -or
+        [long]$manifest.source_date_epoch -gt 4354819199) {
+        throw "El manifiesto no contiene una procedencia Git/fecha válida."
+    }
+    $expectedCreatedUtc = [DateTimeOffset]::FromUnixTimeSeconds(
+        [long]$manifest.source_date_epoch
+    ).UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
+    if ([string]$manifest.created_utc -cne $expectedCreatedUtc) {
+        throw "La fecha legible del manifiesto no coincide con SOURCE_DATE_EPOCH."
+    }
+    $dependencyBundle = [string]$manifest.dependency_bundle
+    if ($dependencyBundle -notin @("none", "wheelhouse")) {
+        throw "El manifiesto no declara un paquete de dependencias válido."
+    }
+    $files = @($manifest.files)
+    if (($manifest.file_count -isnot [int] -and $manifest.file_count -isnot [long]) -or
+        $files.Count -ne [int]$manifest.file_count -or -not $files.Count -or
+        ($manifest.payload_size -isnot [int] -and $manifest.payload_size -isnot [long]) -or
+        [long]$manifest.payload_size -lt 0) {
+        throw "El conteo de archivos del manifiesto no coincide."
+    }
+    $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $declaradas = @{}
+    [long]$payloadSize = 0
+    foreach ($file in $files) {
+        $fileProperties = @($file.PSObject.Properties.Name | Sort-Object)
+        if (($fileProperties -join "`n") -cne ((@('path', 'sha256', 'size') | Sort-Object) -join "`n") -or
+            ($file.size -isnot [int] -and $file.size -isnot [long]) -or [long]$file.size -lt 0 -or
+            [long]$file.size -gt 256MB) {
+            throw "El manifiesto contiene una entrada de archivo inválida."
+        }
+        $relative = [string]$file.path
+        if ([string]::IsNullOrWhiteSpace($relative) -or
+            $relative -match '\\|:|//|(^|/)\.\.?(/|$)|^/|/$|[\x00-\x1f\x7f]') {
+            throw "El manifiesto contiene una ruta no segura: $relative."
+        }
+        foreach ($pathPart in @($relative -split '/')) {
+            $baseName = @($pathPart -split '\.', 2)[0].ToLowerInvariant()
+            if ($pathPart.EndsWith(' ') -or $pathPart.EndsWith('.') -or
+                $baseName -in @('con', 'prn', 'aux', 'nul', 'clock$') -or
+                $baseName -match '^(?:com|lpt)[1-9]$') {
+                throw "El manifiesto contiene un nombre reservado de Windows: $relative."
+            }
+        }
+        if (-not (Test-ReleasePayloadPathAllowed -RelativePath $relative)) {
+            throw "El manifiesto declara una ruta excluida o con estado local: $relative."
+        }
+        $key = $relative.ToLowerInvariant()
+        if ($declaradas.ContainsKey($key)) { throw "El manifiesto contiene rutas duplicadas." }
+        $declaradas[$key] = $true
+        $target = [IO.Path]::GetFullPath((Join-Path $Root ($relative -replace '/', '\')))
+        if (-not $target.StartsWith($rootPath + '\', [StringComparison]::OrdinalIgnoreCase) -or
+            -not (Test-Path -LiteralPath $target -PathType Leaf)) {
+            throw "Falta un archivo declarado por la release: $relative."
+        }
+        Assert-ProjectPath -Path $target
+        $item = Get-Item -LiteralPath $target
+        if ($item.Length -ne [long]$file.size) {
+            throw "El tamaño no coincide para $relative."
+        }
+        $sha = [string]$file.sha256
+        if ($sha -notmatch '^[0-9a-f]{64}$' -or
+            (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sha) {
+            throw "El SHA-256 no coincide para $relative."
+        }
+        $payloadSize += [long]$file.size
+        if ($payloadSize -gt 1GB) { throw "El payload excede el límite permitido." }
+    }
+    if ($payloadSize -ne [long]$manifest.payload_size) {
+        throw "El tamaño total del manifiesto no coincide."
+    }
+    foreach ($required in @(
+        ".env.example", "VERSION", "requirements.txt", "requirements-lock.txt",
+        "manage.py", "servicio_windows.py", "pos/settings.py",
+    "personas/identidad.py",
+    "personas/management/commands/aprovisionar_sucursal.py",
+    "personas/management/commands/verificar_identidad_local.py",
+        "herramientas/validar_despliegue.py",
+        "certs/prod-ca-2021.crt", "datos/Listado-Productos.xlsx",
+        "instalar-servicio-lan.ps1",
+        "instalar-servidor.ps1", "actualizar-servidor.ps1",
+        "aprovisionar-sucursal.ps1", "reparar-permisos-servidor.ps1",
+        "respaldar-db-sqlite.ps1"
+    )) {
+        if (-not $declaradas.ContainsKey($required.ToLowerInvariant())) {
+            throw "El manifiesto no contiene el archivo obligatorio $required."
+        }
+    }
+    # Recorre toda la raíz para impedir módulos no declarados capaces de secuestrar
+    # imports. Sólo se omiten directorios de estado explícitos; código, scripts y
+    # configuraciones deben aparecer en el manifiesto aunque estén en una carpeta
+    # que la versión anterior no conocía.
+    $directoriosPendientes = New-Object 'System.Collections.Generic.Queue[string]'
+    $directoriosPendientes.Enqueue($rootPath)
+    while ($directoriosPendientes.Count) {
+        $directorioActual = $directoriosPendientes.Dequeue()
+        foreach ($entradaReal in Get-ChildItem -LiteralPath $directorioActual -Force) {
+            if ($entradaReal.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "La release contiene un enlace no declarado: $($entradaReal.FullName)."
+            }
+            $relativaReal = $entradaReal.FullName.Substring($rootPath.Length + 1).Replace('\', '/')
+            if ($entradaReal.PSIsContainer) {
+                if (-not (Test-OperationalStatePath -RelativePath $relativaReal)) {
+                    $directoriosPendientes.Enqueue($entradaReal.FullName)
+                }
+                continue
+            }
+            if ($relativaReal -ceq '_release/manifest.json' -or
+                (Test-OperationalStatePath -RelativePath $relativaReal)) {
+                continue
+            }
+            if (-not $declaradas.ContainsKey($relativaReal.ToLowerInvariant())) {
+                throw "El árbol contiene un archivo obsoleto o no declarado: $relativaReal. Extrae la release en staging limpio."
+            }
+        }
+    }
+    $wheelsDeclarados = @()
+    foreach ($file in $files) {
+        $wheelPath = [string]$file.path
+        $wheelParts = @($wheelPath -split '/')
+        if (-not $wheelParts[0].Equals("wheelhouse", [StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+        if ($wheelParts[0] -ne "wheelhouse" -or $wheelParts.Count -ne 2 -or
+            -not $wheelParts[1].EndsWith(".whl", [StringComparison]::OrdinalIgnoreCase)) {
+            throw "El wheelhouse del manifiesto sólo admite wheels en un directorio plano."
+        }
+        $wheelsDeclarados += $wheelPath
+    }
+    if (($dependencyBundle -eq "wheelhouse") -ne ($wheelsDeclarados.Count -gt 0)) {
+        throw "La declaración de dependencias no coincide con el wheelhouse de la release."
+    }
+    $wheelhousePath = Join-Path $Root "wheelhouse"
+    $wheelsEnDisco = @()
+    if (Test-Path -LiteralPath $wheelhousePath) {
+        Assert-ProjectPath -Path $wheelhousePath
+        if (-not (Test-Path -LiteralPath $wheelhousePath -PathType Container)) {
+            throw "wheelhouse debe ser un directorio real."
+        }
+        $entradasWheelhouse = @(Get-ChildItem -LiteralPath $wheelhousePath -Force)
+        if (@($entradasWheelhouse | Where-Object { $_.PSIsContainer }).Count) {
+            throw "wheelhouse debe ser plano."
+        }
+        $wheelsEnDisco = @($entradasWheelhouse | ForEach-Object {
+            "wheelhouse/" + $_.Name
+        })
+    }
+    $declaradosOrdenados = @($wheelsDeclarados | Sort-Object)
+    $discoOrdenados = @($wheelsEnDisco | Sort-Object)
+    if (($declaradosOrdenados -join "\n") -cne ($discoOrdenados -join "\n")) {
+        throw "El contenido real de wheelhouse no coincide exactamente con el manifiesto."
+    }
+    return $version
 }
 
 function Set-DotEnvValue {
@@ -237,6 +649,23 @@ function Test-MachinePythonPath {
     return Test-Path -LiteralPath $fullPath -PathType Leaf
 }
 
+function Get-VirtualEnvironmentBasePython {
+    param([string]$PythonPath)
+
+    $baseLines = @(
+        & $PythonPath -I -c "import sys; print(sys._base_executable)" 2>$null
+    )
+    if ($LASTEXITCODE -ne 0 -or $baseLines.Count -ne 1 -or
+        [string]::IsNullOrWhiteSpace([string]$baseLines[0])) {
+        throw "No se pudo resolver el CPython base de la .venv."
+    }
+    $basePython = [IO.Path]::GetFullPath(([string]$baseLines[0]).Trim())
+    if (-not (Test-MachinePythonPath -Path $basePython)) {
+        throw "La .venv no resuelve un Python de máquina permitido."
+    }
+    return $basePython
+}
+
 function Get-MachinePython {
     $candidates = @()
     if (Get-Command py -ErrorAction SilentlyContinue) {
@@ -249,13 +678,13 @@ function Get-MachinePython {
     foreach ($candidate in ($candidates | Select-Object -Unique)) {
         if (-not (Test-MachinePythonPath -Path $candidate)) { continue }
         try {
-            $base = & $candidate -I -c "import sys; from pathlib import Path; assert sys.version_info >= (3, 10); print(Path(sys.base_prefix) / 'python.exe')" 2>$null
+            $base = & $candidate -I -c "import sys; from pathlib import Path; assert sys.version_info[:2] == (3, 13) and sys.maxsize > 2**32; print(Path(sys.base_prefix) / 'python.exe')" 2>$null
             if ($LASTEXITCODE -eq 0 -and (Test-MachinePythonPath -Path ([string]$base))) {
                 return $candidate
             }
         } catch { continue }
     }
-    throw "No hay un Python de maquina ejecutable (3.10+). Instala Python para todos los usuarios y comprueba py -0p. No se han cambiado ACL ni detenido el servicio."
+    throw "No hay un Python 3.13 de 64 bits de maquina ejecutable. Instala Python 3.13 de 64 bits para todos los usuarios y comprueba py -0p. No se han cambiado ACL ni detenido el servicio."
 }
 
 function Restore-AdministrativeAccess {
@@ -287,7 +716,7 @@ function Test-VirtualEnvironment {
         if (-not (Test-Path -LiteralPath (Join-Path $Path 'pyvenv.cfg') -PathType Leaf)) { return $false }
         $executable = Join-Path $Path 'Scripts\python.exe'
         if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { return $false }
-        $base = & $executable -I -c "import sys, pip; from pathlib import Path; assert sys.prefix != sys.base_prefix; print(Path(sys.base_prefix) / 'python.exe')" 2>$null
+        $base = & $executable -I -c "import sys, pip; from pathlib import Path; assert sys.prefix != sys.base_prefix; assert sys.version_info[:2] == (3, 13) and sys.maxsize > 2**32; print(Path(sys.base_prefix) / 'python.exe')" 2>$null
         return $LASTEXITCODE -eq 0 -and (Test-MachinePythonPath -Path ([string]$base))
     } catch { return $false }
 }
@@ -316,6 +745,232 @@ function Initialize-VirtualEnvironment {
     }
 }
 
+function Test-RequirementsLockExact {
+    param([string]$PythonPath, [string]$RequirementsPath)
+
+    if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $RequirementsPath -PathType Leaf)) {
+        return $false
+    }
+    $validateLock = @'
+import sys
+from pathlib import Path
+try:
+    from packaging.markers import default_environment
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+    from packaging.version import Version
+except ImportError:
+    from pip._vendor.packaging.markers import default_environment
+    from pip._vendor.packaging.requirements import Requirement
+    from pip._vendor.packaging.utils import canonicalize_name
+    from pip._vendor.packaging.version import Version
+
+path = Path(sys.argv[1])
+if not path.is_file() or path.stat().st_size > 1024 * 1024:
+    raise SystemExit(1)
+environment = default_environment()
+environment.update({
+    'implementation_name': 'cpython', 'implementation_version': '3.13.0',
+    'os_name': 'nt', 'platform_machine': 'AMD64',
+    'platform_python_implementation': 'CPython', 'platform_release': '',
+    'platform_system': 'Windows', 'platform_version': '',
+    'python_full_version': '3.13.0', 'python_version': '3.13',
+    'sys_platform': 'win32', 'extra': '',
+})
+seen = set()
+active = set()
+try:
+    lines = path.read_text(encoding='utf-8-sig').splitlines()
+    for raw in lines:
+        raw = raw.strip()
+        if not raw or raw.startswith('#'):
+            continue
+        requirement = Requirement(raw)
+        specifiers = list(requirement.specifier)
+        if (requirement.url or requirement.extras or len(specifiers) != 1 or
+                specifiers[0].operator != '==' or specifiers[0].version.endswith('.*')):
+            raise ValueError('non-canonical lock')
+        name = canonicalize_name(requirement.name)
+        if name in seen:
+            raise ValueError('duplicate')
+        seen.add(name)
+        Version(specifiers[0].version)
+        if requirement.marker is None or requirement.marker.evaluate(environment):
+            active.add(name)
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if active and 'pywin32' in active else 1)
+'@
+    try {
+        & $PythonPath -I -c $validateLock $RequirementsPath *> $null
+        return $LASTEXITCODE -eq 0
+    }
+    catch { return $false }
+}
+
+function Test-LockedDependencies {
+    param(
+        [string]$PythonPath,
+        [string]$RequirementsPath,
+        [string]$WheelhousePath
+    )
+
+    if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) { return $false }
+    $reportPath = Join-Path ([IO.Path]::GetTempPath()) (
+        "tocayos-pip-report-" + [Guid]::NewGuid().ToString("N") + ".json"
+    )
+    $argumentos = @(
+        "-m", "pip", "install", "--dry-run", "--disable-pip-version-check",
+        "--no-index", "--report", $reportPath
+    )
+    if (Test-Path -LiteralPath $WheelhousePath -PathType Container) {
+        $argumentos += @("--find-links", $WheelhousePath)
+    }
+    $argumentos += @("-r", $RequirementsPath)
+    try {
+        & $PythonPath @argumentos *> $null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
+            return $false
+        }
+        $report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($null -eq $report -or $report.PSObject.Properties.Name -notcontains "install") {
+            return $false
+        }
+        # pip devuelve 0 aunque haya calculado un plan de instalación. El lock
+        # sólo está satisfecho cuando ese plan existe y está vacío.
+        if (@($report.install).Count -ne 0) { return $false }
+        $comprobarConjuntoExacto = @'
+import sys
+from importlib.metadata import distributions
+from pathlib import Path
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
+required = {}
+for raw in Path(sys.argv[1]).read_text(encoding='utf-8').splitlines():
+    raw = raw.strip()
+    if not raw or raw.startswith('#'):
+        continue
+    requirement = Requirement(raw)
+    if requirement.marker is not None and not requirement.marker.evaluate():
+        continue
+    specifiers = list(requirement.specifier)
+    if requirement.url or len(specifiers) != 1 or specifiers[0].operator != '==':
+        raise SystemExit(2)
+    name = canonicalize_name(requirement.name)
+    if name in required:
+        raise SystemExit(3)
+    required[name] = specifiers[0].version
+
+installed = {}
+for distribution in distributions():
+    raw_name = distribution.metadata.get('Name')
+    if not raw_name:
+        raise SystemExit(4)
+    name = canonicalize_name(raw_name)
+    if name in installed:
+        raise SystemExit(5)
+    installed[name] = distribution.version
+
+raise SystemExit(0 if installed == required else 1)
+'@
+        & $PythonPath -I -c $comprobarConjuntoExacto $RequirementsPath *> $null
+        return $LASTEXITCODE -eq 0
+    }
+    catch {
+        return $false
+    }
+    finally {
+        if (Test-Path -LiteralPath $reportPath -PathType Leaf) {
+            try { Remove-Item -LiteralPath $reportPath -Force -ErrorAction Stop }
+            catch { }
+        }
+    }
+}
+
+function Test-WheelhouseCompleteness {
+    param(
+        [string]$PythonPath,
+        [string]$RequirementsPath,
+        [string]$WheelhousePath
+    )
+
+    if (-not (Test-Path -LiteralPath $WheelhousePath -PathType Container)) {
+        return $false
+    }
+    $reportPath = Join-Path ([IO.Path]::GetTempPath()) (
+        "tocayos-pip-wheelhouse-" + [Guid]::NewGuid().ToString("N") + ".json"
+    )
+    $argumentos = @(
+        "-m", "pip", "install", "--dry-run", "--ignore-installed",
+        "--disable-pip-version-check", "--no-index", "--only-binary=:all:",
+        "--find-links", $WheelhousePath,
+        "--platform", "win_amd64", "--implementation", "cp",
+        "--python-version", "3.13", "--abi", "cp313",
+        "--report", $reportPath, "-r", $RequirementsPath
+    )
+    try {
+        & $PythonPath @argumentos *> $null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
+            return $false
+        }
+        $report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($null -eq $report -or $report.PSObject.Properties.Name -notcontains "install") {
+            return $false
+        }
+        $wheelhouseRoot = [IO.Path]::GetFullPath($WheelhousePath).TrimEnd('\')
+        $selected = @(
+            foreach ($installation in @($report.install)) {
+                $url = [string]$installation.download_info.url
+                $uri = $null
+                if (-not [Uri]::TryCreate($url, [UriKind]::Absolute, [ref]$uri) -or
+                    -not $uri.IsFile -or $uri.Query -or $uri.Fragment -or
+                    ($uri.Host -and -not $uri.Host.Equals('localhost', [StringComparison]::OrdinalIgnoreCase)) -or
+                    -not $uri.LocalPath.EndsWith(".whl", [StringComparison]::OrdinalIgnoreCase)) {
+                    return $false
+                }
+                $localPath = [IO.Path]::GetFullPath($uri.LocalPath)
+                if (-not (Test-Path -LiteralPath $localPath -PathType Leaf) -or
+                    -not [IO.Path]::GetDirectoryName($localPath).Equals(
+                        $wheelhouseRoot, [StringComparison]::OrdinalIgnoreCase
+                    )) {
+                    return $false
+                }
+                $localPath.ToLowerInvariant()
+            }
+        )
+        $delivered = @()
+        foreach ($entry in Get-ChildItem -LiteralPath $WheelhousePath -Force) {
+            if ($entry.PSIsContainer -or
+                -not $entry.Name.EndsWith(".whl", [StringComparison]::OrdinalIgnoreCase)) {
+                return $false
+            }
+            $delivered += [IO.Path]::GetFullPath($entry.FullName).ToLowerInvariant()
+        }
+        $selectedSorted = @($selected | Sort-Object)
+        $deliveredSorted = @($delivered | Sort-Object)
+        if (@($selectedSorted | Sort-Object -Unique).Count -ne $selectedSorted.Count -or
+            @($deliveredSorted | Sort-Object -Unique).Count -ne $deliveredSorted.Count -or
+            $selectedSorted.Count -ne $deliveredSorted.Count) {
+            return $false
+        }
+        for ($index = 0; $index -lt $selectedSorted.Count; $index++) {
+            if ($selectedSorted[$index] -ne $deliveredSorted[$index]) { return $false }
+        }
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        if (Test-Path -LiteralPath $reportPath -PathType Leaf) {
+            try { Remove-Item -LiteralPath $reportPath -Force -ErrorAction Stop }
+            catch { }
+        }
+    }
+}
+
 function Quote-TaskArgument {
     param([string]$Value)
 
@@ -323,6 +978,18 @@ function Quote-TaskArgument {
         throw "Las rutas de la tarea programada no pueden contener comillas dobles."
     }
     return '"' + $Value + '"'
+}
+
+function Get-WindowsPowerShellPath {
+    $systemDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::System)
+    if ([string]::IsNullOrWhiteSpace($systemDirectory)) {
+        throw "Windows no informó su directorio de sistema."
+    }
+    $powershell = Join-Path $systemDirectory "WindowsPowerShell\v1.0\powershell.exe"
+    if (-not (Test-Path -LiteralPath $powershell -PathType Leaf)) {
+        throw "No se encontró Windows PowerShell en la ruta del sistema: $powershell"
+    }
+    return (Resolve-Path -LiteralPath $powershell).Path
 }
 
 function Register-SqliteBackupTask {
@@ -339,7 +1006,7 @@ function Register-SqliteBackupTask {
         throw "No se encontro el script de respaldo $scriptRespaldo."
     }
     $hora = [TimeSpan]::ParseExact($DailyTime, "hh\:mm", [Globalization.CultureInfo]::InvariantCulture)
-    $powershell = Join-Path $PSHOME "powershell.exe"
+    $powershell = Get-WindowsPowerShellPath
     $argumentos = @(
         "-NoProfile",
         "-NonInteractive",
@@ -392,20 +1059,312 @@ function Invoke-SqliteBackup {
         [string]$DatabasePath,
         [string]$BackupRoot,
         [string]$LogPath,
-        [int]$RetentionDays
+        [int]$RetentionDays,
+        [Parameter(Mandatory = $true)][Threading.Mutex]$BackupMutex,
+        [ValidateRange(1, 3600)][int]$LockTimeoutSeconds = 600
     )
 
     if (-not (Test-Path -LiteralPath $scriptRespaldo)) {
         throw "No se encontro el script de respaldo $scriptRespaldo."
     }
-    & $scriptRespaldo `
-        -Python $PythonPath `
-        -DatabasePath $DatabasePath `
-        -BackupRoot $BackupRoot `
-        -LogPath $LogPath `
-        -RetentionDays $RetentionDays
-    if ($LASTEXITCODE -ne 0) {
-        throw "Fallo el respaldo verificable inicial de runtime\db.sqlite3."
+    $powershell = Get-WindowsPowerShellPath
+    $backupExitCode = $null
+    $released = $false
+    try {
+        # El hijo debe ser propietario del mutex mientras lee la venv y publica.
+        # El padre no muta nada hasta que el hijo termine y recupere el bloqueo.
+        $BackupMutex.ReleaseMutex()
+        $released = $true
+        & $powershell `
+            -NoProfile `
+            -NonInteractive `
+            -ExecutionPolicy Bypass `
+            -File $scriptRespaldo `
+            -Python $PythonPath `
+            -DatabasePath $DatabasePath `
+            -BackupRoot $BackupRoot `
+            -LogPath $LogPath `
+            -RetentionDays $RetentionDays
+        $backupExitCode = $LASTEXITCODE
+    }
+    finally {
+        if ($released) {
+            # Una vez iniciada la mutacion, ni la ruta normal ni el rollback
+            # pueden continuar sin recuperar la exclusion del respaldo.
+            Wait-BackupMutex -Mutex $BackupMutex -TimeoutSeconds 30 -RetryUntilAcquired
+        }
+    }
+    if ($backupExitCode -ne 0) {
+        throw "Falló el respaldo verificable de la base SQLite configurada."
+    }
+}
+
+function Enter-MaintenanceMutex {
+    $nombre = "Global\LosTocayosPOS-Mantenimiento-v1"
+    try {
+        $mutex = New-Object Threading.Mutex($false, $nombre)
+    }
+    catch {
+        throw "No se pudo abrir el bloqueo global de mantenimiento."
+    }
+    $adquirido = $false
+    try {
+        try {
+            $adquirido = $mutex.WaitOne(0)
+        }
+        catch [Threading.AbandonedMutexException] {
+            $adquirido = $true
+        }
+        if (-not $adquirido) {
+            throw "Ya hay otra instalacion, actualizacion, reparacion, adopcion o sesion de diagnostico en curso."
+        }
+        return $mutex
+    }
+    catch {
+        if (-not $adquirido) { $mutex.Dispose() }
+        throw
+    }
+}
+
+function Wait-BackupMutex {
+    param(
+        [Parameter(Mandatory = $true)][Threading.Mutex]$Mutex,
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 600,
+        [switch]$RetryUntilAcquired
+    )
+
+    do {
+        $acquired = $false
+        try {
+            $acquired = $Mutex.WaitOne([TimeSpan]::FromSeconds($TimeoutSeconds))
+        }
+        catch [Threading.AbandonedMutexException] {
+            $acquired = $true
+        }
+        if ($acquired) {
+            return
+        }
+        if (-not $RetryUntilAcquired) {
+            throw "Hay un respaldo SQLite en curso despues de $TimeoutSeconds segundos."
+        }
+        Write-Warning "El respaldo hijo termino, pero otro respaldo conserva el mutex; se esperara antes de continuar o revertir." -WarningAction Continue
+    } while ($true)
+}
+
+function Enter-BackupMutex {
+    param([ValidateRange(1, 3600)][int]$TimeoutSeconds = 600)
+
+    if ($PSVersionTable.PSEdition -ne "Desktop") {
+        throw "La instalacion protegida debe ejecutarse con Windows PowerShell 5.1."
+    }
+    $security = New-Object Security.AccessControl.MutexSecurity
+    $security.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @("S-1-5-18", "S-1-5-32-544")) {
+        $identity = New-Object Security.Principal.SecurityIdentifier($sid)
+        $rule = New-Object Security.AccessControl.MutexAccessRule(
+            $identity,
+            [Security.AccessControl.MutexRights]::FullControl,
+            [Security.AccessControl.AccessControlType]::Allow
+        )
+        [void]$security.AddAccessRule($rule)
+    }
+    $createdNew = $false
+    $mutex = New-Object Threading.Mutex(
+        $false,
+        "Global\LosTocayosPOS-RespaldoSQLite-v1",
+        [ref]$createdNew,
+        $security
+    )
+    try {
+        Wait-BackupMutex -Mutex $mutex -TimeoutSeconds $TimeoutSeconds
+        return $mutex
+    }
+    catch {
+        $mutex.Dispose()
+        throw
+    }
+}
+
+function Open-EnvironmentReadLock {
+    param([string]$Path)
+
+    try {
+        # FileShare.Read permite que Django y el servicio lean el mismo archivo,
+        # pero impide escribirlo, sustituirlo o borrarlo durante la actualizacion.
+        return [IO.File]::Open(
+            $Path,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::Read,
+            [IO.FileShare]::Read
+        )
+    }
+    catch {
+        throw "No se pudo bloquear .env para una actualizacion coherente."
+    }
+}
+
+function Assert-EnvironmentUnchanged {
+    param([string]$Path, [string]$ExpectedHash)
+
+    if ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -ne $ExpectedHash) {
+        throw ".env cambio durante la actualizacion; no se continuara."
+    }
+}
+
+$mantenimientoMutex = $null
+$respaldoMutex = $null
+$envReadLock = $null
+try {
+$mantenimientoMutex = Enter-MaintenanceMutex
+Assert-ProjectPath -Path $raiz
+if ($RepairPermissions) {
+    $respaldoMutex = Enter-BackupMutex
+    Restore-AdministrativeAccess
+    Write-Host "Acceso administrativo reparado. Repite ahora la instalación o actualización sin -RepairPermissions." -ForegroundColor Green
+    return
+}
+Set-SafePythonProcessEnvironment
+$machinePython = Get-MachinePython
+foreach ($archivo in @("VERSION", "requirements.txt", "requirements-lock.txt", "manage.py", "servicio_windows.py")) {
+    $stream = [IO.File]::OpenRead((Join-Path $raiz $archivo))
+    $stream.Dispose()
+}
+$releaseVersion = Test-ReleaseTreeManifest `
+    -Root $raiz `
+    -AllowDevelopmentTree:$AllowUnverifiedDevelopmentTree
+$requirementsLock = Join-Path $raiz "requirements-lock.txt"
+$wheelhouse = Join-Path $raiz "wheelhouse"
+if (-not (Test-RequirementsLockExact -PythonPath $machinePython -RequirementsPath $requirementsLock)) {
+    throw "requirements-lock.txt debe contener sólo pins exactos y activar pywin32 para Windows CPython 3.13."
+}
+$dependenciasFijadasPresentes = Test-LockedDependencies `
+    -PythonPath $python `
+    -RequirementsPath $requirementsLock `
+    -WheelhousePath $wheelhouse
+$wheelhousePresente = Test-Path -LiteralPath $wheelhouse -PathType Container
+$pythonResolucionWheelhouse = if (Test-VirtualEnvironment -Path (Join-Path $raiz ".venv")) {
+    $python
+}
+else {
+    $machinePython
+}
+if ($wheelhousePresente -and
+    -not (Test-WheelhouseCompleteness `
+        -PythonPath $pythonResolucionWheelhouse `
+        -RequirementsPath $requirementsLock `
+        -WheelhousePath $wheelhouse)) {
+    throw "El wheelhouse no contiene un conjunto válido y completo para requirements-lock.txt y este Python."
+}
+if (-not $dependenciasFijadasPresentes -and
+    -not $wheelhousePresente -and
+    -not $AllowOnlineDependencies) {
+    throw "Faltan dependencias fijadas y no hay wheelhouse local. Entrega una release completa o usa -AllowOnlineDependencies sólo durante desarrollo supervisado."
+}
+
+$existente = Get-Service -Name $nombreServicio -ErrorAction SilentlyContinue
+$envHashOriginal = $null
+$dbEnginePreflight = $null
+if ($Modo -eq "Instalar") {
+    $dbEnginePreflight = ConvertFrom-DotEnvDatabaseEngine (
+        Get-DotEnvValue -Path $entorno -Name "DB_ENGINE"
+    )
+    if ($dbEnginePreflight -ne "sqlite") {
+        throw "El instalador Windows actual sólo admite SQLite con respaldo verificable. PostgreSQL queda reservado para Docker/VPS hasta implementar pg_dump y restauración local."
+    }
+    if ($existente) {
+        throw "El servicio $nombreServicio ya existe. Usa actualizar-servidor.ps1; la instalación inicial no modifica una instancia registrada."
+    }
+    if (-not $PSBoundParameters.ContainsKey("AllowedHosts")) {
+        throw "La instalación exige AllowedHosts explícito; no se reutiliza una IP predeterminada de otra sucursal."
+    }
+    $SucursalClave = ConvertTo-SucursalClave -Value $SucursalClave
+    $SucursalNombre = ConvertTo-SucursalNombre -Value $SucursalNombre
+    if (-not [string]::IsNullOrWhiteSpace($SucursalId)) {
+        $sucursalGuid = [Guid]::Empty
+        if (-not [Guid]::TryParse($SucursalId.Trim(), [ref]$sucursalGuid) -or
+            $sucursalGuid -eq [Guid]::Empty) {
+            throw "SucursalId debe ser un UUID válido y distinto del UUID vacío."
+        }
+        $SucursalId = $sucursalGuid.ToString()
+    }
+    $sucursalExistente = Get-DotEnvValue -Path $entorno -Name "SUCURSAL_CLAVE"
+    if (-not [string]::IsNullOrWhiteSpace($sucursalExistente) -and
+        (ConvertTo-SucursalClave -Value $sucursalExistente) -ne $SucursalClave) {
+        throw "La identidad de .env no coincide con SucursalClave. No se puede reutilizar una instalación para otra sucursal."
+    }
+    if ($InicializarDatosArboledas -and $SucursalClave -ne "ARBOLEDAS") {
+        throw "InicializarDatosArboledas sólo es válido para la sucursal ARBOLEDAS."
+    }
+    $impresoras = @{
+        PRINTER_CAJA_HOST = $PrinterCajaHost
+        PRINTER_COCINA_HOST = $PrinterCocinaHost
+        PRINTER_BARRA_HOST = $PrinterBarraHost
+    }
+    foreach ($nombreImpresora in $impresoras.Keys) {
+        $hostImpresora = [string]$impresoras[$nombreImpresora]
+        if ($PrintBackend -eq "tcp" -and -not (Test-AllowedHost -Value $hostImpresora)) {
+            throw "$nombreImpresora es obligatorio y debe ser una IP o nombre concreto cuando PrintBackend=tcp."
+        }
+        if ($PrintBackend -eq "archivo" -and -not [string]::IsNullOrWhiteSpace($hostImpresora) -and
+            -not (Test-AllowedHost -Value $hostImpresora)) {
+            throw "$nombreImpresora no es una IP o nombre válido."
+        }
+    }
+}
+else {
+    if (-not $existente) {
+        throw "No existe el servicio $nombreServicio. Usa instalar-servidor.ps1 para una instalación inicial."
+    }
+    Assert-ServiceBelongsToProject -ServiceName $nombreServicio
+    foreach ($parametroProhibido in @(
+        "SucursalClave", "SucursalNombre", "SucursalId", "InicializarDatosArboledas", "SecretKey",
+        "AllowedHosts", "Port", "Threads", "ListenAddress", "TrustedProxy", "Https",
+        "AllowInsecureHttpLan", "PrintBackend", "PrinterCajaHost", "PrinterCocinaHost",
+        "PrinterBarraHost", "PrinterPort", "SkipFirewall", "BackupTime", "BackupRetentionDays",
+        "SkipBackupTask"
+    )) {
+        if ($PSBoundParameters.ContainsKey($parametroProhibido)) {
+            throw "El modo Actualizar no acepta $parametroProhibido; identidad y configuración operativa se conservan desde .env."
+        }
+    }
+    if (-not (Test-Path -LiteralPath $entorno -PathType Leaf)) {
+        throw "La actualización requiere un archivo .env ya aprovisionado."
+    }
+    $envReadLock = Open-EnvironmentReadLock -Path $entorno
+    $envHashOriginal = (Get-FileHash -LiteralPath $entorno -Algorithm SHA256).Hash
+    $dbEnginePreflight = ConvertFrom-DotEnvDatabaseEngine (
+        Get-DotEnvValue -Path $entorno -Name "DB_ENGINE"
+    )
+    $SucursalClave = ConvertTo-SucursalClave -Value (
+        Get-RequiredDotEnvValue -Path $entorno -Name "SUCURSAL_CLAVE"
+    )
+    $AllowedHosts = Get-RequiredDotEnvValue -Path $entorno -Name "DJANGO_ALLOWED_HOSTS"
+    $ListenAddress = Get-RequiredDotEnvValue -Path $entorno -Name "WAITRESS_HOST"
+    $Port = ConvertFrom-DotEnvInteger `
+        -Value (Get-RequiredDotEnvValue -Path $entorno -Name "WAITRESS_PORT") `
+        -Name "WAITRESS_PORT" -Minimum 1 -Maximum 65535
+    $Https = ConvertFrom-DotEnvBoolean `
+        -Value (Get-RequiredDotEnvValue -Path $entorno -Name "DJANGO_HTTPS") `
+        -Name "DJANGO_HTTPS"
+    $AllowInsecureHttpLan = ConvertFrom-DotEnvBoolean `
+        -Value (Get-RequiredDotEnvValue -Path $entorno -Name "ALLOW_INSECURE_HTTP_LAN") `
+        -Name "ALLOW_INSECURE_HTTP_LAN"
+    $TrustedProxy = Get-DotEnvValue -Path $entorno -Name "WAITRESS_TRUSTED_PROXY"
+    $BackupRetentionDays = 3650
+    if ($dbEnginePreflight -eq "postgres") {
+        throw "La actualización supervisada de PostgreSQL requiere un respaldo pg_dump aún no implementado; no se detendrá el servicio."
+    }
+    $sqliteConfigurada = Get-DotEnvValue -Path $entorno -Name "SQLITE_PATH"
+    if ([string]::IsNullOrWhiteSpace($sqliteConfigurada)) { $sqliteConfigurada = "db.sqlite3" }
+    $sqliteDestino = if ([IO.Path]::IsPathRooted($sqliteConfigurada)) {
+        [IO.Path]::GetFullPath($sqliteConfigurada)
+    }
+    else {
+        [IO.Path]::GetFullPath((Join-Path $raiz $sqliteConfigurada))
+    }
+    Assert-ProjectPath -Path $sqliteDestino
+    if (-not (Test-Path -LiteralPath $sqliteDestino -PathType Leaf)) {
+        throw "La base SQLite configurada no existe: $sqliteDestino. No se detendrá el servicio."
     }
 }
 
@@ -414,14 +1373,17 @@ if (-not $hosts.Count -or @($hosts | Where-Object { -not (Test-AllowedHost -Valu
     throw "AllowedHosts sólo acepta hosts/IP concretos, sin comodines, espacios, esquemas, rutas ni puertos."
 }
 
-if ($Https -and -not $PSBoundParameters.ContainsKey("ListenAddress")) {
+if ($Modo -eq "Instalar" -and $Https -and -not $PSBoundParameters.ContainsKey("ListenAddress")) {
     $ListenAddress = "127.0.0.1"
 }
 $direccionEscucha = $null
 if (-not [Net.IPAddress]::TryParse($ListenAddress, [ref]$direccionEscucha)) {
     throw "ListenAddress debe ser una dirección IP local concreta."
 }
-if ($Https -and [string]::IsNullOrWhiteSpace($TrustedProxy)) {
+if ($Modo -eq "Actualizar" -and $Https -and [string]::IsNullOrWhiteSpace($TrustedProxy)) {
+    throw "La actualización HTTPS requiere WAITRESS_TRUSTED_PROXY explícito en .env."
+}
+if ($Modo -eq "Instalar" -and $Https -and [string]::IsNullOrWhiteSpace($TrustedProxy)) {
     $TrustedProxy = if ($direccionEscucha.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6) {
         "::1"
     }
@@ -450,88 +1412,165 @@ if (-not $Https -and -not [Net.IPAddress]::IsLoopback($direccionEscucha) -and
     throw "HTTP LAN no cifra credenciales ni pedidos. Usa -Https o confirma el riesgo con -AllowInsecureHttpLan."
 }
 
-# Esta comprobacion precede a cualquier cambio de ACL, .env o servicio.
-$machinePython = Get-MachinePython
-Assert-ProjectPath -Path $raiz
-if ($RepairPermissions) { Restore-AdministrativeAccess }
-foreach ($archivo in @("requirements.txt", "manage.py", "servicio_windows.py")) {
-    $stream = [IO.File]::OpenRead((Join-Path $raiz $archivo))
-    $stream.Dispose()
+# Las comprobaciones de actualización son de sólo lectura y preceden al Stop-Service.
+if ($Modo -eq "Actualizar") {
+    if (-not (Test-VirtualEnvironment -Path (Join-Path $raiz ".venv"))) {
+        throw "La actualización requiere una .venv sana. El servicio continúa sin cambios."
+    }
+    Set-CanonicalProcessEnvironment -Path $entorno
+    & $python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','pos.settings'); import django; django.setup(); from personas.models import Sucursal; qs=Sucursal.objects.filter(clave=os.environ['SUCURSAL_CLAVE'], activa=True); raise SystemExit(0 if qs.count() == 1 and Sucursal.objects.count() == 1 else 1)"
+    if ($LASTEXITCODE -ne 0) {
+        throw "La base no contiene exactamente la identidad activa configurada. Ejecuta el aprovisionamiento controlado antes de actualizar."
+    }
 }
 
-$existente = Get-Service -Name $nombreServicio -ErrorAction SilentlyContinue
+$envExistiaAntesInstalacion = $Modo -eq "Instalar" -and (Test-Path -LiteralPath $entorno -PathType Leaf)
+[byte[]]$envBytesAntesInstalacion = @()
+if ($envExistiaAntesInstalacion) {
+    # La asignación tipada conserva correctamente un archivo de cero bytes en
+    # Windows PowerShell 5.1; una expresión de pipeline lo convertiría en null.
+    $envBytesAntesInstalacion = [IO.File]::ReadAllBytes($entorno)
+}
+$servicioDetenidoPorScript = $false
+$migracionIniciada = $false
+$runtimeModificado = $false
+$arranqueIntentadoPorScript = $false
+$respaldoMutex = Enter-BackupMutex
+try {
+if ($Modo -eq "Actualizar") {
+    Assert-EnvironmentUnchanged -Path $entorno -ExpectedHash $envHashOriginal
+}
 if ($existente -and $existente.Status -ne "Stopped") {
-    Write-Host "Deteniendo la versión anterior antes de actualizar archivos o base de datos..." -ForegroundColor Yellow
+    Write-Host "Deteniendo la versión anterior después de validar modo, identidad y configuración..." -ForegroundColor Yellow
     Stop-Service -Name $nombreServicio
+    $servicioDetenidoPorScript = $true
     $existente.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(30))
 }
 
+$runtimeModificado = $true
+$venvPath = Join-Path $raiz '.venv'
+if (-not $dependenciasFijadasPresentes -and (Test-VirtualEnvironment -Path $venvPath)) {
+    # pip instala o actualiza requisitos, pero no elimina distribuciones ajenas al
+    # lock. Se conserva el entorno anterior y se parte de una venv limpia para que
+    # el chequeo exacto final pueda garantizar ausencia de paquetes residuales.
+    $savedVenv = Join-Path $raiz (
+        '.venv-roto-dependencias-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' +
+        [Guid]::NewGuid().ToString('N').Substring(0, 8)
+    )
+    Assert-ProjectPath -Path $savedVenv
+    try {
+        Move-Item -LiteralPath $venvPath -Destination $savedVenv
+    }
+    catch {
+        throw "La .venv no coincide con el lock y no pudo conservarse en $savedVenv. El servicio permanece detenido para revisión."
+    }
+    Write-Host "Entorno con dependencias distintas conservado en $savedVenv" -ForegroundColor Yellow
+}
 Initialize-VirtualEnvironment -MachinePython $machinePython
-$pythonEscucha = [string](& $python -I -c "import sys; print(sys._base_executable)")
-if ($LASTEXITCODE -ne 0 -or -not (Test-MachinePythonPath -Path $pythonEscucha.Trim())) {
-    throw "No fue posible resolver el ejecutable de Python que escuchara en la LAN."
+Assert-ProjectPath -Path $python
+if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
+    throw "No existe el ejecutable de la .venv que atendera la LAN."
 }
-$pythonEscucha = $pythonEscucha.Trim()
+$firewallPython = Get-VirtualEnvironmentBasePython -PythonPath $python
+if (-not $firewallPython.Equals(
+    [IO.Path]::GetFullPath($machinePython), [StringComparison]::OrdinalIgnoreCase
+)) {
+    throw "La .venv no pertenece al Python de máquina seleccionado."
+}
 Write-Host "Instalando dependencias de produccion..." -ForegroundColor Yellow
-& $python -c "import pip; p=tuple(int(x) for x in pip.__version__.split('.')[:2]); raise SystemExit(0 if p >= (26, 2) else 1)"
-if ($LASTEXITCODE -ne 0) {
-    & $python -m pip install --upgrade "pip>=26.2,<27"
-    if ($LASTEXITCODE -ne 0) { throw "No fue posible actualizar pip a una version corregida." }
+if (-not $dependenciasFijadasPresentes) {
+    $argumentosPip = @("-m", "pip", "install")
+    if (Test-Path -LiteralPath $wheelhouse -PathType Container) {
+        $argumentosPip += @("--no-index", "--find-links", $wheelhouse)
+    }
+    elseif (-not $AllowOnlineDependencies) {
+        throw "No se permite resolver dependencias contra Internet sin autorización explícita."
+    }
+    $argumentosPip += @("-r", $requirementsLock)
+    & $python @argumentosPip
+    if ($LASTEXITCODE -ne 0) {
+        throw "Falló la instalación de dependencias fijadas; no se endurecieron las ACL."
+    }
 }
-& $python -m pip install -r (Join-Path $raiz "requirements.txt")
-if ($LASTEXITCODE -ne 0) { throw "Fallo la instalacion de dependencias; no se endurecieron las ACL." }
 & $python -m pip check
 if ($LASTEXITCODE -ne 0) { throw "Las dependencias instaladas no son compatibles." }
+if (-not (Test-LockedDependencies -PythonPath $python -RequirementsPath $requirementsLock -WheelhousePath $wheelhouse)) {
+    throw "El entorno no coincide con requirements-lock.txt después de instalar."
+}
 & $python $servicioPython --check-host
 if ($LASTEXITCODE -ne 0) { throw "El host del servicio no puede cargar Python y sus DLL. No se han endurecido las ACL." }
 & $python (Join-Path $raiz "herramientas\validar_despliegue.py")
 if ($LASTEXITCODE -ne 0) { throw "Fallo la validacion aislada; no se modifico .env ni se endurecieron las ACL." }
 
-$claveExistente = Get-DotEnvValue -Path $entorno -Name "DJANGO_SECRET_KEY"
-if ([string]::IsNullOrWhiteSpace($SecretKey)) {
-    $SecretKey = if ([string]::IsNullOrWhiteSpace($claveExistente)) { New-SecretKey } else { $claveExistente }
-}
-if ($SecretKey.Length -lt 50 -or
-    @($SecretKey.ToCharArray() | Sort-Object -Unique).Count -lt 5 -or
-    $SecretKey.ToLowerInvariant().StartsWith("cambiar") -or
-    $SecretKey.ToLowerInvariant().StartsWith("solo-desarrollo") -or
-    $SecretKey.ToLowerInvariant().StartsWith("clave-exclusiva-de-prueba") -or
-    $SecretKey.ToLowerInvariant().StartsWith("django-insecure-")) {
-    throw "SecretKey debe tener al menos 50 caracteres aleatorios y no ser un marcador de ejemplo."
-}
+if ($Modo -eq "Instalar") {
+    $claveExistente = Get-DotEnvValue -Path $entorno -Name "DJANGO_SECRET_KEY"
+    if ([string]::IsNullOrWhiteSpace($SecretKey)) {
+        $SecretKey = if ([string]::IsNullOrWhiteSpace($claveExistente)) { New-SecretKey } else { $claveExistente }
+    }
+    if ($SecretKey.Length -lt 50 -or
+        @($SecretKey.ToCharArray() | Sort-Object -Unique).Count -lt 5 -or
+        $SecretKey.ToLowerInvariant().StartsWith("cambiar") -or
+        $SecretKey.ToLowerInvariant().StartsWith("solo-desarrollo") -or
+        $SecretKey.ToLowerInvariant().StartsWith("clave-exclusiva-de-prueba") -or
+        $SecretKey.ToLowerInvariant().StartsWith("django-insecure-")) {
+        throw "SecretKey debe tener al menos 50 caracteres aleatorios y no ser un marcador de ejemplo."
+    }
 
-# Un .env nuevo se restringe antes de escribir secretos. Los existentes no se copian.
-if (-not (Test-Path -LiteralPath $entorno)) {
-    New-Item -ItemType File -Path $entorno | Out-Null
+    # Un .env nuevo se restringe antes de escribir secretos. Nunca se copia a una release.
+    if (-not (Test-Path -LiteralPath $entorno)) {
+        New-Item -ItemType File -Path $entorno | Out-Null
+    }
+    Protect-Path -Path $entorno -LocalServiceAccess "Read"
+    Set-DotEnvValue -Path $entorno -Name "DJANGO_SECRET_KEY" -Value $SecretKey
+    Set-DotEnvValue -Path $entorno -Name "DJANGO_DEBUG" -Value "false"
+    Set-DotEnvValue -Path $entorno -Name "DJANGO_ALLOWED_HOSTS" -Value $AllowedHosts
+    Set-DotEnvValue -Path $entorno -Name "DJANGO_HTTPS" -Value $(if ($Https) { "true" } else { "false" })
+    Set-DotEnvValue -Path $entorno -Name "ALLOW_INSECURE_HTTP_LAN" -Value $(if ($AllowInsecureHttpLan) { "true" } else { "false" })
+    Set-DotEnvValue -Path $entorno -Name "WAITRESS_HOST" -Value $ListenAddress
+    Set-DotEnvValue -Path $entorno -Name "WAITRESS_PORT" -Value $Port
+    Set-DotEnvValue -Path $entorno -Name "WAITRESS_THREADS" -Value $Threads
+    Set-DotEnvValue -Path $entorno -Name "WAITRESS_CONNECTION_LIMIT" -Value "100"
+    Set-DotEnvValue -Path $entorno -Name "WAITRESS_CHANNEL_TIMEOUT" -Value "30"
+    Set-DotEnvValue -Path $entorno -Name "WAITRESS_CLEANUP_INTERVAL" -Value "10"
+    Set-DotEnvValue -Path $entorno -Name "WAITRESS_TRUSTED_PROXY" -Value $TrustedProxy
+    Set-DotEnvValue -Path $entorno -Name "DB_ENGINE" -Value $dbEnginePreflight
+    Set-DotEnvValue -Path $entorno -Name "SUCURSAL_CLAVE" -Value $SucursalClave
+    Set-DotEnvValue -Path $entorno -Name "PRINT_BACKEND" -Value $PrintBackend
+    Set-DotEnvValue -Path $entorno -Name "PRINT_SYNC" -Value "false"
+    Set-DotEnvValue -Path $entorno -Name "PRINTER_CAJA_HOST" -Value $PrinterCajaHost
+    Set-DotEnvValue -Path $entorno -Name "PRINTER_COCINA_HOST" -Value $PrinterCocinaHost
+    Set-DotEnvValue -Path $entorno -Name "PRINTER_BARRA_HOST" -Value $PrinterBarraHost
+    Set-DotEnvValue -Path $entorno -Name "PRINTER_PORT" -Value $PrinterPort
 }
-Protect-Path -Path $entorno -LocalServiceAccess "Read"
-Set-DotEnvValue -Path $entorno -Name "DJANGO_SECRET_KEY" -Value $SecretKey
-Set-DotEnvValue -Path $entorno -Name "DJANGO_DEBUG" -Value "false"
-Set-DotEnvValue -Path $entorno -Name "DJANGO_ALLOWED_HOSTS" -Value $AllowedHosts
-Set-DotEnvValue -Path $entorno -Name "DJANGO_HTTPS" -Value $(if ($Https) { "true" } else { "false" })
-Set-DotEnvValue -Path $entorno -Name "ALLOW_INSECURE_HTTP_LAN" -Value $(if ($AllowInsecureHttpLan) { "true" } else { "false" })
-Set-DotEnvValue -Path $entorno -Name "WAITRESS_HOST" -Value $ListenAddress
-Set-DotEnvValue -Path $entorno -Name "WAITRESS_PORT" -Value $Port
-Set-DotEnvValue -Path $entorno -Name "WAITRESS_THREADS" -Value $Threads
-Set-DotEnvValue -Path $entorno -Name "WAITRESS_CONNECTION_LIMIT" -Value "100"
-Set-DotEnvValue -Path $entorno -Name "WAITRESS_CHANNEL_TIMEOUT" -Value "30"
-Set-DotEnvValue -Path $entorno -Name "WAITRESS_CLEANUP_INTERVAL" -Value "10"
-Set-DotEnvValue -Path $entorno -Name "WAITRESS_TRUSTED_PROXY" -Value $TrustedProxy
+Set-CanonicalProcessEnvironment -Path $entorno
 
-$dbEngine = Get-DotEnvValue -Path $entorno -Name "DB_ENGINE"
-$usaSqlite = [string]::IsNullOrWhiteSpace($dbEngine) -or $dbEngine.ToLowerInvariant() -eq "sqlite"
+$dbEngine = ConvertFrom-DotEnvDatabaseEngine (
+    Get-DotEnvValue -Path $entorno -Name "DB_ENGINE"
+)
+$usaSqlite = $dbEngine -eq "sqlite"
 $runtime = Join-Path $raiz "runtime"
-$sqliteDestino = Join-Path $runtime "db.sqlite3"
+if ($Modo -eq "Instalar") {
+    $sqliteDestino = Join-Path $runtime "db.sqlite3"
+}
 $backupRoot = Join-Path $raiz "backups"
 $backupLog = Join-Path $raiz "logs\sqlite-backup.log"
 if ($usaSqlite) {
     New-Item -ItemType Directory -Force -Path $runtime | Out-Null
-    if (-not (Test-Path -LiteralPath $sqliteDestino) -and (Test-Path -LiteralPath (Join-Path $raiz "db.sqlite3"))) {
+    if ($Modo -eq "Instalar" -and
+        -not (Test-Path -LiteralPath $sqliteDestino) -and
+        (Test-Path -LiteralPath (Join-Path $raiz "db.sqlite3"))) {
         & $python -c "import sqlite3, sys; from pathlib import Path; from contextlib import closing; src=Path(sys.argv[1]).resolve().as_uri() + '?mode=ro'; exec('with closing(sqlite3.connect(src, uri=True)) as source, closing(sqlite3.connect(sys.argv[2])) as dest:\n source.backup(dest)')" (Join-Path $raiz "db.sqlite3") $sqliteDestino
         if ($LASTEXITCODE -ne 0) { throw "No fue posible copiar SQLite de forma consistente a runtime." }
     }
-    Set-DotEnvValue -Path $entorno -Name "SQLITE_PATH" -Value "runtime/db.sqlite3"
+    if ($Modo -eq "Instalar") {
+        Set-DotEnvValue -Path $entorno -Name "SQLITE_PATH" -Value "runtime/db.sqlite3"
+    }
 }
+
+# SQLITE_PATH puede haberse normalizado durante una instalación. Recarga el
+# entorno después de escribirlo para que checks, respaldo, migraciones y servicio
+# operen sobre exactamente la misma base.
+Set-CanonicalProcessEnvironment -Path $entorno
 
 @("runtime", "backups", "logs", "media", "certs") | ForEach-Object {
     New-Item -ItemType Directory -Force -Path (Join-Path $raiz $_) | Out-Null
@@ -540,92 +1579,138 @@ if ($usaSqlite) {
 # Los respaldos y certificados permanecen restringidos incluso si falla una migracion.
 Protect-Path -Path $backupRoot -LocalServiceAccess "None"
 Protect-Path -Path (Join-Path $raiz "certs") -LocalServiceAccess "Read"
+if ($Modo -eq "Actualizar") {
+    Assert-EnvironmentUnchanged -Path $entorno -ExpectedHash $envHashOriginal
+    $respaldoEntorno = Join-Path $backupRoot (
+        "env-antes-actualizacion-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".backup"
+    )
+    Copy-Item -LiteralPath $entorno -Destination $respaldoEntorno
+    Protect-Path -Path $respaldoEntorno -LocalServiceAccess "None"
+    if ((Get-FileHash -LiteralPath $respaldoEntorno -Algorithm SHA256).Hash -ne $envHashOriginal) {
+        throw "El respaldo previo de .env no coincide con el archivo original."
+    }
+}
 
 & $python manage.py check --deploy
 if ($LASTEXITCODE -ne 0) { throw "La configuración Django de producción no es válida." }
 if ($usaSqlite -and (Test-Path -LiteralPath $sqliteDestino)) {
     Write-Host "Respaldo verificable antes de migrar..." -ForegroundColor Yellow
-    Invoke-SqliteBackup -PythonPath $python -DatabasePath $sqliteDestino -BackupRoot $backupRoot -LogPath $backupLog -RetentionDays $BackupRetentionDays
+    Invoke-SqliteBackup -PythonPath $python -DatabasePath $sqliteDestino -BackupRoot $backupRoot -LogPath $backupLog -RetentionDays $BackupRetentionDays -BackupMutex $respaldoMutex
 }
+& $python manage.py verificar_identidad_local
+if ($LASTEXITCODE -ne 0) {
+    throw "La base existente no pertenece de forma inequívoca a la sucursal configurada; no se ejecutaron migraciones."
+}
+if ($Modo -eq "Actualizar") {
+    Assert-EnvironmentUnchanged -Path $entorno -ExpectedHash $envHashOriginal
+}
+$migracionIniciada = $true
 & $python manage.py migrate --noinput
 if ($LASTEXITCODE -ne 0) { throw "Fallaron las migraciones." }
-& $python manage.py cargar_datos_iniciales
-if ($LASTEXITCODE -ne 0) { throw "Falló la carga de catálogos iniciales." }
+if ($Modo -eq "Instalar") {
+    $argumentosAprovisionamiento = @(
+        "manage.py", "aprovisionar_sucursal",
+        "--clave", $SucursalClave,
+        "--nombre", $SucursalNombre
+    )
+    if (-not [string]::IsNullOrWhiteSpace($SucursalId)) {
+        $argumentosAprovisionamiento += @("--sucursal-id", $SucursalId)
+    }
+    & $python @argumentosAprovisionamiento
+    if ($LASTEXITCODE -ne 0) { throw "Falló el aprovisionamiento explícito de la sucursal." }
+    if ($InicializarDatosArboledas) {
+        Write-Host "Aplicando la semilla histórica solicitada expresamente para ARBOLEDAS..." -ForegroundColor Yellow
+        & $python manage.py cargar_datos_iniciales
+        if ($LASTEXITCODE -ne 0) { throw "Falló la carga explícita de datos iniciales de Arboledas." }
+    }
+}
 & $python manage.py collectstatic --noinput
 if ($LASTEXITCODE -ne 0) { throw "Falló la recopilación de archivos estáticos." }
 
-if ($PrepareOnly) {
-    Write-Host "Preparacion completa. Repite sin -PrepareOnly para crear las cuentas faltantes e instalar el servicio." -ForegroundColor Green
-    return
-}
-
-& $python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','pos.settings'); import django; django.setup(); from django.contrib.auth import get_user_model; raise SystemExit(0 if get_user_model().objects.filter(is_active=True, is_superuser=True).exists() else 1)"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "No existe una cuenta administrativa. Crea la primera ahora; la contraseña no se mostrará." -ForegroundColor Yellow
-    & $python manage.py createsuperuser
+if ($Modo -eq "Instalar") {
+    & $python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','pos.settings'); import django; django.setup(); from django.contrib.auth import get_user_model; raise SystemExit(0 if get_user_model().objects.filter(is_active=True, is_superuser=True).exists() else 1)"
     if ($LASTEXITCODE -ne 0) {
-        throw "Debe existir al menos un superusuario antes de iniciar producción."
+        Write-Host "No existe una cuenta administrativa. Crea la primera ahora; la contraseña no se mostrará." -ForegroundColor Yellow
+        & $python manage.py createsuperuser
+        if ($LASTEXITCODE -ne 0) {
+            throw "Debe existir al menos un superusuario antes de iniciar producción."
+        }
     }
-}
 
-& $python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','pos.settings'); import django; django.setup(); from django.contrib.auth import get_user_model; U=get_user_model(); raise SystemExit(0 if U.objects.filter(is_active=True, is_superuser=False, perfil_pos__activo=True, perfil_pos__sucursal__clave=os.environ.get('SUCURSAL_CLAVE','ARBOLEDAS')).exists() else 1)"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Crea una cuenta operativa separada de la cuenta administrativa." -ForegroundColor Yellow
-    & $python manage.py crear_operador_pos
-    if ($LASTEXITCODE -ne 0) {
-        throw "Debe existir al menos una cuenta operativa vinculada a un perfil POS."
-    }
-}
-
-if ($usaSqlite -and -not $SkipBackupTask) {
-    Write-Host "Creando respaldo inicial verificable de runtime\db.sqlite3..." -ForegroundColor Yellow
-    Invoke-SqliteBackup `
-        -PythonPath $python `
-        -DatabasePath $sqliteDestino `
-        -BackupRoot $backupRoot `
-        -LogPath $backupLog `
-        -RetentionDays $BackupRetentionDays
-    Register-SqliteBackupTask `
-        -PythonPath $python `
-        -DatabasePath $sqliteDestino `
-        -BackupRoot $backupRoot `
-        -LogPath $backupLog `
-        -DailyTime $BackupTime `
-        -RetentionDays $BackupRetentionDays
-}
-else {
-    Remove-SqliteBackupTask
-    if ($usaSqlite) {
-        Write-Host "Se omitio la tarea programada de respaldo por -SkipBackupTask." -ForegroundColor Yellow
+    & $python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','pos.settings'); import django; django.setup(); from personas.models import UsuarioPOS; raise SystemExit(0 if UsuarioPOS.objects.filter(activo=True, sucursal__clave=os.environ['SUCURSAL_CLAVE']).exists() else 1)"
+    if ($LASTEXITCODE -eq 0) {
+        & $python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','pos.settings'); import django; django.setup(); from django.contrib.auth import get_user_model; U=get_user_model(); raise SystemExit(0 if U.objects.filter(is_active=True, is_superuser=False, perfil_pos__activo=True, perfil_pos__sucursal__clave=os.environ['SUCURSAL_CLAVE']).exists() else 1)"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Crea una cuenta operativa separada de la cuenta administrativa." -ForegroundColor Yellow
+            & $python manage.py crear_operador_pos
+            if ($LASTEXITCODE -ne 0) {
+                throw "Debe existir al menos una cuenta operativa vinculada a un perfil POS."
+            }
+        }
     }
     else {
-        Write-Host "DB_ENGINE no usa SQLite; se retiro la tarea programada de respaldo local." -ForegroundColor Yellow
+        Write-Host "La sucursal quedó identificada pero aún no tiene roles/perfiles POS. Configúralos desde la administración o mediante un paquete inicial autorizado." -ForegroundColor Yellow
     }
 }
 
-$accion = if ($existente) { "update" } else { "install" }
+if ($Modo -eq "Instalar") {
+    if ($usaSqlite -and -not $SkipBackupTask) {
+        Write-Host "Creando respaldo inicial verificable de runtime\db.sqlite3..." -ForegroundColor Yellow
+        Invoke-SqliteBackup `
+            -PythonPath $python `
+            -DatabasePath $sqliteDestino `
+            -BackupRoot $backupRoot `
+            -LogPath $backupLog `
+            -RetentionDays $BackupRetentionDays `
+            -BackupMutex $respaldoMutex
+        Register-SqliteBackupTask `
+            -PythonPath $python `
+            -DatabasePath $sqliteDestino `
+            -BackupRoot $backupRoot `
+            -LogPath $backupLog `
+            -DailyTime $BackupTime `
+            -RetentionDays $BackupRetentionDays
+    }
+    else {
+        Remove-SqliteBackupTask
+        if ($usaSqlite) {
+            Write-Host "Se omitio la tarea programada de respaldo por -SkipBackupTask." -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "DB_ENGINE no usa SQLite; se retiro la tarea programada de respaldo local." -ForegroundColor Yellow
+        }
+    }
+}
+
+if ($Modo -eq "Actualizar" -and
+    (Get-FileHash -LiteralPath $entorno -Algorithm SHA256).Hash -ne $envHashOriginal) {
+    throw "La actualización intentó modificar .env; el servicio permanece detenido para revisión."
+}
+
+$accion = if ($Modo -eq "Actualizar") { "update" } else { "install" }
 & $python $servicioPython --startup delayed --username "NT AUTHORITY\LocalService" $accion
 if ($LASTEXITCODE -ne 0) { throw "No fue posible $accion el servicio de Windows." }
 
-& sc.exe failure $nombreServicio reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "No fue posible configurar la recuperación automática del servicio." }
+if ($Modo -eq "Instalar") {
+    & sc.exe failure $nombreServicio reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "No fue posible configurar la recuperación automática del servicio." }
 
-if (-not $SkipFirewall -and -not $Https) {
+    # Una instalación explícita siempre retira una regla homónima residual. Así,
+    # -SkipFirewall y HTTPS significan realmente que la aplicación no deja esa
+    # apertura activa de una instalación anterior o incompleta.
     Get-NetFirewallRule -DisplayName $nombreFirewall -ErrorAction SilentlyContinue |
         Remove-NetFirewallRule
-    New-NetFirewallRule `
-        -DisplayName $nombreFirewall `
-        -Direction Inbound `
-        -Action Allow `
-        -Protocol TCP `
-        -LocalPort $Port `
-        -Profile Private `
-        -RemoteAddress LocalSubnet `
-        -Program $pythonEscucha | Out-Null
-}
-elseif ($Https) {
-    Get-NetFirewallRule -DisplayName $nombreFirewall -ErrorAction SilentlyContinue |
-        Remove-NetFirewallRule
+    if (-not $SkipFirewall -and -not $Https) {
+        New-NetFirewallRule `
+            -DisplayName $nombreFirewall `
+            -Direction Inbound `
+            -Action Allow `
+            -Protocol TCP `
+            -LocalPort $Port `
+            -Profile Private `
+            -RemoteAddress LocalSubnet `
+            -Program $firewallPython | Out-Null
+    }
 }
 
 # Solo tras dependencias, pruebas, checks, migraciones y registro del servicio.
@@ -634,10 +1719,22 @@ elseif ($Https) {
 Write-Host "Aplicando permisos de produccion..." -ForegroundColor Yellow
 Protect-ApplicationTree -Path $raiz
 
+if ($Modo -eq "Actualizar" -and
+    (Get-FileHash -LiteralPath $entorno -Algorithm SHA256).Hash -ne $envHashOriginal) {
+    throw "El contenido de .env cambió durante la actualización; no se iniciará el servicio."
+}
+
+$arranqueIntentadoPorScript = $true
 Start-Service -Name $nombreServicio
 (Get-Service -Name $nombreServicio).WaitForStatus("Running", [TimeSpan]::FromSeconds(30))
 
-$hostSalud = if ($ListenAddress -in @("0.0.0.0", "::")) { "127.0.0.1" } else { $ListenAddress }
+$hostSalud = if ($ListenAddress -eq "0.0.0.0") {
+    "127.0.0.1"
+} elseif ($ListenAddress -eq "::") {
+    "::1"
+} else {
+    $ListenAddress
+}
 if ($hostSalud.Contains(":") -and -not $hostSalud.StartsWith("[")) { $hostSalud = "[$hostSalud]" }
 $urlSalud = "http://${hostSalud}:$Port/salud/"
 $cabecerasSalud = @{ "Host" = $hosts[0] }
@@ -656,11 +1753,17 @@ do {
     if (-not $saludable) { Start-Sleep -Milliseconds 500 }
 } while (-not $saludable -and (Get-Date) -lt $limiteSalud)
 if (-not $saludable) {
-    throw "El servicio se instaló, pero /salud/ no respondió correctamente. Revisa logs\waitress.log."
+    throw "El servicio se registró, pero /salud/ no respondió correctamente. Revisa logs\waitress.log."
+}
+if ($Modo -eq "Actualizar" -and
+    (Get-FileHash -LiteralPath $entorno -Algorithm SHA256).Hash -ne $envHashOriginal) {
+    throw "El contenido de .env cambió después de iniciar el servicio."
 }
 
 Write-Host ""
-Write-Host "Servicio Los Tocayos POS instalado e iniciado con Waitress." -ForegroundColor Green
+Write-Host "Servicio Los Tocayos POS: operación $Modo completada e iniciada con Waitress." -ForegroundColor Green
+Write-Host "Versión: $releaseVersion"
+Write-Host "Sucursal: $SucursalClave"
 Write-Host "Hosts permitidos: $AllowedHosts"
 if ($Https) {
     Write-Host "Waitress escucha sólo en $ListenAddress y confía en el proxy $TrustedProxy. Publica HTTPS desde el proxy."
@@ -668,7 +1771,101 @@ if ($Https) {
 else {
     Write-Host "Puerto LAN: $Port (sólo perfil privado/subred local)"
 }
-Write-Host "La clave secreta quedó guardada en .env con permisos NTFS restringidos."
-if ($usaSqlite -and -not $SkipBackupTask) {
+if ($Modo -eq "Instalar") {
+    Write-Host "La clave secreta quedó guardada en .env con permisos NTFS restringidos."
+}
+else {
+    Write-Host "Identidad, secretos y configuración operativa de .env se conservaron sin cambios."
+}
+if ($Modo -eq "Instalar" -and $usaSqlite -and -not $SkipBackupTask) {
     Write-Host "Respaldo diario: tarea $nombreTareaRespaldo a las $BackupTime; retencion $BackupRetentionDays dias."
+}
+}
+catch {
+    $falloOriginal = $_
+    if ($arranqueIntentadoPorScript) {
+        try {
+            $servicioFallido = Get-Service -Name $nombreServicio -ErrorAction SilentlyContinue
+            if ($servicioFallido -and $servicioFallido.Status -ne "Stopped") {
+                Stop-Service -Name $nombreServicio
+                $servicioFallido.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(30))
+            }
+            Write-Warning "El arranque o la comprobación de salud falló; el servicio quedó detenido."
+        }
+        catch {
+            Write-Warning "Falló el arranque o la salud y tampoco fue posible confirmar el servicio detenido. Revísalo manualmente."
+        }
+    }
+    if ($Modo -eq "Actualizar" -and $servicioDetenidoPorScript -and
+        -not $runtimeModificado -and -not $migracionIniciada) {
+        try {
+            Start-Service -Name $nombreServicio
+            (Get-Service -Name $nombreServicio).WaitForStatus("Running", [TimeSpan]::FromSeconds(30))
+            Write-Warning "La actualización falló antes de iniciar migraciones; se volvió a iniciar el servicio existente."
+        }
+        catch {
+            Write-Warning "La actualización falló antes de migrar y tampoco fue posible reanudar el servicio. Revisa el Visor de eventos y logs\waitress.log."
+        }
+    }
+    elseif ($Modo -eq "Actualizar" -and ($runtimeModificado -or $migracionIniciada)) {
+        Write-Warning "El runtime o la base ya pudieron cambiar; no se intentará un arranque ciego ni rollback automático."
+    }
+    if ($Modo -eq "Instalar") {
+        try {
+            $servicioParcial = Get-Service -Name $nombreServicio -ErrorAction SilentlyContinue
+            if ($servicioParcial) {
+                Assert-ServiceBelongsToProject -ServiceName $nombreServicio
+                if ($servicioParcial.Status -ne "Stopped") {
+                    Stop-Service -Name $nombreServicio -ErrorAction Stop
+                    $servicioParcial.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(30))
+                }
+                & sc.exe delete $nombreServicio | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    throw "sc.exe no pudo retirar el servicio parcial."
+                }
+            }
+        }
+        catch {
+            Write-Warning "No fue posible retirar por completo el servicio parcial; comprueba LosTocayosPOS antes de reintentar."
+        }
+        try {
+            Remove-SqliteBackupTask
+            Get-NetFirewallRule -DisplayName $nombreFirewall -ErrorAction SilentlyContinue |
+                Remove-NetFirewallRule -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "No fue posible retirar por completo la tarea o regla de firewall parcial."
+        }
+        try {
+            if ($envExistiaAntesInstalacion) {
+                [IO.File]::WriteAllBytes($entorno, $envBytesAntesInstalacion)
+                Protect-Path -Path $entorno -LocalServiceAccess "Read"
+            }
+            elseif (Test-Path -LiteralPath $entorno) {
+                Remove-Item -LiteralPath $entorno -Force
+            }
+        }
+        catch {
+            Write-Warning "No fue posible restaurar .env después de la instalación fallida."
+        }
+        Write-Warning "Se revirtieron registro, tarea, firewall y configuración creados por la instalación. La base/runtime se conservaron para diagnóstico y un reintento con la misma identidad."
+    }
+    throw $falloOriginal
+}
+}
+finally {
+    if ($null -ne $respaldoMutex) {
+        try { $respaldoMutex.ReleaseMutex() }
+        catch { Write-Warning "No fue posible liberar normalmente el mutex de respaldo." }
+        finally { $respaldoMutex.Dispose() }
+    }
+    if ($null -ne $envReadLock) {
+        try { $envReadLock.Dispose() }
+        catch { Write-Warning "No fue posible liberar inmediatamente el bloqueo de .env." }
+    }
+    if ($null -ne $mantenimientoMutex) {
+        try { $mantenimientoMutex.ReleaseMutex() }
+        catch { Write-Warning "No fue posible liberar normalmente el mutex de mantenimiento." }
+        finally { $mantenimientoMutex.Dispose() }
+    }
 }

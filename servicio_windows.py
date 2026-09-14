@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from ipaddress import ip_address
@@ -19,22 +20,71 @@ PYTHON = BASE_DIR / ".venv" / "Scripts" / "python.exe"
 LOG_DIR = BASE_DIR / "logs"
 LOG_FILE = LOG_DIR / "waitress.log"
 
+_PREFIJOS_CONFIGURACION = (
+    "DJANGO_",
+    "DB_",
+    "WAITRESS_",
+    "POSTGRES_",
+    "POS_",
+    "SUCURSAL_",
+    "PRINT_",
+    "PRINTER_",
+    "PEDIDOS_SUCURSALES_",
+    "THERMAL_",
+)
+_VARIABLES_CONFIGURACION = {"ALLOW_INSECURE_HTTP_LAN", "DB_ENGINE", "SQLITE_PATH"}
+_NOMBRE_VARIABLE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def _es_variable_configuracion(nombre: str) -> bool:
+    return nombre in _VARIABLES_CONFIGURACION or nombre.startswith(_PREFIJOS_CONFIGURACION)
+
 
 def _cargar_entorno() -> None:
+    # services.exe puede heredar variables de máquina ajenas a esta instalación.
+    # Se eliminan antes de leer el archivo con ACL restringida para que una base,
+    # sucursal o impresora configurada globalmente nunca desvíe este servicio.
+    for nombre in tuple(os.environ):
+        nombre_canonico = nombre.upper()
+        if (
+            _es_variable_configuracion(nombre_canonico)
+            or nombre_canonico.startswith(("PYTHON", "PIP_"))
+            or nombre_canonico in {"VIRTUAL_ENV", "__PYVENV_LAUNCHER__"}
+        ):
+            os.environ.pop(nombre, None)
+
     ruta = BASE_DIR / ".env"
-    if not ruta.is_file():
-        return
-    for linea in ruta.read_text(encoding="utf-8-sig").splitlines():
-        linea = linea.strip()
-        if not linea or linea.startswith("#") or "=" not in linea:
-            continue
-        nombre, valor = linea.split("=", 1)
-        nombre = nombre.strip()
-        valor = valor.strip()
-        if len(valor) >= 2 and valor[0] == valor[-1] and valor[0] in {'"', "'"}:
-            valor = valor[1:-1]
-        if nombre:
-            os.environ.setdefault(nombre, valor)
+    vistas: set[str] = set()
+    if ruta.is_file():
+        for linea in ruta.read_text(encoding="utf-8-sig").splitlines():
+            linea = linea.strip()
+            if not linea or linea.startswith("#") or "=" not in linea:
+                continue
+            nombre, valor = linea.split("=", 1)
+            nombre = nombre.strip().upper()
+            valor = valor.strip()
+            if len(valor) >= 2 and valor[0] == valor[-1] and valor[0] in {'"', "'"}:
+                valor = valor[1:-1]
+            if (
+                nombre
+                and nombre not in vistas
+                and _NOMBRE_VARIABLE.fullmatch(nombre)
+                and _es_variable_configuracion(nombre)
+            ):
+                os.environ[nombre] = valor
+                vistas.add(nombre)
+
+    # Ni el entorno de máquina ni .env pueden seleccionar settings de pruebas o
+    # reactivar sus escapes deliberadamente inseguros en el servicio registrado.
+    os.environ["DJANGO_SETTINGS_MODULE"] = "pos.settings"
+    os.environ.pop("DJANGO_ALLOW_INSECURE_DEVELOPMENT", None)
+    os.environ.pop("DJANGO_ALLOW_INSECURE_TEST_SETTINGS", None)
+    os.environ["PYTHONNOUSERSITE"] = "1"
+    os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+    os.environ["PYTHONUTF8"] = "1"
+    os.environ["PIP_CONFIG_FILE"] = os.devnull
+    os.environ["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    os.environ["PIP_NO_INPUT"] = "1"
 
 
 def _entero_entorno(nombre: str, predeterminado: int, minimo: int, maximo: int) -> int:

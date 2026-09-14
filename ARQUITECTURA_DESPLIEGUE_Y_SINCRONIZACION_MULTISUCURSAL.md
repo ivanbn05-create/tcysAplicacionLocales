@@ -7,7 +7,7 @@ POS local de Los Tocayos en un producto instalable, actualizable y administrable
 en varias sucursales. Está pensado como material de continuidad para otro agente
 o para retomar el trabajo sin depender de conversaciones anteriores.
 
-**Estado a 2026-09-09:** dirección arquitectónica aceptada. Se eligió Hostinger
+**Estado a 2026-09-13:** dirección arquitectónica aceptada. Se eligió Hostinger
 KVM 2 como infraestructura central inicial prevista; el backend central, su
 aprovisionamiento y la sincronización general todavía no están implementados.
 
@@ -19,10 +19,13 @@ Este documento complementa a:
   probado en Arboledas y sus limitaciones.
 - `README.md`, que contiene la operación actual del proyecto.
 
-Cuando exista una contradicción sobre instalación, actualización, selección de
-sucursal, distribución del catálogo o habilitación de módulos, este documento
-representa la decisión más reciente. No sustituye las reglas de seguridad ni los
-procedimientos operativos de los otros documentos.
+La precedencia depende del tema. Para ejecutar, diagnosticar o recuperar el
+servidor Edge Windows **manda `DESPLIEGUE_WINDOWS.md`**, porque describe el código
+vigente y sus límites comprobados; `README.md` sólo lo resume. Este documento
+manda sobre la **dirección futura** multisucursal —VPS, catálogo central,
+módulos, enrolamiento y actualizador transaccional—, pero una propuesta futura
+no autoriza a saltarse el runbook ni afirmar que una capacidad ya está
+implementada.
 
 ## 2. Decisión principal
 
@@ -207,10 +210,9 @@ La base actual ya contiene piezas compatibles con el diseño objetivo:
 - el respaldo SQLite actual usa la API de respaldo de SQLite, calcula SHA-256,
   revisa integridad y claves foráneas, y ensaya restauración.
 
-La selección local de sucursal se realiza actualmente mediante
-`SUCURSAL_CLAVE`, cuyo valor predeterminado es `ARBOLEDAS`. El diseño futuro debe
-eliminar ese valor implícito en producción: una instalación sin identidad válida
-debe fallar antes de aceptar pedidos.
+La selección local de sucursal se realiza mediante `SUCURSAL_CLAVE`. Ya no
+existe un valor predeterminado en producción: una instalación sin identidad
+explícita y válida falla antes de aceptar pedidos.
 
 También debe distinguirse `Sucursal`, que identifica el local operativo, de
 `SucursalPedido`, que representa a las sucursales/clientes atendidos dentro del
@@ -222,75 +224,106 @@ módulo de pedidos mayoristas. No son identidades intercambiables.
 | --- | --- | --- |
 | Servicio Windows local | Host pywin32, DLL, cuenta `LocalService`, arranque, ACL y comprobaciones implementados | Validar la release final en Windows limpio y en una segunda sucursal |
 | Respaldo del Edge | Respaldo SQLite con integridad, hash y ensayo de restauración | Copia externa cifrada, alertas y política definitiva de retención |
-| Identidad y catálogo | Modelos por sucursal y precios con vigencia reutilizables | Eliminar identidad ARBOLEDAS implícita y publicar catálogos versionados |
+| Identidad y catálogo | `SUCURSAL_CLAVE` obligatoria, aprovisionamiento explícito e idempotente, modelos por sucursal y precios con vigencia reutilizables | Enrolamiento autorizado por VPS y publicación de catálogos versionados |
 | Pedidos desde `tcysPedidosSucursales` | Integración Supabase de sólo lectura e importación idempotente existente | Mantenerla operativamente separada del protocolo Edge-central |
 | Sincronización de ventas | `EventoOutbox` proporciona una base local | Definir contrato, reintentos, acuses y construir el inbox central |
-| Instalación y soporte | Preflight, reparación controlada, migraciones, servicio, firewall y salud disponibles | Separar instalación, aprovisionamiento, actualización y rollback |
+| Instalación y soporte | Instalación, adopción, actualización y reparación separadas; dependencias fijadas; `.env` preservado; respaldo, migración, servicio, firewall y salud disponibles | Validar en Windows limpio y añadir staging, cambio atómico, reanudación y rollback |
+| Release del Edge | `VERSION` autoritativa, ZIP reproducible, manifiesto v2 para `cp313/win_amd64`, pins exactos y wheelhouse offline validado | Firma digital, CI atestada e integración del ZIP con staging/actualizador |
 | Backend central | Modelado y responsabilidades documentados | Implementar API, panel general, PostgreSQL central, autenticación y auditoría |
 | Despliegue KVM 2 | Proveedor y tamaño inicial elegidos | Contratar, aprovisionar, endurecer, monitorear y probar recuperación/carga |
 
 El `docker-compose.yml` y el `Dockerfile` actuales **no constituyen el
 despliegue del VPS central**. El compose existente sirve como base local/de
 desarrollo: incluye PostgreSQL, aplicación y un proceso de impresión, publica el
-puerto 8000 y usa `entrypoint.sh`, que ejecuta migraciones y
-`cargar_datos_iniciales`. Carece de proxy HTTPS, respaldo externo y separación
-de responsabilidades central/Edge.
+puerto 8000 y usa `entrypoint.sh`. Ese arranque ya exige clave y nombre de
+sucursal, aprovisiona sólo esa identidad y nunca ejecuta la semilla histórica.
+La carga manual de Arboledas exige que esa sea la única identidad activa y ya
+aprovisionada, y tampoco crea usuarios ni PIN predeterminados.
+El contexto de construcción excluye secretos y estado local, usa el lock exacto
+y el worker de impresión espera la salud de la aplicación. Su configuración
+vive en `.env.docker`, separada del `.env` del servicio Windows. Aun así, carece de
+proxy HTTPS, respaldo externo y separación de responsabilidades central/Edge.
 
 El futuro despliegue central deberá vivir en una configuración independiente
 (por ejemplo, `deploy/vps/`), no incluir impresión local y no ejecutar ninguna
 semilla fijada a Arboledas. Este límite evita que un agente futuro despliegue el
 compose actual en KVM 2 suponiendo que el backend central ya existe.
 
-## 6. Limitaciones actuales que bloquean otras sucursales
+## 6. Hallazgos de línea base y límites restantes
 
-### 6.1 Instalación y actualización mezcladas
+Este bloque nació de la auditoría previa a la separación del instalador. Los
+apartados 6.1 a 6.4 se actualizaron para distinguir lo ya corregido de lo que
+todavía impide considerar el despliegue maduro.
 
-`instalar-servicio-lan.ps1` ejecuta actualmente, en una misma pasada:
+### 6.1 Operaciones separadas, actualización aún in-place
 
-1. preparación del entorno;
-2. instalación de dependencias;
-3. configuración de `.env`;
-4. respaldo;
-5. migraciones;
-6. `cargar_datos_iniciales`;
-7. recopilación de estáticos;
-8. creación o actualización del servicio;
-9. permisos, arranque y salud.
+`instalar-servidor.ps1`, `aprovisionar-sucursal.ps1`,
+`actualizar-servidor.ps1` y `reparar-permisos-servidor.ps1` ya exponen
+responsabilidades distintas. El motor compartido conserva dos recorridos
+explícitos: instalación y actualización. La actualización no cambia identidad,
+red, secretos, catálogo, cuentas, firewall ni tareas programadas.
 
-Esto no es un actualizador seguro. Un fallo intermedio puede dejar la versión
-activa parcialmente modificada o el servicio detenido.
+Sigue siendo una actualización supervisada sobre el mismo árbol y la misma
+`.venv`: aún no extrae a staging, conmuta releases ni ejecuta rollback. Un
+fallo después de modificar runtime o iniciar migraciones deja deliberadamente
+el servicio detenido para revisión.
 
 ### 6.2 Inicialización fijada a Arboledas
 
 `catalogo/management/commands/cargar_datos_iniciales.py`:
 
-- crea o selecciona siempre `ARBOLEDAS`;
+- exige que `ARBOLEDAS` sea la única sucursal activa y que ya esté aprovisionada;
 - contiene el menú y precios dentro de código Python;
+- incorpora temporalmente `datos/Listado-Productos.xlsx` para reproducir el
+  traspaso inicial de nombres de Arboledas;
 - actualiza o reactiva productos incluidos;
 - puede desactivar categorías o productos ajenos a la lista;
 - prepara posiciones y el catálogo de pedidos de sucursales;
-- crea inicialmente Caja con PIN `1111` si no existe.
+- no crea usuarios ni PIN; los perfiles operativos se dan de alta por separado.
 
-El instalador llama incondicionalmente a este comando. Por tanto, no debe
-ejecutarse sobre otra sucursal ni formar parte de una actualización ordinaria.
+El instalador ya no llama incondicionalmente a este comando. Sólo puede invocarlo
+durante una instalación de `ARBOLEDAS` mediante
+`-InicializarDatosArboledas`; nunca forma parte de una actualización. El
+comando sigue siendo una semilla histórica con efectos amplios y debe sustituirse
+por publicaciones de catálogo antes de desplegar otras sucursales. Su ejecución
+es ahora atómica: un fallo al abrir o importar el XLSX revierte también todo lo
+creado previamente por el comando. Esto evita una base parcial, pero no convierte
+el archivo histórico en una fuente de catálogo vigente.
 
-### 6.3 Entregas no reproducibles
+La inclusión de ese XLSX en la release común es una medida transitoria de
+migración, no el diseño objetivo. La fase de catálogo versionado debe retirarlo
+del bundle de aplicación y entregar un paquete de datos independiente, validado y
+autorizado para la sucursal destinataria.
 
-`requirements.txt` usa rangos de versiones y el instalador ejecuta `pip install`
-durante el mantenimiento. Dos sucursales instaladas en fechas diferentes pueden
-terminar con dependencias distintas. El servidor tampoco dispone aún de un
-artefacto firmado y versionado que contenga todo lo necesario.
+### 6.3 Release reproducible, autenticidad pendiente
+
+`requirements-lock.txt` admite únicamente pins exactos `nombre==versión` y debe
+mantener activo `pywin32` para Windows. Una release productiva del Edge Windows
+lleva obligatoriamente un wheelhouse offline plano cuya cobertura se prueba al
+construir y al instalar para CPython 3.13 x64 (`cp313/win_amd64`). El formato de
+manifiesto v2 declara ese target y valida metadatos `WHEEL`, hashes/tamaños de
+`RECORD`, contenido y SHA-256. Un paquete `source-only` sirve para auditoría o
+desarrollo controlado, no como entrega productiva a una sucursal.
+
+El ZIP ya es reproducible y verificable, pero aún falta firma digital: sustituir
+conjuntamente ZIP, manifiesto y sumas podría suplantar al publicador. La
+resolución en línea sólo existe como excepción explícita de desarrollo y no es
+el flujo de una entrega.
 
 El paquete de `desktop/build-package.ps1` corresponde únicamente al cliente
 ligero de Windows. Sus sumas SHA-256 detectan corrupción si el archivo de sumas
 es confiable, pero no autentican por sí solas el origen; los ejecutables aún no
 tienen firma digital.
 
-### 6.4 Ausencia de versionado operativo único
+### 6.4 Versionado del servidor iniciado, contrato operativo incompleto
 
-Todavía no existe una única fuente de versión para:
+`VERSION` ya es la fuente autoritativa de la release del servidor. El cliente
+Windows y su bootstrap comparten actualmente la versión `0.3.0.0`; además, el
+instalador del cliente registra la versión obtenida del ejecutable instalado y el
+bootstrap devuelve el código de salida real del instalador. Esto evita una
+inconsistencia puntual, pero todavía no constituye una versión coordinada de
+todo el ecosistema, que debe abarcar:
 
-- servidor local/Edge;
 - actualizador;
 - cliente Windows;
 - protocolo Edge-VPS;
@@ -552,12 +585,19 @@ Cuando se defina el conjunto mínimo:
 10. Crear una base vacía, ejecutar migraciones y aprovisionar únicamente los
     datos de la sucursal seleccionada.
 11. Descargar o importar la primera publicación de catálogo correspondiente.
-12. Registrar servicio, tarea de respaldo, firewall y ACL.
+12. Crear y verificar el respaldo pre-migración cuando ya exista SQLite;
+    registrar servicio, firewall y ACL, y registrar la tarea diaria salvo que se
+    haya omitido expresamente.
 13. Iniciar y validar salud, versión, base, catálogo, impresión no física y
     conectividad LAN.
 14. Realizar una prueba física local de cada impresora necesaria.
 15. Generar un informe de instalación sin secretos, con versiones, sucursal,
     módulos, respaldos y resultados.
+
+El respaldo verificable anterior a una migración es obligatorio. La tarea
+diaria es recomendable y predeterminada, pero operativamente opcional: omitirla
+no debe omitir el respaldo de la ventana de mantenimiento ni ocultar esa decisión
+en el informe.
 
 ### 10.3 Protección contra errores de identidad
 
@@ -800,7 +840,9 @@ Responsabilidad exclusiva de primera instalación o recuperación total:
 
 - instalar runtime y código;
 - crear directorios protegidos;
-- registrar servicio, firewall y respaldo;
+- registrar servicio, firewall, ACL y respaldo pre-migración obligatorio;
+- registrar por defecto la tarea diaria de respaldo, permitiendo su omisión
+  explícita cuando exista otro mecanismo operativo aprobado;
 - enrolar la sucursal;
 - preparar una base nueva;
 - crear cuentas iniciales;
@@ -883,9 +925,11 @@ C:\ProgramData\LosTocayosPOS\
 - código aprobado;
 - migraciones;
 - estáticos generados con nombres versionados/hash;
-- runtime de Python certificado o requisito exacto;
-- dependencias fijadas con hashes y preferentemente un wheelhouse offline;
-- manifiesto de archivos;
+- runtime certificado o requisito exacto de Python 3.13 (mayor/menor);
+- dependencias con pins exactos `nombre==versión` y wheelhouse offline obligatorio
+  para una release productiva del Edge Windows;
+- manifiesto v2 que declare `implementation=cp`, Python 3.13, ABI `cp313`,
+  plataforma `win_amd64` y arquitectura de 64 bits;
 - SHA-256;
 - firma digital/Authenticode;
 - compatibilidad de protocolo y esquema;
@@ -1019,7 +1063,8 @@ automatizará una instalación desatendida hasta haber probado repetidamente:
 - incluir todos los nuevos archivos de servicio, validación, migraciones y pruebas;
 - ejecutar suites completas;
 - crear una versión autoritativa y una release reproducible;
-- documentar el instalador actual como exclusivo de Arboledas hasta reemplazarlo.
+- documentar que el catálogo histórico sigue siendo exclusivo de Arboledas y no
+  forma parte del aprovisionamiento genérico.
 
 ### Fase 1. Separar instalación y actualización
 
@@ -1030,6 +1075,18 @@ automatizará una instalación desatendida hasta haber probado repetidamente:
 - eliminar PIN inicial predecible;
 - fijar dependencias y preparar paquete completo del servidor;
 - agregar versión/estado de instalación y verificación operativa.
+
+**Estado al 13 de septiembre de 2026:** está implementada la primera iteración
+local de esta fase: identidad obligatoria, comando de aprovisionamiento,
+interfaces separadas, semilla histórica opt-in, lock exacto, `VERSION`,
+manifiesto v2 dirigido a `cp313/win_amd64` y wheelhouse offline comprobado.
+También se conserva `.env` byte por
+byte en actualización, se bloquea contra escritura o sustitución durante toda la
+operación, se revalida antes de cada fase crítica y un mutex global impide dos
+mantenimientos locales simultáneos. También se valida la pertenencia del servicio
+y de la base antes de detenerlo. Falta validar instalación limpia en otro Windows
+y completar el estado persistente de instalación; staging, firma, conmutación,
+diario reanudable y rollback siguen deliberadamente en la fase 5.
 
 ### Fase 2. Catálogo local versionado
 
@@ -1073,7 +1130,8 @@ exista el VPS. Así se valida el modelo de datos y el aplicador local.
 - adoptar `Program Files`/`ProgramData` y releases por versión;
 - firmar artefactos y manifiestos;
 - preparar en staging antes de detener;
-- agregar mantenimiento, mutex y diario reanudable;
+- evolucionar el mutex local ya implementado hacia un estado de mantenimiento
+  persistente y un diario reanudable;
 - implementar cambio atómico y rollback;
 - desplegar por anillos piloto/estable.
 
@@ -1135,7 +1193,8 @@ exista el VPS. Así se valida el modelo de datos y el aplicador local.
 - restauración pre-update cuando sea imprescindible;
 - conservación de `.env`, sucursal, usuarios, catálogo, imágenes y ventas;
 - navegador sin recursos estáticos mezclados;
-- servicio, worker de impresión, firewall, tarea de respaldo y salud finales.
+- servicio, worker de impresión, firewall, respaldo previo, tarea diaria cuando
+  esté configurada y salud finales.
 
 ## 23. Decisiones explícitamente pendientes
 
@@ -1178,10 +1237,12 @@ Antes de implementar deberán confirmarse:
 - No ejecutar el instalador actual sobre otra sucursal asumiendo que basta cambiar
   IP o `SUCURSAL_CLAVE`.
 - No usar `cargar_datos_iniciales` como actualización de catálogo.
-- No distribuir sólo `instalar-servicio-lan.ps1`; requiere el resto de código,
-  herramientas, migraciones y pruebas compatibles.
+- No invocar ni distribuir sólo `instalar-servicio-lan.ps1`: es el motor interno.
+  El operador debe usar los wrappers y entregar el resto de código,
+  dependencias, herramientas, migraciones y pruebas compatibles.
 - No desplegar `docker-compose.yml`/`entrypoint.sh` actuales como backend
-  central: contienen responsabilidades locales y la semilla de Arboledas.
+  central: contienen responsabilidades Edge locales, incluido el proceso de
+  impresión; la semilla de Arboledas es opt-in, pero tampoco pertenece al VPS.
 - No copiar `.env`, bases, respaldos ni certificados privados entre sucursales.
 - No publicar PostgreSQL en Internet ni permitir que un Edge se conecte
   directamente a la base central; todo intercambio pasa por la API HTTPS.
@@ -1206,8 +1267,11 @@ Antes de implementar deberán confirmarse:
 
 ## 25. Archivos relevantes para retomar el trabajo
 
-- `instalar-servicio-lan.ps1`: instalador Windows actual, ACL, respaldo,
-  migraciones, servicio, firewall y salud.
+- `instalar-servidor.ps1`, `aprovisionar-sucursal.ps1`,
+  `actualizar-servidor.ps1` y `reparar-permisos-servidor.ps1`: puntos de entrada
+  admitidos para el operador.
+- `instalar-servicio-lan.ps1`: motor interno compartido de instalación y
+  actualización; no se invoca directamente.
 - `servicio_windows.py`: host del servicio, Waitress y worker de impresión.
 - `herramientas/host_servicio_windows.py`: preparación/validación del host nativo.
 - `herramientas/validar_despliegue.py`: suite aislada previa al despliegue.
@@ -1231,10 +1295,11 @@ Antes de implementar deberán confirmarse:
 
 ## 26. Próximo paso recomendado
 
-Antes de construir el VPS, implementar las fases 0 a 2: consolidar una release,
-separar instalación/actualización y crear publicaciones locales de catálogo
-versionadas. Esto permite validar desde ahora, sin depender de infraestructura
-central, la misma semántica que después usará la consulta diaria al VPS.
+Antes de construir el VPS, cerrar las fases 0 y 1 validando la release v2
+productiva en un Windows limpio y una segunda sucursal, y después crear las
+publicaciones locales de catálogo versionadas de la fase 2. Esto permite validar
+desde ahora, sin depender de infraestructura central, la misma semántica que
+después usará la consulta diaria al VPS.
 
 La primera prueba integral debe instalar la release dorada en un Windows limpio,
 aprovisionar Arboledas y una sucursal distinta, aplicar dos versiones de catálogo,

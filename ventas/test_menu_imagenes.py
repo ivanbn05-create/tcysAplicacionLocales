@@ -19,6 +19,12 @@ from .menu_imagenes import (
 class ImagenesMenuTests(TestCase):
     @classmethod
     def setUpTestData(cls):
+        call_command(
+            "aprovisionar_sucursal",
+            clave="ARBOLEDAS",
+            nombre="Arboledas",
+            verbosity=0,
+        )
         call_command("cargar_datos_iniciales", verbosity=0)
         cls.sucursal = Sucursal.objects.get(clave="ARBOLEDAS")
 

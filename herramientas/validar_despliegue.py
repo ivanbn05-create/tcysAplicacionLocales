@@ -44,6 +44,7 @@ def main() -> int:
             "DJANGO_ALLOWED_HOSTS": "localhost,127.0.0.1",
             "DB_ENGINE": "sqlite",
             "SQLITE_PATH": str(snapshot / "check.sqlite3"),
+            "SUCURSAL_CLAVE": "ARBOLEDAS",
             "PEDIDOS_SUCURSALES_FUENTE": "desactivada",
             "PEDIDOS_SUCURSALES_AUTO_SYNC": "false",
             "PRINT_BACKEND": "archivo",
@@ -56,6 +57,8 @@ def main() -> int:
             "ALLOW_INSECURE_HTTP_LAN": "false",
         })
         commands = (
+            ("Migraciones Django declaradas",
+             ["manage.py", "makemigrations", "--check", "--dry-run"]),
             ("Suite Django aislada", ["manage.py", "test", "--noinput"]),
             ("Check deploy efimero HTTPS", ["manage.py", "check", "--deploy", "--fail-level", "WARNING"]),
             ("Respaldo SQLite: WAL, integridad, restauracion y retencion",

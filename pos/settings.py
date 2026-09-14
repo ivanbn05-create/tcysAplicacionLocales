@@ -5,6 +5,8 @@ from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
 
+from personas.identidad import normalizar_clave_sucursal
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -125,7 +127,11 @@ TEMPLATES = [
 ]
 WSGI_APPLICATION = "pos.wsgi.application"
 
-if os.getenv("DB_ENGINE", "sqlite").lower() == "postgres":
+DB_ENGINE = os.getenv("DB_ENGINE", "").strip().lower() or "sqlite"
+if DB_ENGINE not in {"sqlite", "postgres"}:
+    raise ImproperlyConfigured("DB_ENGINE debe ser 'sqlite' o 'postgres'.")
+
+if DB_ENGINE == "postgres":
     postgres_password = os.getenv("POSTGRES_PASSWORD", "").strip()
     if not postgres_password:
         raise ImproperlyConfigured("POSTGRES_PASSWORD es obligatoria al usar PostgreSQL.")
@@ -282,27 +288,47 @@ LOGGING = {
     },
 }
 
-SUCURSAL_CLAVE = os.getenv("SUCURSAL_CLAVE", "ARBOLEDAS")
+_SUCURSAL_CLAVE_CONFIGURADA = os.getenv("SUCURSAL_CLAVE", "").strip()
+if not _SUCURSAL_CLAVE_CONFIGURADA:
+    raise ImproperlyConfigured(
+        "SUCURSAL_CLAVE es obligatoria. Configura explícitamente la identidad "
+        "de esta instalación antes de iniciar Django."
+    )
+try:
+    SUCURSAL_CLAVE = normalizar_clave_sucursal(_SUCURSAL_CLAVE_CONFIGURADA)
+except ValueError as exc:
+    raise ImproperlyConfigured(f"SUCURSAL_CLAVE no es válida: {exc}") from exc
 POS_REQUIRE_AUTH = True
 LOGIN_URL = "/acceso/"
 POS_LOGIN_MAX_ATTEMPTS = int(os.getenv("POS_LOGIN_MAX_ATTEMPTS", "5"))
 POS_LOGIN_MAX_IP_ATTEMPTS = int(os.getenv("POS_LOGIN_MAX_IP_ATTEMPTS", "20"))
 POS_LOGIN_LOCKOUT_SECONDS = int(os.getenv("POS_LOGIN_LOCKOUT_SECONDS", "900"))
 POS_TICKET_LOCK_LEASE_SECONDS = int(os.getenv("POS_TICKET_LOCK_LEASE_SECONDS", "15"))
-PRINT_BACKEND = os.getenv("PRINT_BACKEND", "tcp").lower()
+PRINT_BACKEND = os.getenv("PRINT_BACKEND", "archivo").lower()
 if PRINT_BACKEND not in {"tcp", "archivo"}:
-    raise ValueError("PRINT_BACKEND debe ser 'tcp' o 'archivo'.")
+    raise ImproperlyConfigured("PRINT_BACKEND debe ser 'tcp' o 'archivo'.")
 PRINT_SYNC = env_bool("PRINT_SYNC", DEBUG)
 PRINTER_PORT = int(os.getenv("PRINTER_PORT", "9100"))
 PRINTER_TIMEOUT = float(os.getenv("PRINTER_TIMEOUT", "5"))
+if not 1 <= PRINTER_PORT <= 65535:
+    raise ImproperlyConfigured("PRINTER_PORT debe estar entre 1 y 65535.")
+if not 0 < PRINTER_TIMEOUT <= 60:
+    raise ImproperlyConfigured("PRINTER_TIMEOUT debe ser mayor que 0 y máximo 60 segundos.")
 PRINT_PREVIEW_RETENTION_DAYS = int(os.getenv("PRINT_PREVIEW_RETENTION_DAYS", "7"))
 if not 0 <= PRINT_PREVIEW_RETENTION_DAYS <= 30:
     raise ImproperlyConfigured("PRINT_PREVIEW_RETENTION_DAYS debe estar entre 0 y 30.")
 PRINTER_HOSTS = {
-    "caja": os.getenv("PRINTER_CAJA_HOST", "192.168.0.33"),
-    "cocina": os.getenv("PRINTER_COCINA_HOST", "192.168.0.33"),
-    "barra": os.getenv("PRINTER_BARRA_HOST", "192.168.0.33"),
+    "caja": os.getenv("PRINTER_CAJA_HOST", "").strip(),
+    "cocina": os.getenv("PRINTER_COCINA_HOST", "").strip(),
+    "barra": os.getenv("PRINTER_BARRA_HOST", "").strip(),
 }
+if PRINT_BACKEND == "tcp" and any(
+    not host_permitido(host) for host in PRINTER_HOSTS.values()
+):
+    raise ImproperlyConfigured(
+        "PRINTER_CAJA_HOST, PRINTER_COCINA_HOST y PRINTER_BARRA_HOST deben ser "
+        "direcciones concretas cuando PRINT_BACKEND=tcp."
+    )
 
 # Puente de sólo lectura con la base de pedidos. Supabase tiene prioridad y la
 # SQLite hermana queda como respaldo para desarrollo sin conexión.

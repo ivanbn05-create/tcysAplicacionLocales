@@ -3,11 +3,12 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.management import call_command
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
 
 from catalogo.configuracion_menu import configuracion_producto
 from catalogo.models import Categoria, Precio, Producto
-from personas.models import Rol, Sucursal, UsuarioPOS
+from personas.models import Rol, Sucursal
 from ventas.catalogo_sucursales import (
     PRODUCTOS_SUCURSALES,
     SUCURSALES_PEDIDO,
@@ -74,10 +75,20 @@ MENU = [
 
 CATEGORIAS = ["Taco", "Promoción", "Consomé y Barbacoa", "Lonches", "Gringas y Quesadillas", "Bebidas", "Postre"]
 class Command(BaseCommand):
-    help = "Crea la sucursal, posiciones y productos confirmados por el menú fotografiado."
+    help = "Carga en una sucursal ARBOLEDAS ya aprovisionada el catálogo histórico y sus posiciones."
 
+    @transaction.atomic
     def handle(self, *args, **options):
-        sucursal, _ = Sucursal.objects.get_or_create(clave="ARBOLEDAS", defaults={"nombre": "Arboledas"})
+        if settings.SUCURSAL_CLAVE != "ARBOLEDAS":
+            raise CommandError(
+                "La carga histórica sólo se admite cuando SUCURSAL_CLAVE es ARBOLEDAS."
+            )
+        sucursal = Sucursal.objects.filter(clave="ARBOLEDAS", activa=True).first()
+        if sucursal is None or Sucursal.objects.count() != 1:
+            raise CommandError(
+                "La base debe contener únicamente la sucursal ARBOLEDAS activa y ya "
+                "aprovisionada antes de cargar datos históricos."
+            )
         rol, _ = Rol.objects.update_or_create(
             sucursal=sucursal,
             nombre="Encargado",
@@ -89,14 +100,6 @@ class Command(BaseCommand):
                 "puede_sincronizar": True,
             },
         )
-        operador = UsuarioPOS.objects.filter(sucursal=sucursal, nombre="Caja").first()
-        if operador is None:
-            operador = UsuarioPOS(sucursal=sucursal, nombre="Caja", rol=rol)
-            operador.set_clave("1111")
-            operador.save()
-        elif operador.rol_id != rol.id:
-            operador.rol = rol
-            operador.save(update_fields=["rol"])
         Rol.objects.get_or_create(
             sucursal=sucursal,
             tipo=Rol.Tipo.MESERO,
@@ -241,7 +244,17 @@ class Command(BaseCommand):
 
         legado = Path(settings.BASE_DIR) / "datos" / "Listado-Productos.xlsx"
         if legado.is_file():
-            call_command("importar_catalogo_legado", str(legado), sucursal=sucursal.clave, verbosity=0)
+            try:
+                call_command(
+                    "importar_catalogo_legado",
+                    str(legado),
+                    sucursal=sucursal.clave,
+                    verbosity=0,
+                )
+            except Exception as exc:
+                raise CommandError(
+                    "No se pudo importar el XLSX histórico; se revirtió toda la carga."
+                ) from exc
 
         # También actualiza productos legados que ya existían antes de incorporar
         # las abreviaturas y los términos. Nunca los activa ni inventa precios.

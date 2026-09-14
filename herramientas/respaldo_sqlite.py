@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import sys
 from contextlib import closing
 from pathlib import Path
@@ -17,7 +18,8 @@ from typing import Any
 
 
 BACKUP_ARTEFACTO_RE = re.compile(
-    r"^db-\d{8}-\d{6}(?:-\d+)?\.sqlite3(?:\.(?:json|sha256))?$"
+    r"^(?P<backup>db-\d{8}-\d{6}(?:-\d+)?\.sqlite3)"
+    r"(?P<sidecar>\.(?:json|sha256))?$"
 )
 
 
@@ -38,6 +40,22 @@ def _append_json_log(log_path: Path, record: dict[str, Any]) -> None:
     with log_path.open("a", encoding="utf-8") as log_file:
         json.dump(record, log_file, ensure_ascii=False, default=_json_default, sort_keys=True)
         log_file.write("\n")
+
+
+def _write_text_atomic(path: Path, content: str, *, encoding: str) -> None:
+    """Publica un sidecar completo o no lo publica."""
+
+    temp_path = path.parent / (
+        f".{path.name}.{os.getpid()}-{os.urandom(8).hex()}.tmp"
+    )
+    try:
+        with temp_path.open("x", encoding=encoding, newline="") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def _hash_file(path: Path) -> str:
@@ -111,16 +129,38 @@ def _aplicar_retencion(
     conservar: set[Path],
 ) -> list[str]:
     cutoff = now.timestamp() - (retention_days * 24 * 60 * 60)
-    eliminados: list[str] = []
+    grupos: dict[str, list[tuple[Path, os.stat_result]]] = {}
     for path in backup_root.iterdir():
-        if not path.is_file() or path.resolve() in conservar:
+        match = BACKUP_ARTEFACTO_RE.fullmatch(path.name)
+        if match is None:
             continue
-        if not BACKUP_ARTEFACTO_RE.fullmatch(path.name):
+        try:
+            path_stat = path.lstat()
+        except FileNotFoundError:
             continue
-        if path.stat().st_mtime >= cutoff:
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        if stat.S_ISLNK(path_stat.st_mode) or (
+            getattr(path_stat, "st_file_attributes", 0) & reparse_flag
+        ):
+            raise BackupError(
+                f"No se aplica retencion sobre enlaces o junctions: {path.name}."
+            )
+        if not stat.S_ISREG(path_stat.st_mode):
             continue
-        path.unlink()
-        eliminados.append(path.name)
+        grupos.setdefault(match.group("backup"), []).append((path, path_stat))
+
+    eliminados: list[str] = []
+    for group_name in sorted(grupos):
+        group = grupos[group_name]
+        if any(path in conservar for path, _ in group):
+            continue
+        # Se conserva el triplete completo si cualquiera de sus piezas sigue
+        # dentro de retencion; nunca se separan DB, JSON y SHA por su mtime.
+        if max(path_stat.st_mtime for _, path_stat in group) >= cutoff:
+            continue
+        for path, _ in sorted(group, key=lambda item: item[0].name):
+            path.unlink()
+            eliminados.append(path.name)
     return eliminados
 
 
@@ -173,10 +213,11 @@ def realizar_respaldo(
         sha256 = _hash_file(final_backup)
         sha_path = Path(str(final_backup) + ".sha256")
         metadata_path = Path(str(final_backup) + ".json")
-        sha_path.write_text(f"{sha256}  {final_backup.name}\n", encoding="ascii")
-        conservar = {final_backup.resolve(), sha_path.resolve(), metadata_path.resolve()}
-        eliminados = _aplicar_retencion(backup_root, retention_days, now, conservar)
-
+        _write_text_atomic(
+            sha_path,
+            f"{sha256}  {final_backup.name}\n",
+            encoding="ascii",
+        )
         metadata: dict[str, Any] = {
             **record_base,
             "backup": str(final_backup),
@@ -188,9 +229,21 @@ def realizar_respaldo(
             "status": "ok",
             "sqlite_backup_check": backup_check,
             "restore_check": restore_check,
-            "retention_deleted": eliminados,
+            "retention_deleted": [],
         }
-        metadata_path.write_text(
+        _write_text_atomic(
+            metadata_path,
+            json.dumps(metadata, ensure_ascii=False, default=_json_default, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        # Solo se rota cuando el nuevo respaldo ya forma un triplete completo.
+        conservar = {final_backup, sha_path, metadata_path}
+        eliminados = _aplicar_retencion(backup_root, retention_days, now, conservar)
+        metadata["retention_deleted"] = eliminados
+        metadata["finished_at"] = dt.datetime.now(dt.timezone.utc)
+        _write_text_atomic(
+            metadata_path,
             json.dumps(metadata, ensure_ascii=False, default=_json_default, indent=2, sort_keys=True)
             + "\n",
             encoding="utf-8",
@@ -207,7 +260,13 @@ def realizar_respaldo(
             "error_type": type(exc).__name__,
             "error": str(exc),
         }
-        _append_json_log(log_path, error_record)
+        try:
+            _append_json_log(log_path, error_record)
+        except Exception as log_exc:
+            exc.add_note(
+                f"Ademas no se pudo registrar el error del respaldo: "
+                f"{type(log_exc).__name__}: {log_exc}"
+            )
         raise
 
 

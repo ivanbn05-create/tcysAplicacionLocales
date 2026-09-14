@@ -8,7 +8,7 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("Instalador del cliente Windows de Los Tocayos")]
 [assembly: AssemblyCompany("Los Tocayos")]
 [assembly: AssemblyProduct("Los Tocayos POS")]
-[assembly: AssemblyVersion("0.2.0.0")]
+[assembly: AssemblyVersion("0.3.0.0")]
 
 namespace LosTocayos.Installer
 {
@@ -28,7 +28,7 @@ namespace LosTocayos.Installer
         };
 
         [STAThread]
-        private static void Main()
+        private static int Main()
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
@@ -56,7 +56,17 @@ namespace LosTocayos.Installer
                     }
 
                     installer.WaitForExit();
+                    if (installer.ExitCode != 0)
+                    {
+                        MessageBox.Show(
+                            "La instalación no se completó. Código: " + installer.ExitCode + ".",
+                            "Instalador de Los Tocayos POS",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Error);
+                        return installer.ExitCode;
+                    }
                 }
+                return 0;
             }
             catch (Exception exception)
             {
@@ -65,6 +75,7 @@ namespace LosTocayos.Installer
                     "Instalador de Los Tocayos POS",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
+                return 1;
             }
             finally
             {

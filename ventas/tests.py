@@ -86,7 +86,21 @@ if "ventas.middleware.POSSessionAuthenticationMiddleware" not in SECURITY_MIDDLE
 class FlujoPOSTests(TestCase):
     @classmethod
     def setUpTestData(cls):
+        call_command(
+            "aprovisionar_sucursal",
+            clave="ARBOLEDAS",
+            nombre="Arboledas",
+            verbosity=0,
+        )
         call_command("cargar_datos_iniciales", verbosity=0)
+        rol = Rol.objects.get(sucursal__clave="ARBOLEDAS", tipo=Rol.Tipo.ENCARGADO)
+        cls.operador_pruebas = UsuarioPOS(
+            sucursal=rol.sucursal,
+            rol=rol,
+            nombre="Operador de pruebas",
+        )
+        cls.operador_pruebas.set_clave("9876")
+        cls.operador_pruebas.save()
 
     def setUp(self):
         self.temporal = tempfile.TemporaryDirectory()
@@ -103,6 +117,17 @@ class FlujoPOSTests(TestCase):
     def tearDown(self):
         self.ajustes.disable()
         self.temporal.cleanup()
+
+    def test_semilla_historica_no_crea_caja_ni_pin_predecible(self):
+        self.assertFalse(
+            UsuarioPOS.objects.filter(sucursal=self.sucursal, nombre="Caja").exists()
+        )
+        self.assertFalse(
+            any(
+                perfil.check_clave("1111")
+                for perfil in UsuarioPOS.objects.filter(sucursal=self.sucursal)
+            )
+        )
 
     def _autorizar_administrador(self, clave="1212"):
         return self.client.post(

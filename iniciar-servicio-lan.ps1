@@ -37,7 +37,7 @@ if (-not $PSBoundParameters.ContainsKey("Port")) {
 
 $servicio = Get-Service -Name $nombreServicio -ErrorAction SilentlyContinue
 if (-not $servicio) {
-    throw "El servicio no está instalado. Ejecuta primero instalar-servicio-lan.ps1."
+    throw "El servicio no está instalado. Ejecuta primero instalar-servidor.ps1."
 }
 if ($servicio.Status -ne "Running") {
     Start-Service -Name $nombreServicio

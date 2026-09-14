@@ -209,7 +209,9 @@ def _sucursal():
     try:
         return Sucursal.objects.get(clave=settings.SUCURSAL_CLAVE, activa=True)
     except Sucursal.DoesNotExist as exc:
-        raise Http404("Ejecuta: python manage.py cargar_datos_iniciales") from exc
+        raise Http404(
+            "La sucursal configurada no está aprovisionada o se encuentra inactiva."
+        ) from exc
 
 
 def _json(request):

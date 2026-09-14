@@ -15,6 +15,10 @@ Desde PowerShell, en la raíz del proyecto:
 El resultado queda en `desktop\dist\TocayosPOS.exe`. En esta primera versión el
 ejecutable usa el motor instalado de Microsoft Edge en modo aplicación; la ventana no
 muestra pestañas ni barra de direcciones y no requiere instalar un runtime adicional.
+El cliente y el bootstrap del instalador comparten actualmente la versión
+`0.3.0.0`. El bootstrap devuelve al sistema el código de salida real del script
+de instalación, y el registro de desinstalación obtiene `DisplayVersion` del
+ejecutable instalado en vez de mantener otro valor manual.
 
 ## Ejecución
 
@@ -25,7 +29,9 @@ muestra pestañas ni barra de direcciones y no requiere instalar un runtime adic
 Si la dirección configurada es local y el servidor no responde, el programa solicita a
 Windows iniciar el servicio `LosTocayosPOS`. No ejecuta migraciones ni crea un proceso
 `runserver`/Waitress fuera del servicio. La instalación inicial del servidor se hace
-una vez, como administrador, con `instalar-servicio-lan.ps1` desde la raíz del proyecto.
+una vez, como administrador, con `instalar-servidor.ps1` desde la raíz del proyecto.
+`instalar-servicio-lan.ps1` es únicamente el motor interno y no debe invocarse de
+forma directa.
 
 Para abrir directamente la interfaz táctil a pantalla completa:
 
@@ -75,3 +81,7 @@ En la computadora principal, el servicio usa Waitress, cuenta `LocalService`, AC
 restringidas y recuperación automática. El paquete de clientes no contiene la base ni
 credenciales del servidor. Sigue siendo recomendable firmar el instalador y usar un
 origen HTTPS antes de distribuirlo fuera de una LAN controlada.
+
+La coincidencia `0.3.0.0` sólo coordina hoy el cliente y su bootstrap. Sigue
+pendiente definir una política única que relacione versiones del servidor,
+actualizador, cliente, protocolo, esquema, catálogo, configuración y módulos.

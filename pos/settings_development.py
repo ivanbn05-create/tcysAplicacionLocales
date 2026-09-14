@@ -21,6 +21,7 @@ os.environ["DJANGO_SECRET_KEY"] = (
 os.environ["DJANGO_ALLOWED_HOSTS"] = "localhost,127.0.0.1,[::1],192.168.0.30,testserver"
 os.environ["DB_ENGINE"] = "sqlite"
 os.environ["SQLITE_PATH"] = "runtime/prueba/db.sqlite3"
+os.environ["SUCURSAL_CLAVE"] = "ARBOLEDAS"
 os.environ["PRINT_BACKEND"] = "archivo"
 os.environ["PRINT_SYNC"] = "true"
 os.environ["PEDIDOS_SUCURSALES_AUTO_SYNC"] = "false"
