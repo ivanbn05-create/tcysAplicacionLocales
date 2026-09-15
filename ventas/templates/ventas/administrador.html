@@ -58,10 +58,10 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
       <button class="rail-item" data-panel="personal" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M2.5 20a5.5 5.5 0 0 1 11 0M13 20a4 4 0 0 1 8 0"/></svg><span>Personal</span>
       </button>
-      <button class="rail-item" data-panel="domicilios" type="button">
+      <button class="rail-item" data-panel="domicilios" type="button"{% if not modulos.domicilios %} disabled title="Módulo no habilitado"{% endif %}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 16h11l3-6h-6L8 7H5M6 16a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zm10 0a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM18 3c-1.7 0-3 1.3-3 3 0 2.3 3 4.7 3 4.7S21 8.3 21 6c0-1.7-1.3-3-3-3z"/></svg><span>Domicilios</span>
       </button>
-      <button class="rail-item" data-panel="programados" type="button">
+      <button class="rail-item" data-panel="programados" type="button"{% if not modulos.programados %} disabled title="Módulo no habilitado"{% endif %}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="1"/><path d="M7 2v6M17 2v6M3 10h18M8 14h3M13 14h3M8 18h3"/></svg><span>Programados</span>
       </button>
       <button class="rail-item" data-panel="movimientos" type="button">
@@ -70,7 +70,7 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
       <button class="rail-item" data-panel="reportes" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5zM15 3v4h4M8 11h8M8 15h8M8 19h5"/></svg><span>Reportes y corte</span>
       </button>
-      <button class="rail-item" data-panel="sucursales" type="button">
+      <button class="rail-item" data-panel="sucursales" type="button"{% if not modulos.pedidos_sucursales %} disabled title="Módulo no habilitado"{% endif %}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h18v12H3zM2 5h20l-2 4H4zM6 21v-7h5v7M15 13h3v4h-3M4 9c1.3 2 2.7 2 4 0 1.3 2 2.7 2 4 0 1.3 2 2.7 2 4 0 1.3 2 2.7 2 4 0"/></svg><span>Sucursales</span>
       </button>
       <div class="rail-ayuda">

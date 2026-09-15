@@ -20,6 +20,7 @@ from catalogo.models import Producto
 from impresion.models import TrabajoImpresion
 from impresion.services import encolar_impresiones, encolar_reporte, estado_impresora
 from personas.models import Rol, Sucursal, UsuarioPOS
+from personas.modulos import modulo_habilitado, modulos_efectivos
 
 from .admin_services import (
     actualizar_movimiento,
@@ -161,6 +162,30 @@ def permiso_pos(campo):
             if perfil is None or not getattr(perfil.rol, campo, False):
                 response = JsonResponse(
                     {"error": "La cuenta no tiene permiso para realizar esta operación."},
+                    status=403,
+                )
+                patch_cache_control(response, no_store=True, private=True)
+                return response
+            return vista(request, *args, **kwargs)
+
+        return protegida
+
+    return decorar
+
+
+def requiere_modulo(clave):
+    """Rechaza una capacidad deshabilitada aunque se invoque la API directamente."""
+
+    def decorar(vista):
+        @wraps(vista)
+        def protegida(request, *args, **kwargs):
+            if not modulo_habilitado(_sucursal(), clave):
+                response = JsonResponse(
+                    {
+                        "error": "El módulo solicitado no está habilitado en esta sucursal.",
+                        "codigo": "modulo_no_habilitado",
+                        "modulo": clave,
+                    },
                     status=403,
                 )
                 patch_cache_control(response, no_store=True, private=True)
@@ -496,7 +521,9 @@ def _ticket_payload(ticket, device_id=""):
 
 def _inicio(request, modo_tableta=False):
     sucursal = _sucursal()
-    activar_programados(sucursal)
+    modulos = modulos_efectivos(sucursal)
+    if modulos["programados"]:
+        activar_programados(sucursal)
     perfil = getattr(request, "pos_user", None)
     acceso_total = not getattr(settings, "POS_REQUIRE_AUTH", True) or request.user.is_superuser
     permisos = {
@@ -529,6 +556,11 @@ def _inicio(request, modo_tableta=False):
                     "disponible_hoy": promocion_disponible(producto, timezone.localdate()) if promocion else True,
                 }
             )
+    canales_habilitados = {Mesa.Canal.COMEDOR, Mesa.Canal.RECOGER, Mesa.Canal.LLEVAR}
+    if modulos["domicilios"]:
+        canales_habilitados.add(Mesa.Canal.DOMICILIO)
+    if modulos["pedidos_sucursales"]:
+        canales_habilitados.add(Mesa.Canal.SUCURSALES)
     posiciones = [
         {
             "id": str(mesa.id),
@@ -540,7 +572,9 @@ def _inicio(request, modo_tableta=False):
             "cliente_sucursal_nombre": mesa.cliente_sucursal.nombre if mesa.cliente_sucursal_id else "",
             "cliente_sucursal_orden": mesa.cliente_sucursal.origen_id if mesa.cliente_sucursal_id else 0,
         }
-        for mesa in Mesa.objects.select_related("cliente_sucursal").filter(sucursal=sucursal, activa=True)
+        for mesa in Mesa.objects.select_related("cliente_sucursal").filter(
+            sucursal=sucursal, activa=True, canal__in=canales_habilitados
+        )
     ]
     response = render(
         request,
@@ -552,6 +586,7 @@ def _inicio(request, modo_tableta=False):
             "modo_tableta": modo_tableta,
             "asset_version": ASSET_VERSION,
             "permisos": permisos,
+            "modulos": modulos,
         },
     )
     patch_cache_control(response, no_store=True, private=True)
@@ -567,10 +602,15 @@ def tabletas(request):
 
 
 def administrador(request):
+    sucursal = _sucursal()
     response = render(
         request,
         "ventas/administrador.html",
-        {"sucursal": _sucursal(), "asset_version": ASSET_VERSION},
+        {
+            "sucursal": sucursal,
+            "asset_version": ASSET_VERSION,
+            "modulos": modulos_efectivos(sucursal),
+        },
     )
     patch_cache_control(response, no_store=True, private=True)
     return response
@@ -588,15 +628,21 @@ def salud(request):
 @require_GET
 def api_estado(request):
     sucursal = _sucursal()
+    modulos = modulos_efectivos(sucursal)
     try:
         device_id = _device_id(request)
     except ErrorSolicitudJSON:
         device_id = ""
-    activar_programados(sucursal)
+    if modulos["programados"]:
+        activar_programados(sucursal)
     integracion = {
-        "activa": settings.PEDIDOS_SUCURSALES_AUTO_SYNC,
+        "activa": settings.PEDIDOS_SUCURSALES_AUTO_SYNC and modulos["pedidos_sucursales"],
         "importados": 0,
-        "mensaje": "Sincronización de sucursales bajo demanda.",
+        "mensaje": (
+            "Sincronización de sucursales bajo demanda."
+            if modulos["pedidos_sucursales"]
+            else "Módulo de pedidos entre sucursales deshabilitado."
+        ),
     }
     activos = Ticket.objects.filter(
         sucursal=sucursal,
@@ -631,7 +677,7 @@ def api_estado(request):
         )
         .prefetch_related("partidas")
         .order_by("fecha_programada", "hora_programada", "creado_en")
-    ]
+    ] if modulos["programados"] else []
     return JsonResponse(
         {"tickets": tickets, "programados": programados, "integracion_sucursales": integracion}
     )
@@ -656,6 +702,7 @@ def api_salir_operador(request):
 
 
 @require_POST
+@requiere_modulo("pedidos_sucursales")
 @permiso_pos("puede_sincronizar")
 def api_sincronizar_sucursales(request):
     integracion = sincronizar_pedidos_confirmados(_sucursal())
@@ -718,6 +765,12 @@ def api_abrir_ticket(request):
         device_id = _device_id(request, datos)
         with transaction.atomic():
             mesa = Mesa.objects.get(pk=datos.get("mesa_id"), sucursal=sucursal, activa=True)
+            modulo_canal = {
+                Mesa.Canal.DOMICILIO: "domicilios",
+                Mesa.Canal.SUCURSALES: "pedidos_sucursales",
+            }.get(mesa.canal)
+            if modulo_canal and not modulo_habilitado(sucursal, modulo_canal):
+                raise ErrorVenta("El canal solicitado no está habilitado en esta sucursal.")
             perfil = _operador_actual_pos(request, sucursal)
             if perfil is None:
                 raise ErrorVenta("Identifícate con tu código antes de tomar una comanda.")
@@ -998,6 +1051,12 @@ def api_convertir_ticket(request, ticket_id):
             ticket = _ticket(ticket_id)
             ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
             canal_destino = str(datos.get("canal", ""))
+            modulo_canal = {
+                Mesa.Canal.DOMICILIO: "domicilios",
+                Mesa.Canal.SUCURSALES: "pedidos_sucursales",
+            }.get(canal_destino)
+            if modulo_canal and not modulo_habilitado(ticket.sucursal, modulo_canal):
+                raise ErrorVenta("El canal solicitado no está habilitado en esta sucursal.")
             ticket = convertir_tipo_ticket(ticket, canal_destino)
         return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
     except ErrorVenta as exc:
@@ -1200,6 +1259,7 @@ def api_cobrar(request, ticket_id):
 
 
 @require_POST
+@requiere_modulo("pedidos_sucursales")
 def api_completar_sucursal(request, ticket_id):
     device_id = ""
     try:
@@ -1338,6 +1398,7 @@ def api_admin_cambiar_clave(request):
 
 
 @require_POST
+@requiere_modulo("reparto")
 @acceso_administrador
 def api_admin_asignar_repartidor(request, ticket_id):
     try:
@@ -1353,6 +1414,7 @@ def api_admin_asignar_repartidor(request, ticket_id):
 
 
 @require_POST
+@requiere_modulo("programados")
 @acceso_administrador
 def api_admin_programar_ticket(request, ticket_id):
     try:
@@ -1429,6 +1491,7 @@ def _movimiento_payload(movimiento):
 
 
 @require_POST
+@requiere_modulo("reparto")
 @acceso_administrador
 def api_admin_liquidacion_repartidor(request):
     try:
@@ -1574,6 +1637,7 @@ def api_admin_corte_caja(request):
 
 
 @require_POST
+@requiere_modulo("pedidos_sucursales")
 @acceso_administrador
 def api_admin_corte_sucursal(request):
     try:

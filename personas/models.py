@@ -20,6 +20,52 @@ class Sucursal(models.Model):
         return self.nombre
 
 
+class Modulo(models.Model):
+    clave = models.SlugField(max_length=40, unique=True)
+    nombre = models.CharField(max_length=100)
+    descripcion = models.CharField(max_length=240, blank=True)
+    nucleo = models.BooleanField(default=False)
+    version_minima = models.CharField(max_length=32)
+    dependencias = models.ManyToManyField(
+        "self", symmetrical=False, blank=True, related_name="requerido_por"
+    )
+
+    class Meta:
+        ordering = ["-nucleo", "nombre"]
+        verbose_name = "Módulo"
+        verbose_name_plural = "Módulos"
+
+    def __str__(self):
+        return self.nombre
+
+
+class ModuloSucursal(models.Model):
+    sucursal = models.ForeignKey(
+        Sucursal, on_delete=models.CASCADE, related_name="modulos"
+    )
+    modulo = models.ForeignKey(
+        Modulo, on_delete=models.PROTECT, related_name="asignaciones"
+    )
+    habilitado = models.BooleanField(default=False)
+    configuracion = models.JSONField(default=dict, blank=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["modulo__nombre"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sucursal", "modulo"],
+                name="modulo_unico_sucursal",
+            )
+        ]
+        verbose_name = "Módulo por sucursal"
+        verbose_name_plural = "Módulos por sucursal"
+
+    def __str__(self):
+        estado = "habilitado" if self.habilitado else "deshabilitado"
+        return f"{self.sucursal}: {self.modulo} ({estado})"
+
+
 class Rol(models.Model):
     class Tipo(models.TextChoices):
         ENCARGADO = "encargado", "Encargado"

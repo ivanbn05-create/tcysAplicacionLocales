@@ -1682,10 +1682,11 @@ class FlujoPOSTests(TestCase):
         mesa = Mesa.objects.get(sucursal=self.sucursal, clave="MESA-5")
         ticket, _ = abrir_ticket(mesa)
         agregar_partida(ticket, self.producto, comensal=1)
-        with override_settings(PRINT_BACKEND="tcp"), patch(
+        with self.assertLogs("impresion.services", level="WARNING") as registros, override_settings(PRINT_BACKEND="tcp"), patch(
             "impresion.services.enviar_tcp", side_effect=OSError("impresora no disponible")
         ):
             trabajo = encolar_impresiones(ticket, TrabajoImpresion.Formato.COMANDA)[0]
+        self.assertTrue(any("impresión" in linea for linea in registros.output))
         trabajo.refresh_from_db()
         self.assertEqual(trabajo.estado, TrabajoImpresion.Estado.ERROR)
         self.assertEqual(trabajo.error, "No fue posible completar la impresión.")
@@ -2615,8 +2616,10 @@ class SeguridadPOSTests(TestCase):
     @patch("impresion.services.socket.create_connection", side_effect=OSError("10.99.88.77:9100 secreto"))
     def test_estado_impresora_no_expone_topologia_ni_error_crudo(self, _connection):
         self.client.force_login(self.user)
-        response = self.client.get("/api/impresion/estado/")
+        with self.assertLogs("impresion.services", level="WARNING") as registros:
+            response = self.client.get("/api/impresion/estado/")
         payload = response.json()
+        self.assertTrue(any("impresora configurada" in linea for linea in registros.output))
 
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("host", payload)

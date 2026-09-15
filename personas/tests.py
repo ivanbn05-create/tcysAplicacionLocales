@@ -6,12 +6,14 @@ from unittest.mock import patch
 from zipfile import BadZipFile
 
 from catalogo.models import Categoria, Precio, Producto
+from django.contrib.auth import authenticate, get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase, override_settings
 
 from personas.identidad import normalizar_clave_sucursal, normalizar_nombre_sucursal
-from personas.models import Rol, Sucursal
+from personas.models import ModuloSucursal, Rol, Sucursal, UsuarioPOS
+from personas.modulos import MODULOS_NUCLEO, configurar_modulos
 from ventas.models import Mesa, PrecioProductoSucursal, ProductoSucursal, SucursalPedido
 
 
@@ -203,3 +205,104 @@ class VerificarIdentidadLocalTests(TestCase):
         Sucursal.objects.create(clave="SUR", nombre="Sucursal Sur")
         with self.assertRaisesMessage(CommandError, "más de una identidad"):
             call_command("verificar_identidad_local", verbosity=0)
+
+
+@override_settings(SUCURSAL_CLAVE="NORTE")
+class ModulosSucursalTests(TestCase):
+    def setUp(self):
+        self.sucursal = Sucursal.objects.create(clave="NORTE", nombre="Sucursal Norte")
+
+    def test_configura_nucleo_y_resuelve_dependencias(self):
+        salida = StringIO()
+        call_command(
+            "configurar_modulos_sucursal",
+            modulos="programados",
+            stdout=salida,
+        )
+        estados = dict(
+            ModuloSucursal.objects.filter(sucursal=self.sucursal).values_list(
+                "modulo__clave", "habilitado"
+            )
+        )
+        self.assertTrue(all(estados[clave] for clave in MODULOS_NUCLEO))
+        self.assertTrue(estados["programados"])
+        self.assertTrue(estados["domicilios"])
+        self.assertFalse(estados["reparto"])
+        self.assertFalse(estados["pedidos_sucursales"])
+        nucleo = ModuloSucursal.objects.get(
+            sucursal=self.sucursal, modulo__clave="pos"
+        )
+        nucleo.habilitado = False
+        nucleo.save(update_fields=["habilitado", "actualizado_en"])
+        from personas.modulos import modulo_habilitado
+        self.assertTrue(modulo_habilitado(self.sucursal, "pos"))
+        self.assertIn("programados", salida.getvalue())
+
+    def test_rechaza_modulo_desconocido_sin_estado_parcial(self):
+        with self.assertRaisesMessage(CommandError, "desconocidos"):
+            call_command("configurar_modulos_sucursal", modulos="inventado")
+        self.assertFalse(ModuloSucursal.objects.filter(sucursal=self.sucursal).exists())
+
+    def test_desactivar_conserva_configuracion_y_datos(self):
+        configurar_modulos(self.sucursal, ["domicilios"])
+        asignacion = ModuloSucursal.objects.get(
+            sucursal=self.sucursal, modulo__clave="domicilios"
+        )
+        asignacion.configuracion = {"zona": "norte"}
+        asignacion.save(update_fields=["configuracion", "actualizado_en"])
+
+        call_command("configurar_modulos_sucursal", sin_opcionales=True, verbosity=0)
+
+        asignacion.refresh_from_db()
+        self.assertFalse(asignacion.habilitado)
+        self.assertEqual(asignacion.configuracion, {"zona": "norte"})
+
+    def test_api_y_ui_rechazan_modulos_deshabilitados(self):
+        call_command("configurar_modulos_sucursal", sin_opcionales=True, verbosity=0)
+        user = get_user_model().objects.create_superuser(
+            username="admin-modulos", password="ClaveSegura!2026"
+        )
+        self.client.force_login(user)
+
+        api = self.client.post("/api/sincronizacion/sucursales/")
+        self.assertEqual(api.status_code, 403)
+        self.assertEqual(api.json()["codigo"], "modulo_no_habilitado")
+
+        interfaz = self.client.get("/")
+        self.assertEqual(interfaz.status_code, 200)
+        self.assertNotContains(interfaz, 'data-canal="domicilio"')
+        self.assertNotContains(interfaz, 'data-canal="sucursales"')
+
+
+@override_settings(SUCURSAL_CLAVE="NORTE")
+class CrearOperadorInicialTests(TestCase):
+    def setUp(self):
+        self.sucursal = Sucursal.objects.create(clave="NORTE", nombre="Sucursal Norte")
+
+    @patch(
+        "personas.management.commands.crear_operador_pos.getpass",
+        side_effect=["ClaveOperativa!2026", "ClaveOperativa!2026"],
+    )
+    def test_crea_perfil_cuenta_y_pin_en_una_base_nueva(self, _getpass):
+        salida = StringIO()
+        call_command(
+            "crear_operador_pos",
+            username="operador",
+            nombre="Caja principal",
+            pin="4321",
+            crear_perfil_inicial=True,
+            stdout=salida,
+        )
+
+        perfil = UsuarioPOS.objects.select_related("cuenta", "rol").get()
+        self.assertEqual(perfil.nombre, "Caja principal")
+        self.assertEqual(perfil.rol.tipo, Rol.Tipo.ENCARGADO)
+        self.assertTrue(perfil.check_clave("4321"))
+        self.assertFalse(perfil.cuenta.is_staff)
+        self.assertIsNotNone(authenticate(username="operador", password="ClaveOperativa!2026"))
+        self.assertIn("vinculada", salida.getvalue())
+
+    def test_sin_autorizacion_de_alta_conserva_el_contrato_anterior(self):
+        with self.assertRaisesMessage(CommandError, "No hay un perfil POS libre"):
+            call_command("crear_operador_pos", username="operador", verbosity=0)
+        self.assertFalse(UsuarioPOS.objects.exists())

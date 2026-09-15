@@ -7,14 +7,58 @@ from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from personas.models import UsuarioPOS
+from personas.models import Rol, Sucursal, UsuarioPOS
 
 
 class Command(BaseCommand):
-    help = "Crea una cuenta Django no administrativa y la vincula con un perfil POS libre."
+    help = "Crea una cuenta operativa y, si se solicita, su primer perfil POS."
 
     def add_arguments(self, parser):
         parser.add_argument("--username")
+        parser.add_argument("--nombre")
+        parser.add_argument("--pin")
+        parser.add_argument("--crear-perfil-inicial", action="store_true")
+
+    def _crear_perfil_inicial(self, options):
+        try:
+            sucursal = Sucursal.objects.select_for_update().get(
+                clave=settings.SUCURSAL_CLAVE,
+                activa=True,
+            )
+        except Sucursal.DoesNotExist as exc:
+            raise CommandError("La sucursal configurada no está aprovisionada.") from exc
+
+        rol, _ = Rol.objects.get_or_create(
+            sucursal=sucursal,
+            tipo=Rol.Tipo.ENCARGADO,
+            defaults={
+                "nombre": "Encargado",
+                "puede_cobrar": True,
+                "puede_reimprimir": True,
+                "puede_cancelar": True,
+                "puede_sincronizar": True,
+            },
+        )
+        nombre = (options.get("nombre") or "").strip()
+        if not nombre:
+            nombre = input("Nombre del primer operador [Encargado]: ").strip() or "Encargado"
+        nombre = nombre[:100]
+
+        pin = (options.get("pin") or "").strip()
+        while len(pin) != 4 or not pin.isdigit():
+            if pin:
+                self.stderr.write("El PIN debe contener exactamente cuatro dígitos.")
+            pin = getpass("PIN operativo de cuatro dígitos: ").strip()
+        if any(
+            perfil.check_clave(pin)
+            for perfil in UsuarioPOS.objects.filter(sucursal=sucursal, activo=True)
+        ):
+            raise CommandError("El PIN operativo ya está asignado en esta sucursal.")
+
+        perfil = UsuarioPOS(sucursal=sucursal, rol=rol, nombre=nombre)
+        perfil.set_clave(pin)
+        perfil.save()
+        return perfil
 
     @transaction.atomic
     def handle(self, *args, **options):
@@ -31,9 +75,13 @@ class Command(BaseCommand):
             .first()
         )
         if perfil is None:
-            raise CommandError(
-                "No hay un perfil POS libre. Crea otro en /admin/ o libera uno existente."
-            )
+            if options["crear_perfil_inicial"]:
+                perfil = self._crear_perfil_inicial(options)
+            else:
+                raise CommandError(
+                    "No hay un perfil POS libre. Crea otro en /admin/ o usa "
+                    "--crear-perfil-inicial durante el primer alta."
+                )
 
         username = (options.get("username") or "").strip()
         if not username:

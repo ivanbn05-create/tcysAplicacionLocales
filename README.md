@@ -557,3 +557,7 @@ validación defensiva de la integración externa.
   base principal a PostgreSQL.
 - Revisa `logs\django.log` y `logs\waitress.log`, prueba restauraciones de respaldo,
   aplica actualizaciones y ejecuta auditoría de dependencias antes de cada entrega.
+
+### Módulos por sucursal
+
+La release contiene siempre el mismo código. En una instalación Windows, `-ModulosOpcionales` acepta `domicilios`, `programados`, `reparto` y `pedidos_sucursales`; si se omite, el asistente permite elegirlos. Punto de venta, catálogo, impresión y respaldos forman el núcleo y no se deshabilitan. Las dependencias se activan automáticamente y la decisión queda en `ModuloSucursal`.

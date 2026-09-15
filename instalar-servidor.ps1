@@ -29,7 +29,8 @@ param(
     [switch]$SkipBackupTask,
     [switch]$AllowOnlineDependencies,
     [switch]$AllowUnverifiedDevelopmentTree,
-    [switch]$InicializarDatosArboledas
+    [switch]$InicializarDatosArboledas,
+    [string[]]$ModulosOpcionales
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,5 +61,8 @@ if (-not [string]::IsNullOrWhiteSpace($PrinterCocinaHost)) { $argumentos.Printer
 if (-not [string]::IsNullOrWhiteSpace($PrinterBarraHost)) { $argumentos.PrinterBarraHost = $PrinterBarraHost }
 if ($PSBoundParameters.ContainsKey("ListenAddress")) { $argumentos.ListenAddress = $ListenAddress }
 if ($PSBoundParameters.ContainsKey("TrustedProxy")) { $argumentos.TrustedProxy = $TrustedProxy }
+if ($PSBoundParameters.ContainsKey("ModulosOpcionales")) {
+    $argumentos.ModulosOpcionales = $ModulosOpcionales
+}
 
 & $motor @argumentos

@@ -25,6 +25,7 @@ param(
     [string]$SucursalNombre,
     [string]$SucursalId,
     [switch]$InicializarDatosArboledas,
+    [string[]]$ModulosOpcionales,
     [string]$AllowedHosts = "localhost,127.0.0.1,192.168.0.30",
     [string]$SecretKey,
     [ValidateRange(1, 65535)][int]$Port = 8000,
@@ -1575,6 +1576,10 @@ Set-CanonicalProcessEnvironment -Path $entorno
 @("runtime", "backups", "logs", "media", "certs") | ForEach-Object {
     New-Item -ItemType Directory -Force -Path (Join-Path $raiz $_) | Out-Null
 }
+$waitressLog = Join-Path $raiz "logs\waitress.log"
+if (-not (Test-Path -LiteralPath $waitressLog -PathType Leaf)) {
+    New-Item -ItemType File -Path $waitressLog | Out-Null
+}
 
 # Los respaldos y certificados permanecen restringidos incluso si falla una migracion.
 Protect-Path -Path $backupRoot -LocalServiceAccess "None"
@@ -1623,6 +1628,44 @@ if ($Modo -eq "Instalar") {
         & $python manage.py cargar_datos_iniciales
         if ($LASTEXITCODE -ne 0) { throw "Falló la carga explícita de datos iniciales de Arboledas." }
     }
+
+    $modulosDisponibles = @(
+        "domicilios",
+        "programados",
+        "reparto",
+        "pedidos_sucursales"
+    )
+    if ($PSBoundParameters.ContainsKey("ModulosOpcionales")) {
+        $modulosSeleccionados = @($ModulosOpcionales | ForEach-Object {
+            @(([string]$_) -split ',')
+        } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+    }
+    else {
+        Write-Host "Módulos opcionales disponibles:" -ForegroundColor Yellow
+        Write-Host "  domicilios, programados, reparto, pedidos_sucursales"
+        $respuestaModulos = Read-Host "Escribe las claves separadas por coma [Enter = todos]"
+        if ([string]::IsNullOrWhiteSpace($respuestaModulos)) {
+            $modulosSeleccionados = $modulosDisponibles
+        }
+        else {
+            $modulosSeleccionados = @($respuestaModulos -split ',' | ForEach-Object {
+                $_.Trim().ToLowerInvariant()
+            } | Where-Object { $_ })
+        }
+    }
+    $modulosDesconocidos = @($modulosSeleccionados | Where-Object {
+        $_ -notin $modulosDisponibles
+    })
+    if ($modulosDesconocidos.Count) {
+        throw "Módulos opcionales desconocidos: $($modulosDesconocidos -join ', ')."
+    }
+    if ($modulosSeleccionados.Count) {
+        & $python manage.py configurar_modulos_sucursal --modulos ($modulosSeleccionados -join ',')
+    }
+    else {
+        & $python manage.py configurar_modulos_sucursal --sin-opcionales
+    }
+    if ($LASTEXITCODE -ne 0) { throw "Falló la configuración inicial de módulos." }
 }
 & $python manage.py collectstatic --noinput
 if ($LASTEXITCODE -ne 0) { throw "Falló la recopilación de archivos estáticos." }
@@ -1637,19 +1680,13 @@ if ($Modo -eq "Instalar") {
         }
     }
 
-    & $python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','pos.settings'); import django; django.setup(); from personas.models import UsuarioPOS; raise SystemExit(0 if UsuarioPOS.objects.filter(activo=True, sucursal__clave=os.environ['SUCURSAL_CLAVE']).exists() else 1)"
-    if ($LASTEXITCODE -eq 0) {
-        & $python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','pos.settings'); import django; django.setup(); from django.contrib.auth import get_user_model; U=get_user_model(); raise SystemExit(0 if U.objects.filter(is_active=True, is_superuser=False, perfil_pos__activo=True, perfil_pos__sucursal__clave=os.environ['SUCURSAL_CLAVE']).exists() else 1)"
+    & $python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','pos.settings'); import django; django.setup(); from django.contrib.auth import get_user_model; U=get_user_model(); raise SystemExit(0 if U.objects.filter(is_active=True, is_superuser=False, perfil_pos__activo=True, perfil_pos__sucursal__clave=os.environ['SUCURSAL_CLAVE']).exists() else 1)"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Crea una cuenta operativa separada de la cuenta administrativa." -ForegroundColor Yellow
+        & $python manage.py crear_operador_pos --crear-perfil-inicial
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "Crea una cuenta operativa separada de la cuenta administrativa." -ForegroundColor Yellow
-            & $python manage.py crear_operador_pos
-            if ($LASTEXITCODE -ne 0) {
-                throw "Debe existir al menos una cuenta operativa vinculada a un perfil POS."
-            }
+            throw "Debe existir al menos una cuenta operativa vinculada a un perfil POS."
         }
-    }
-    else {
-        Write-Host "La sucursal quedó identificada pero aún no tiene roles/perfiles POS. Configúralos desde la administración o mediante un paquete inicial autorizado." -ForegroundColor Yellow
     }
 }
 
@@ -1754,6 +1791,12 @@ do {
 } while (-not $saludable -and (Get-Date) -lt $limiteSalud)
 if (-not $saludable) {
     throw "El servicio se registró, pero /salud/ no respondió correctamente. Revisa logs\waitress.log."
+}
+# El servicio puede crear archivos entre el endurecimiento inicial y la primera
+# respuesta saludable. Normaliza de nuevo las carpetas dinámicas para que esos
+# archivos conserven el mismo propietario y las mismas ACE explícitas.
+foreach ($directorioDinamico in @("runtime", "logs", "media")) {
+    Protect-Path -Path (Join-Path $raiz $directorioDinamico) -LocalServiceAccess "Modify"
 }
 if ($Modo -eq "Actualizar" -and
     (Get-FileHash -LiteralPath $entorno -Algorithm SHA256).Hash -ne $envHashOriginal) {

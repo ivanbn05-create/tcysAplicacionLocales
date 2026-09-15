@@ -86,12 +86,16 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
             <button class="canal activo" data-canal="comedor" type="button" aria-pressed="true">
               <span class="canal-icono" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M19 3v12h-5c-.023-3.681.184-7.406 5-12m0 12v6h-1v-3M8 4v17M5 4v3a3 3 0 1 0 6 0V4"/></svg></span><span class="canal-texto">Comedor</span><span class="canal-marcador" aria-hidden="true"></span>
             </button>
+            {% if modulos.domicilios %}
             <button class="canal" data-canal="domicilio" type="button" aria-pressed="false">
               <span class="canal-icono" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 19a2 2 0 1 0 4 0 2 2 0 0 0-4 0M19 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4M11 19h5.5a3.5 3.5 0 0 0 0-7h-8a3.5 3.5 0 0 1 0-7H13"/></svg></span><span class="canal-texto">Domicilio</span><span class="canal-marcador" aria-hidden="true"></span>
             </button>
+            {% endif %}
+            {% if modulos.pedidos_sucursales %}
             <button class="canal" data-canal="sucursales" type="button" aria-pressed="false">
               <span class="canal-icono" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 21h18M3 7v1a3 3 0 0 0 6 0V7m0 1a3 3 0 0 0 6 0V7m0 1a3 3 0 0 0 6 0V7H3l2-4h14l2 4M5 21V10.85M19 21V10.85M9 21v-4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v4"/></svg></span><span class="canal-texto">Sucursales</span><span class="canal-marcador" aria-hidden="true"></span>
             </button>
+            {% endif %}
           </nav>
         </div>
       {% endif %}
