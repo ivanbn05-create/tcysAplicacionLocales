@@ -22,7 +22,16 @@ os.environ["DJANGO_ALLOWED_HOSTS"] = "localhost,127.0.0.1,[::1],192.168.0.30,tes
 os.environ["DB_ENGINE"] = "sqlite"
 os.environ["SQLITE_PATH"] = "runtime/prueba/db.sqlite3"
 os.environ["SUCURSAL_CLAVE"] = "ARBOLEDAS"
-os.environ["PRINT_BACKEND"] = "archivo"
+_verdaderos = {"1", "true", "si", "sí", "yes"}
+_backend_impresion = os.getenv("PRINT_BACKEND", "archivo").strip().lower()
+if _backend_impresion == "tcp" and os.getenv(
+    "DJANGO_ALLOW_REAL_PRINTER_DEVELOPMENT", ""
+).strip().lower() not in _verdaderos:
+    raise RuntimeError(
+        "La impresión TCP en desarrollo requiere "
+        "DJANGO_ALLOW_REAL_PRINTER_DEVELOPMENT=true de forma explícita."
+    )
+os.environ["PRINT_BACKEND"] = _backend_impresion
 os.environ["PRINT_SYNC"] = "true"
 os.environ["PEDIDOS_SUCURSALES_AUTO_SYNC"] = "false"
 os.environ["PEDIDOS_SUCURSALES_FUENTE"] = "desactivada"

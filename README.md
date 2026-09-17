@@ -273,11 +273,27 @@ proxy ni el certificado HTTPS.
 
 ### Modo de prueba explícito y aislado
 
-`iniciar-prueba-lan.bat` es el único arranque con `runserver` y `DEBUG=true`. Publica
+`iniciar-prueba-lan.bat` es el arranque normal con `runserver` y `DEBUG=true`. Publica
 `http://192.168.0.30:8001`, usa exclusivamente
 `runtime\prueba\db.sqlite3` y `runtime\prueba\media`, desactiva Supabase y guarda las
-impresiones como archivos. No toca la base, los clientes ni las impresoras de
-producción. Carece de autenticación y nunca debe dejarse activo para operación real.
+impresiones como archivos. Por defecto no toca la base, los clientes ni las impresoras
+de producción. Carece de autenticación y nunca debe dejarse activo para operación real.
+
+Una prueba física deliberada conserva la base y los medios aislados, pero requiere
+habilitar además el acceso a la impresora real. El perfil rechaza `PRINT_BACKEND=tcp`
+si falta el consentimiento explícito:
+
+```powershell
+$env:DJANGO_SETTINGS_MODULE = "pos.settings_development"
+$env:DJANGO_ALLOW_INSECURE_DEVELOPMENT = "true"
+$env:DJANGO_ALLOW_REAL_PRINTER_DEVELOPMENT = "true"
+$env:PRINT_BACKEND = "tcp"
+$env:PRINTER_CAJA_HOST = "192.168.0.33"
+$env:PRINTER_COCINA_HOST = "192.168.0.33"
+$env:PRINTER_BARRA_HOST = "192.168.0.33"
+$env:PRINTER_PORT = "9100"
+.\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8001 --noreload
+```
 
 La computadora necesita conservar la dirección `192.168.0.30`, preferentemente con
 una reserva DHCP. `Ctrl+C` detiene este modo.
