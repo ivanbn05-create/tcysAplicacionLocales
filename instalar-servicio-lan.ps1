@@ -39,6 +39,9 @@ param(
     [string]$PrinterCocinaHost,
     [string]$PrinterBarraHost,
     [ValidateRange(1, 65535)][int]$PrinterPort = 9100,
+    [string]$VpsConsolidacionUrl = "",
+    [string]$VpsConsolidacionToken = "",
+    [ValidateRange(1, 60)][int]$VpsConsolidacionTimeout = 10,
     [switch]$SkipFirewall,
     [ValidatePattern("^(?:[01]\d|2[0-3]):[0-5]\d$")][string]$BackupTime = "03:15",
     [ValidateRange(1, 3650)][int]$BackupRetentionDays = 30,
@@ -58,6 +61,7 @@ $entorno = Join-Path $raiz ".env"
 $nombreServicio = "LosTocayosPOS"
 $nombreFirewall = "Los Tocayos POS - LAN privada"
 $nombreTareaRespaldo = "LosTocayosPOS-RespaldoSQLite"
+$nombreTareaPurgas = "LosTocayosPOS-PurgasFisicas"
 
 Set-Location -LiteralPath $raiz
 
@@ -146,6 +150,35 @@ function ConvertFrom-DotEnvDatabaseEngine {
     return $engine
 }
 
+function Assert-VpsConsolidationConfiguration {
+    param(
+        [AllowEmptyString()][string]$Url,
+        [AllowEmptyString()][string]$Token
+    )
+
+    $urlNormalizada = ([string]$Url).Trim()
+    $tokenNormalizado = ([string]$Token).Trim()
+    if ([string]::IsNullOrWhiteSpace($urlNormalizada)) {
+        if (-not [string]::IsNullOrWhiteSpace($tokenNormalizado)) {
+            throw "VPS_CONSOLIDACION_URL y VPS_CONSOLIDACION_TOKEN deben configurarse juntos."
+        }
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($tokenNormalizado)) {
+        throw "VPS_CONSOLIDACION_URL y VPS_CONSOLIDACION_TOKEN deben configurarse juntos."
+    }
+
+    $uri = $null
+    if (-not [Uri]::TryCreate($urlNormalizada, [UriKind]::Absolute, [ref]$uri) -or
+        -not $uri.Scheme.Equals([Uri]::UriSchemeHttps, [StringComparison]::OrdinalIgnoreCase) -or
+        [string]::IsNullOrWhiteSpace($uri.Host) -or
+        $urlNormalizada -match '\s' -or
+        -not [string]::IsNullOrEmpty($uri.UserInfo) -or
+        -not [string]::IsNullOrEmpty($uri.Fragment)) {
+        throw "VPS_CONSOLIDACION_URL debe ser una URL HTTPS absoluta sin credenciales embebidas."
+    }
+}
+
 function Set-SafePythonProcessEnvironment {
     foreach ($variable in Get-ChildItem Env:) {
         if ($variable.Name -match '^(?:PYTHON|PIP_)' -or
@@ -167,7 +200,7 @@ function Set-CanonicalProcessEnvironment {
     param([string]$Path)
 
     Set-SafePythonProcessEnvironment
-    $patronConfiguracion = '^(?:DJANGO_|WAITRESS_|POSTGRES_|POS_|PRINT_|PRINTER_|PEDIDOS_SUCURSALES_|THERMAL_|ALLOW_INSECURE_HTTP_LAN$|DB_ENGINE$|SQLITE_PATH$|SUCURSAL_CLAVE$)'
+    $patronConfiguracion = '^(?:DJANGO_|WAITRESS_|POSTGRES_|POS_|PRINT_|PRINTER_|PEDIDOS_SUCURSALES_|VPS_CONSOLIDACION_|THERMAL_|ALLOW_INSECURE_HTTP_LAN$|DB_ENGINE$|SQLITE_PATH$|SUCURSAL_CLAVE$)'
     foreach ($variable in Get-ChildItem Env:) {
         if ($variable.Name -match $patronConfiguracion) {
             [Environment]::SetEnvironmentVariable($variable.Name, $null, "Process")
@@ -405,6 +438,7 @@ function Test-ReleaseTreeManifest {
         "manage.py", "servicio_windows.py", "pos/settings.py",
     "personas/identidad.py",
     "personas/management/commands/aprovisionar_sucursal.py",
+    "personas/management/commands/inicializar_operacion_sucursal.py",
     "personas/management/commands/verificar_identidad_local.py",
         "herramientas/validar_despliegue.py",
         "certs/prod-ca-2021.crt", "datos/Listado-Productos.xlsx",
@@ -993,6 +1027,210 @@ function Get-WindowsPowerShellPath {
     return (Resolve-Path -LiteralPath $powershell).Path
 }
 
+function Test-ScheduledTaskPathEquals {
+    param([string]$Actual, [string]$Expected)
+
+    try {
+        return [IO.Path]::GetFullPath($Actual).Equals(
+            [IO.Path]::GetFullPath($Expected),
+            [StringComparison]::OrdinalIgnoreCase
+        )
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-SqliteBackupTaskArguments {
+    param(
+        [string]$ScriptPath,
+        [string]$PythonPath,
+        [string]$DatabasePath,
+        [string]$BackupRoot,
+        [string]$LogPath,
+        [ValidateRange(1, 3650)][int]$RetentionDays
+    )
+
+    return @(
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        (Quote-TaskArgument -Value $ScriptPath),
+        "-Python",
+        (Quote-TaskArgument -Value $PythonPath),
+        "-DatabasePath",
+        (Quote-TaskArgument -Value $DatabasePath),
+        "-BackupRoot",
+        (Quote-TaskArgument -Value $BackupRoot),
+        "-LogPath",
+        (Quote-TaskArgument -Value $LogPath),
+        "-RetentionDays",
+        $RetentionDays
+    ) -join " "
+}
+
+function Assert-SqliteScheduledTaskBase {
+    param(
+        [Parameter(Mandatory = $true)]$Task,
+        [string]$Description,
+        [string]$ExpectedPowerShell,
+        [string]$ExpectedWorkingDirectory,
+        [string]$ExpectedArguments
+    )
+
+    if ($Task.Principal.UserId -notin @("SYSTEM", "S-1-5-18", "NT AUTHORITY\SYSTEM") -or
+        [string]$Task.Principal.RunLevel -ne "Highest") {
+        throw "$Description no usa SYSTEM con privilegios máximos."
+    }
+    if ([string]$Task.State -eq "Disabled" -or
+        -not [bool]$Task.Settings.Enabled -or
+        -not [bool]$Task.Settings.StartWhenAvailable -or
+        [string]$Task.Settings.MultipleInstances -ne "IgnoreNew" -or
+        [string]$Task.Settings.ExecutionTimeLimit -ne "PT1H") {
+        throw "$Description no conserva sus ajustes de recuperación."
+    }
+    $actions = @($Task.Actions)
+    if ($actions.Count -ne 1) {
+        throw "$Description no tiene una acción única."
+    }
+    $action = $actions[0]
+    if (-not (Test-ScheduledTaskPathEquals -Actual ([string]$action.Execute) -Expected $ExpectedPowerShell) -or
+        -not (Test-ScheduledTaskPathEquals -Actual ([string]$action.WorkingDirectory) -Expected $ExpectedWorkingDirectory)) {
+        throw "$Description usa otro ejecutable o directorio de trabajo."
+    }
+    if (-not ([string]$action.Arguments).Equals(
+        $ExpectedArguments,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "$Description no conserva la acción administrada esperada."
+    }
+}
+
+function Get-SqliteTaskConfigurationFromTasks {
+    param(
+        [AllowNull()]$BackupTask,
+        [AllowNull()]$PurgeTask,
+        [string]$ProjectRoot,
+        [string]$PythonPath,
+        [string]$DatabasePath
+    )
+
+    if ($null -eq $BackupTask) {
+        if ($null -ne $PurgeTask) {
+            throw "Existe la tarea de purgas físicas sin la tarea SQLite principal."
+        }
+        return [pscustomobject]@{
+            Configured = $false
+            DailyTime = $null
+            RetentionDays = $null
+            PurgeConfigured = $false
+        }
+    }
+
+    $backupRoot = Join-Path $ProjectRoot "backups"
+    $backupLog = Join-Path $ProjectRoot "logs\sqlite-backup.log"
+    $backupScript = Join-Path $ProjectRoot "respaldar-db-sqlite.ps1"
+    $powershell = Get-WindowsPowerShellPath
+    $actions = @($BackupTask.Actions)
+    if ($actions.Count -ne 1) {
+        throw "La tarea de respaldo no tiene una acción única."
+    }
+    $retentionMatches = [Regex]::Matches(
+        [string]$actions[0].Arguments,
+        '(?i)(?:^|\s)-RetentionDays\s+([0-9]+)(?=\s|$)'
+    )
+    $retentionDays = 0
+    if ($retentionMatches.Count -ne 1 -or
+        -not [int]::TryParse($retentionMatches[0].Groups[1].Value, [ref]$retentionDays) -or
+        $retentionDays -lt 1 -or $retentionDays -gt 3650) {
+        throw "La retención de la tarea de respaldo no es válida."
+    }
+    $expectedArguments = Get-SqliteBackupTaskArguments `
+        -ScriptPath $backupScript `
+        -PythonPath $PythonPath `
+        -DatabasePath $DatabasePath `
+        -BackupRoot $backupRoot `
+        -LogPath $backupLog `
+        -RetentionDays $retentionDays
+    Assert-SqliteScheduledTaskBase `
+        -Task $BackupTask `
+        -Description "La tarea de respaldo" `
+        -ExpectedPowerShell $powershell `
+        -ExpectedWorkingDirectory $ProjectRoot `
+        -ExpectedArguments $expectedArguments
+
+    $triggers = @($BackupTask.Triggers)
+    if ($triggers.Count -ne 1 -or
+        [string]$triggers[0].CimClass.CimClassName -ne "MSFT_TaskDailyTrigger" -or
+        -not [bool]$triggers[0].Enabled -or
+        [int]$triggers[0].DaysInterval -ne 1) {
+        throw "La tarea de respaldo no contiene un único disparador diario habilitado."
+    }
+    $startBoundary = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse(
+        [string]$triggers[0].StartBoundary,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::AllowWhiteSpaces,
+        [ref]$startBoundary
+    )) {
+        throw "La hora diaria de la tarea de respaldo no es válida."
+    }
+    $dailyTime = $startBoundary.ToString(
+        "HH:mm",
+        [Globalization.CultureInfo]::InvariantCulture
+    )
+
+    if ($null -ne $PurgeTask) {
+        Assert-SqliteScheduledTaskBase `
+            -Task $PurgeTask `
+            -Description "La tarea de purgas físicas" `
+            -ExpectedPowerShell $powershell `
+            -ExpectedWorkingDirectory $ProjectRoot `
+            -ExpectedArguments ($expectedArguments + " -OnlyIfPurgePending")
+        $purgeTriggers = @($PurgeTask.Triggers)
+        if ($purgeTriggers.Count -ne 1 -or
+            [string]$purgeTriggers[0].CimClass.CimClassName -ne "MSFT_TaskTimeTrigger" -or
+            -not [bool]$purgeTriggers[0].Enabled -or
+            [string]$purgeTriggers[0].Repetition.Interval -ne "PT5M") {
+            throw "La tarea de purgas físicas no conserva su intervalo de cinco minutos."
+        }
+    }
+
+    return [pscustomobject]@{
+        Configured = $true
+        DailyTime = $dailyTime
+        RetentionDays = $retentionDays
+        PurgeConfigured = $null -ne $PurgeTask
+    }
+}
+
+function Get-ExistingSqliteTaskConfiguration {
+    param(
+        [string]$ProjectRoot,
+        [string]$PythonPath,
+        [string]$DatabasePath
+    )
+
+    $rootTasks = @(Get-ScheduledTask -TaskPath '\' -ErrorAction Stop)
+    $backupTasks = @($rootTasks | Where-Object {
+        $_.TaskName -ieq $nombreTareaRespaldo
+    })
+    $purgeTasks = @($rootTasks | Where-Object {
+        $_.TaskName -ieq $nombreTareaPurgas
+    })
+    if ($backupTasks.Count -gt 1 -or $purgeTasks.Count -gt 1) {
+        throw "Existe más de una tarea administrada con el mismo nombre."
+    }
+    return Get-SqliteTaskConfigurationFromTasks `
+        -BackupTask $(if ($backupTasks.Count) { $backupTasks[0] } else { $null }) `
+        -PurgeTask $(if ($purgeTasks.Count) { $purgeTasks[0] } else { $null }) `
+        -ProjectRoot $ProjectRoot `
+        -PythonPath $PythonPath `
+        -DatabasePath $DatabasePath
+}
+
 function Register-SqliteBackupTask {
     param(
         [string]$PythonPath,
@@ -1008,24 +1246,13 @@ function Register-SqliteBackupTask {
     }
     $hora = [TimeSpan]::ParseExact($DailyTime, "hh\:mm", [Globalization.CultureInfo]::InvariantCulture)
     $powershell = Get-WindowsPowerShellPath
-    $argumentos = @(
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        (Quote-TaskArgument -Value $scriptRespaldo),
-        "-Python",
-        (Quote-TaskArgument -Value $PythonPath),
-        "-DatabasePath",
-        (Quote-TaskArgument -Value $DatabasePath),
-        "-BackupRoot",
-        (Quote-TaskArgument -Value $BackupRoot),
-        "-LogPath",
-        (Quote-TaskArgument -Value $LogPath),
-        "-RetentionDays",
-        $RetentionDays
-    ) -join " "
+    $argumentos = Get-SqliteBackupTaskArguments `
+        -ScriptPath $scriptRespaldo `
+        -PythonPath $PythonPath `
+        -DatabasePath $DatabasePath `
+        -BackupRoot $BackupRoot `
+        -LogPath $LogPath `
+        -RetentionDays $RetentionDays
     $accion = New-ScheduledTaskAction `
         -Execute $powershell `
         -Argument $argumentos `
@@ -1045,12 +1272,32 @@ function Register-SqliteBackupTask {
         -Settings $configuracionTarea `
         -Description "Respaldo consistente y verificable de runtime\db.sqlite3 de Los Tocayos POS." `
         -Force | Out-Null
+
+    $accionPurgas = New-ScheduledTaskAction `
+        -Execute $powershell `
+        -Argument ($argumentos + " -OnlyIfPurgePending") `
+        -WorkingDirectory $raiz
+    $disparadorPurgas = New-ScheduledTaskTrigger `
+        -Once `
+        -At ((Get-Date).AddMinutes(1)) `
+        -RepetitionInterval (New-TimeSpan -Minutes 5) `
+        -RepetitionDuration (New-TimeSpan -Days 3650)
+    Register-ScheduledTask `
+        -TaskName $nombreTareaPurgas `
+        -Action $accionPurgas `
+        -Trigger $disparadorPurgas `
+        -Principal $principalTarea `
+        -Settings $configuracionTarea `
+        -Description "Procesa cada cinco minutos las purgas físicas confirmadas; no crea respaldos sin solicitudes." `
+        -Force | Out-Null
 }
 
 function Remove-SqliteBackupTask {
-    $tarea = Get-ScheduledTask -TaskName $nombreTareaRespaldo -ErrorAction SilentlyContinue
-    if ($tarea) {
-        Unregister-ScheduledTask -TaskName $nombreTareaRespaldo -Confirm:$false
+    foreach ($nombreTarea in @($nombreTareaRespaldo, $nombreTareaPurgas)) {
+        $tarea = Get-ScheduledTask -TaskName $nombreTarea -ErrorAction SilentlyContinue
+        if ($tarea) {
+            Unregister-ScheduledTask -TaskName $nombreTarea -Confirm:$false
+        }
     }
 }
 
@@ -1296,6 +1543,11 @@ if ($Modo -eq "Instalar") {
     if ($InicializarDatosArboledas -and $SucursalClave -ne "ARBOLEDAS") {
         throw "InicializarDatosArboledas sólo es válido para la sucursal ARBOLEDAS."
     }
+    $VpsConsolidacionUrl = ([string]$VpsConsolidacionUrl).Trim()
+    $VpsConsolidacionToken = ([string]$VpsConsolidacionToken).Trim()
+    Assert-VpsConsolidationConfiguration `
+        -Url $VpsConsolidacionUrl `
+        -Token $VpsConsolidacionToken
     $impresoras = @{
         PRINTER_CAJA_HOST = $PrinterCajaHost
         PRINTER_COCINA_HOST = $PrinterCocinaHost
@@ -1321,7 +1573,8 @@ else {
         "SucursalClave", "SucursalNombre", "SucursalId", "InicializarDatosArboledas", "SecretKey",
         "AllowedHosts", "Port", "Threads", "ListenAddress", "TrustedProxy", "Https",
         "AllowInsecureHttpLan", "PrintBackend", "PrinterCajaHost", "PrinterCocinaHost",
-        "PrinterBarraHost", "PrinterPort", "SkipFirewall", "BackupTime", "BackupRetentionDays",
+        "PrinterBarraHost", "PrinterPort", "VpsConsolidacionUrl", "VpsConsolidacionToken",
+        "VpsConsolidacionTimeout", "SkipFirewall", "BackupTime", "BackupRetentionDays",
         "SkipBackupTask"
     )) {
         if ($PSBoundParameters.ContainsKey($parametroProhibido)) {
@@ -1351,7 +1604,6 @@ else {
         -Value (Get-RequiredDotEnvValue -Path $entorno -Name "ALLOW_INSECURE_HTTP_LAN") `
         -Name "ALLOW_INSECURE_HTTP_LAN"
     $TrustedProxy = Get-DotEnvValue -Path $entorno -Name "WAITRESS_TRUSTED_PROXY"
-    $BackupRetentionDays = 3650
     if ($dbEnginePreflight -eq "postgres") {
         throw "La actualización supervisada de PostgreSQL requiere un respaldo pg_dump aún no implementado; no se detendrá el servicio."
     }
@@ -1366,6 +1618,14 @@ else {
     Assert-ProjectPath -Path $sqliteDestino
     if (-not (Test-Path -LiteralPath $sqliteDestino -PathType Leaf)) {
         throw "La base SQLite configurada no existe: $sqliteDestino. No se detendrá el servicio."
+    }
+    $taskConfiguration = Get-ExistingSqliteTaskConfiguration `
+        -ProjectRoot $raiz `
+        -PythonPath $python `
+        -DatabasePath $sqliteDestino
+    if ($taskConfiguration.Configured) {
+        $BackupTime = [string]$taskConfiguration.DailyTime
+        $BackupRetentionDays = [int]$taskConfiguration.RetentionDays
     }
 }
 
@@ -1436,6 +1696,7 @@ $servicioDetenidoPorScript = $false
 $migracionIniciada = $false
 $runtimeModificado = $false
 $arranqueIntentadoPorScript = $false
+$retencionRespaldoPreMigracion = if ($Modo -eq "Actualizar") { 3650 } else { $BackupRetentionDays }
 $respaldoMutex = Enter-BackupMutex
 try {
 if ($Modo -eq "Actualizar") {
@@ -1542,6 +1803,9 @@ if ($Modo -eq "Instalar") {
     Set-DotEnvValue -Path $entorno -Name "PRINTER_COCINA_HOST" -Value $PrinterCocinaHost
     Set-DotEnvValue -Path $entorno -Name "PRINTER_BARRA_HOST" -Value $PrinterBarraHost
     Set-DotEnvValue -Path $entorno -Name "PRINTER_PORT" -Value $PrinterPort
+    Set-DotEnvValue -Path $entorno -Name "VPS_CONSOLIDACION_URL" -Value $VpsConsolidacionUrl
+    Set-DotEnvValue -Path $entorno -Name "VPS_CONSOLIDACION_TOKEN" -Value $VpsConsolidacionToken
+    Set-DotEnvValue -Path $entorno -Name "VPS_CONSOLIDACION_TIMEOUT" -Value $VpsConsolidacionTimeout
 }
 Set-CanonicalProcessEnvironment -Path $entorno
 
@@ -1600,7 +1864,7 @@ if ($Modo -eq "Actualizar") {
 if ($LASTEXITCODE -ne 0) { throw "La configuración Django de producción no es válida." }
 if ($usaSqlite -and (Test-Path -LiteralPath $sqliteDestino)) {
     Write-Host "Respaldo verificable antes de migrar..." -ForegroundColor Yellow
-    Invoke-SqliteBackup -PythonPath $python -DatabasePath $sqliteDestino -BackupRoot $backupRoot -LogPath $backupLog -RetentionDays $BackupRetentionDays -BackupMutex $respaldoMutex
+    Invoke-SqliteBackup -PythonPath $python -DatabasePath $sqliteDestino -BackupRoot $backupRoot -LogPath $backupLog -RetentionDays $retencionRespaldoPreMigracion -BackupMutex $respaldoMutex
 }
 & $python manage.py verificar_identidad_local
 if ($LASTEXITCODE -ne 0) {
@@ -1623,6 +1887,8 @@ if ($Modo -eq "Instalar") {
     }
     & $python @argumentosAprovisionamiento
     if ($LASTEXITCODE -ne 0) { throw "Falló el aprovisionamiento explícito de la sucursal." }
+    & $python manage.py inicializar_operacion_sucursal
+    if ($LASTEXITCODE -ne 0) { throw "Falló la inicialización de posiciones operativas." }
     if ($InicializarDatosArboledas) {
         Write-Host "Aplicando la semilla histórica solicitada expresamente para ARBOLEDAS..." -ForegroundColor Yellow
         & $python manage.py cargar_datos_iniciales
@@ -1643,9 +1909,9 @@ if ($Modo -eq "Instalar") {
     else {
         Write-Host "Módulos opcionales disponibles:" -ForegroundColor Yellow
         Write-Host "  domicilios, programados, reparto, pedidos_sucursales"
-        $respuestaModulos = Read-Host "Escribe las claves separadas por coma [Enter = todos]"
+        $respuestaModulos = Read-Host "Escribe las claves separadas por coma [Enter = ninguno]"
         if ([string]::IsNullOrWhiteSpace($respuestaModulos)) {
-            $modulosSeleccionados = $modulosDisponibles
+            $modulosSeleccionados = @()
         }
         else {
             $modulosSeleccionados = @($respuestaModulos -split ',' | ForEach-Object {
@@ -1690,8 +1956,8 @@ if ($Modo -eq "Instalar") {
     }
 }
 
-if ($Modo -eq "Instalar") {
-    if ($usaSqlite -and -not $SkipBackupTask) {
+if ($usaSqlite -and -not $SkipBackupTask) {
+    if ($Modo -eq "Instalar") {
         Write-Host "Creando respaldo inicial verificable de runtime\db.sqlite3..." -ForegroundColor Yellow
         Invoke-SqliteBackup `
             -PythonPath $python `
@@ -1700,22 +1966,22 @@ if ($Modo -eq "Instalar") {
             -LogPath $backupLog `
             -RetentionDays $BackupRetentionDays `
             -BackupMutex $respaldoMutex
-        Register-SqliteBackupTask `
-            -PythonPath $python `
-            -DatabasePath $sqliteDestino `
-            -BackupRoot $backupRoot `
-            -LogPath $backupLog `
-            -DailyTime $BackupTime `
-            -RetentionDays $BackupRetentionDays
+    }
+    Register-SqliteBackupTask `
+        -PythonPath $python `
+        -DatabasePath $sqliteDestino `
+        -BackupRoot $backupRoot `
+        -LogPath $backupLog `
+        -DailyTime $BackupTime `
+        -RetentionDays $BackupRetentionDays
+}
+elseif ($Modo -eq "Instalar") {
+    Remove-SqliteBackupTask
+    if ($usaSqlite) {
+        Write-Host "Se omitieron las tareas programadas de respaldo y purga por -SkipBackupTask." -ForegroundColor Yellow
     }
     else {
-        Remove-SqliteBackupTask
-        if ($usaSqlite) {
-            Write-Host "Se omitio la tarea programada de respaldo por -SkipBackupTask." -ForegroundColor Yellow
-        }
-        else {
-            Write-Host "DB_ENGINE no usa SQLite; se retiro la tarea programada de respaldo local." -ForegroundColor Yellow
-        }
+        Write-Host "DB_ENGINE no usa SQLite; se retiraron las tareas locales de respaldo y purga." -ForegroundColor Yellow
     }
 }
 
@@ -1822,6 +2088,7 @@ else {
 }
 if ($Modo -eq "Instalar" -and $usaSqlite -and -not $SkipBackupTask) {
     Write-Host "Respaldo diario: tarea $nombreTareaRespaldo a las $BackupTime; retencion $BackupRetentionDays dias."
+    Write-Host "Purgas físicas: tarea $nombreTareaPurgas cada 5 minutos, inactiva cuando no hay solicitudes."
 }
 }
 catch {

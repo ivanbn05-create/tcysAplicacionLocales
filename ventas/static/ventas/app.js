@@ -47,6 +47,8 @@
   const prefijosSalsas = ["", "+ Más", "Nada más"];
   const DEVICE_ID_KEY = "tocayos_pos_device_id";
   const HEARTBEAT_BLOQUEO_MS = 10000;
+  const INTERVALO_ESTADO_LAN_MS = 5000;
+  const modoTableta = document.body.dataset.modoTableta === "true";
 
   function crearDeviceId() {
     if (window.crypto?.randomUUID) return window.crypto.randomUUID();
@@ -90,6 +92,7 @@
     tickets: {},
     programados: [],
     ticket: null,
+    edicionProgramada: false,
     operador: null,
     sucursalSeleccionada: null,
     resolucionClave: null,
@@ -114,6 +117,15 @@
     comandaVisible: 1,
     botonOperacion: null,
     idempotenciaAgregar: "",
+    pinTabletaActivo: false,
+    claveTableta: "",
+    mesaClaveTableta: "",
+    tituloClaveTableta: "",
+    ayudaClaveTableta: "",
+    errorClaveTableta: "",
+    cargaEstadoEnCurso: null,
+    temporizadorEstadoLan: null,
+    pantallaCompletaSuspendida: false,
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -155,6 +167,10 @@
       : ticket.estado === "abierto";
   }
 
+  function esEdicionProgramada(ticket = estado.ticket) {
+    return Boolean(estado.edicionProgramada && ticket?.estado === "programado");
+  }
+
   function normalizarComandaVisible(ticket = estado.ticket) {
     const disponibles = comandasDisponibles(ticket);
     const numeros = disponibles.map(comanda => comanda.numero);
@@ -168,7 +184,7 @@
   function comandaVisibleEditable(ticket = estado.ticket) {
     return Boolean(
       ticket
-      && comandaEnEdicion(ticket)
+      && (comandaEnEdicion(ticket) || esEdicionProgramada(ticket))
       && normalizarComandaVisible(ticket) === numeroComandaActual(ticket)
     );
   }
@@ -180,7 +196,8 @@
   function ticketParaComandaVisible(ticket = estado.ticket) {
     if (!ticket) return null;
     const numero = normalizarComandaVisible(ticket);
-    const contexto = numero === numeroComandaActual(ticket) && comandaEnEdicion(ticket)
+    const contexto = numero === numeroComandaActual(ticket)
+      && (comandaEnEdicion(ticket) || esEdicionProgramada(ticket))
       ? null
       : ticket.contextos_comandas?.[String(numero)];
     const vista = contexto && typeof contexto === "object"
@@ -257,6 +274,9 @@
       },
     });
     if (respuesta.status === 401) {
+      if (estado.edicionProgramada || url.includes("/editar-programado/")) {
+        throw new Error("El acceso administrativo venció. Vuelve a Programados para autorizar la edición.");
+      }
       const siguiente = encodeURIComponent(`${window.location.pathname}${window.location.search}`);
       window.location.replace(`/acceso/?next=${siguiente}`);
       throw new Error("La sesión expiró. Inicia sesión nuevamente.");
@@ -294,11 +314,13 @@
       ...datos,
       device_id: estado.deviceId,
       version_entidad: datos.version_entidad ?? estado.ticket.version_entidad,
+      ...(estado.edicionProgramada ? { edicion_programada: true } : {}),
     });
   }
 
   function ticketActivo(ticket = estado.ticket) {
-    return ["abierto", "procesado", "cobrar"].includes(ticket?.estado);
+    return ["abierto", "procesado", "cobrar"].includes(ticket?.estado)
+      || esEdicionProgramada(ticket);
   }
 
   function bloqueoPropio(ticket = estado.ticket) {
@@ -412,6 +434,15 @@
   }
 
   function pedirClavePos(titulo, ayuda) {
+    const claveEnZonaComedor = modoTableta && !estado.ticket && !$("#vista-posiciones").classList.contains("oculto");
+    if (claveEnZonaComedor) {
+      estado.pinTabletaActivo = true;
+      estado.claveTableta = "";
+      estado.tituloClaveTableta = titulo;
+      estado.ayudaClaveTableta = ayuda;
+      renderPosiciones();
+      return new Promise(resolve => { estado.resolucionClave = resolve; });
+    }
     const dialogo = $("#dialogo-clave-pos");
     const campo = $("#clave-pos");
     $("#titulo-clave-pos").textContent = titulo;
@@ -425,11 +456,41 @@
   }
 
   function resolverClavePos(clave) {
-    const dialogo = $("#dialogo-clave-pos");
-    if (dialogo.open) dialogo.close();
+    if (modoTableta && estado.pinTabletaActivo) {
+      estado.pinTabletaActivo = false;
+      estado.claveTableta = "";
+      if (!clave) estado.errorClaveTableta = "";
+      renderPosiciones();
+    } else {
+      const dialogo = $("#dialogo-clave-pos");
+      if (dialogo.open) dialogo.close();
+    }
     const resolver = estado.resolucionClave;
     estado.resolucionClave = null;
     resolver?.(clave);
+  }
+
+  function manejarTeclaClaveTableta(tecla) {
+    if (!modoTableta || !estado.pinTabletaActivo || estado.operando) return;
+    if (tecla === "cancelar") {
+      resolverClavePos(null);
+      return;
+    }
+    if (tecla === "borrar") {
+      estado.claveTableta = estado.claveTableta.slice(0, -1);
+      estado.errorClaveTableta = "";
+      renderPosiciones();
+      return;
+    }
+    if (tecla === "confirmar") {
+      if (/^\d{4}$/.test(estado.claveTableta)) resolverClavePos(estado.claveTableta);
+      return;
+    }
+    if (/^\d$/.test(tecla) && estado.claveTableta.length < 4) {
+      estado.claveTableta += tecla;
+      estado.errorClaveTableta = "";
+      renderPosiciones();
+    }
   }
 
   function pedirFormaPago() {
@@ -457,28 +518,35 @@
   }
 
   async function entrarComoMesero({ mostrarPantalla = true } = {}) {
-    const clave = await pedirClavePos("Código de mesero", "Ingresa el código de 4 dígitos asignado a tu nombre.");
-    if (!clave) return false;
-    try {
-      const datos = await api("/api/operador/identificar/", {
-        method: "POST",
-        body: JSON.stringify({ clave }),
-      });
-      estado.operador = datos.operador;
-      renderOperadorActual();
-      if (mostrarPantalla) {
-        $("#pantalla-acceso")?.classList.add("oculto");
-        $("main").classList.remove("oculto");
-        document.body.classList.add("en-operacion");
-        document.body.classList.remove("en-ticket");
-        await cargarEstado(estado.canal === "sucursales");
-        programarSincronizacionSucursales();
+    while (true) {
+      const clave = await pedirClavePos("Acceso a Ventas", "Ingresa el código de 4 dígitos asignado a tu usuario.");
+      if (!clave) return false;
+      bloquear(true);
+      try {
+        const datos = await api("/api/operador/identificar/", {
+          method: "POST",
+          body: JSON.stringify({ clave }),
+        });
+        estado.operador = datos.operador;
+        renderOperadorActual();
+        estado.errorClaveTableta = "";
+        if (mostrarPantalla) {
+          $("#pantalla-acceso")?.classList.add("oculto");
+          $("main").classList.remove("oculto");
+          document.body.classList.add("en-operacion");
+          document.body.classList.remove("en-ticket");
+          await cargarEstado(estado.canal === "sucursales");
+          programarSincronizacionSucursales();
+        }
+        toast(`Turno identificado: ${datos.operador.nombre}.`);
+        return true;
+      } catch (error) {
+        toast(error.message, true);
+        if (!modoTableta) return false;
+        estado.errorClaveTableta = error.message;
+      } finally {
+        bloquear(false);
       }
-      toast(`Turno identificado: ${datos.operador.nombre}.`);
-      return true;
-    } catch (error) {
-      toast(error.message, true);
-      return false;
     }
   }
 
@@ -534,18 +602,81 @@
     }
   }
 
-  async function cargarEstado(sincronizarSucursales = false) {
-    try {
-      if (sincronizarSucursales && permisos.sincronizar) {
-        await api("/api/sincronizacion/sucursales/", { method: "POST", body: "{}" });
+  async function cargarEstado(sincronizarSucursales = false, { silencioso = false } = {}) {
+    if (estado.cargaEstadoEnCurso) return estado.cargaEstadoEnCurso;
+    const tarea = (async () => {
+      try {
+        if (sincronizarSucursales && permisos.sincronizar) {
+          await api("/api/sincronizacion/sucursales/", { method: "POST", body: "{}" });
+        }
+        const datos = await api("/api/estado/");
+        estado.tickets = datos.tickets;
+        estado.programados = datos.programados || [];
+        if (!estado.ticket) renderPosiciones();
+        return true;
+      } catch (error) {
+        if (!silencioso) toast(error.message, true);
+        return false;
       }
-      const datos = await api("/api/estado/");
-      estado.tickets = datos.tickets;
-      estado.programados = datos.programados || [];
-      renderPosiciones();
+    })();
+    estado.cargaEstadoEnCurso = tarea;
+    try {
+      return await tarea;
+    } finally {
+      if (estado.cargaEstadoEnCurso === tarea) estado.cargaEstadoEnCurso = null;
+    }
+  }
+
+  function idProgramadoSolicitado() {
+    const valor = new URLSearchParams(window.location.search).get("editar_programado") || "";
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(valor)
+      ? valor
+      : "";
+  }
+
+  async function abrirProgramadoDesdeEnlace() {
+    const ticketId = idProgramadoSolicitado();
+    if (!ticketId) return cargarEstado();
+    $("#pantalla-acceso")?.classList.add("oculto");
+    $("main").classList.remove("oculto");
+    document.body.classList.add("en-operacion");
+    bloquear(true);
+    try {
+      const datos = await api(`/api/administrador/tickets/${ticketId}/editar-programado/`, {
+        method: "POST",
+        body: "{}",
+      });
+      estado.edicionProgramada = true;
+      estado.ticket = datos.ticket;
+      estado.comandaVisible = numeroComandaActual(datos.ticket);
+      mostrarTicket();
+      toast("Edita el pedido y vuelve a Programados al terminar. Su fecha y estado se conservarán.");
+      return true;
     } catch (error) {
       toast(error.message, true);
+      window.location.assign("/administrador/#programados");
+      return false;
+    } finally {
+      bloquear(false);
     }
+  }
+
+  function ventasVisibles() {
+    return modoTableta || document.body.classList.contains("en-operacion");
+  }
+
+  function puedeActualizarEstadoLan() {
+    return !document.hidden && !estado.ticket && ventasVisibles() && !estado.operando;
+  }
+
+  function actualizarEstadoLan() {
+    if (!puedeActualizarEstadoLan() || estado.cargaEstadoEnCurso) return;
+    cargarEstado(false, { silencioso: true });
+  }
+
+  function iniciarActualizacionEstadoLan() {
+    clearInterval(estado.temporizadorEstadoLan);
+    estado.temporizadorEstadoLan = setInterval(actualizarEstadoLan, INTERVALO_ESTADO_LAN_MS);
   }
 
   function ticketResumenEstado(ticket) {
@@ -636,32 +767,72 @@
       }
       return;
     }
+    if (modoTableta && estado.canal === "comedor") {
+      const posicionClave = posiciones.find(posicion => String(posicion.id) === String(estado.mesaClaveTableta));
+      const nombrePosicion = posicionClave?.nombre || "Mesa";
+      const digitosCapturados = estado.claveTableta.length;
+      const tarjetasComedor = renderTarjetas("comedor");
+      const contenidoComedor = estado.pinTabletaActivo
+        ? `<section class="pin-tableta-panel" role="dialog" aria-labelledby="pin-tableta-titulo" aria-describedby="pin-tableta-ayuda">
+            <button class="pin-tableta-cancelar" data-tecla-pin-tableta="cancelar" type="button">Cancelar</button>
+            <small>Identificación para ${escapar(nombrePosicion)}</small>
+            <h2 id="pin-tableta-titulo">${escapar(estado.tituloClaveTableta || "Acceso a Ventas")}</h2>
+            <p id="pin-tableta-ayuda">${escapar(estado.ayudaClaveTableta || "Ingresa tu código de 4 dígitos.")}</p>
+            <output class="pin-tableta-puntos" aria-label="${digitosCapturados} de 4 dígitos capturados">
+              ${Array.from({ length: 4 }, (_, indice) => `<i class="${indice < digitosCapturados ? "capturado" : ""}" aria-hidden="true"></i>`).join("")}
+            </output>
+            <p class="pin-tableta-error" role="alert" ${estado.errorClaveTableta ? "" : "hidden"}>${escapar(estado.errorClaveTableta)}</p>
+          </section>`
+        : tarjetasComedor || '<p class="vacio">No hay posiciones configuradas.</p>';
+      const tecladoDeshabilitado = estado.pinTabletaActivo ? "" : "disabled";
+      contenedor.className = "rejilla-posiciones rejilla-dividida rejilla-tableta-pin";
+      contenedor.innerHTML = `
+        <section class="grupo-posiciones grupo-principal grupo-comedor-tableta">
+          <header><strong>Comedor</strong><small>${estado.pinTabletaActivo ? nombrePosicion : "Selecciona una mesa"}</small></header>
+          <div>${contenidoComedor}</div>
+        </section>
+        <section class="grupo-posiciones grupo-auxiliar grupo-teclado-tableta">
+          <header><strong>Teclado</strong><small>${estado.pinTabletaActivo ? "Código de 4 dígitos" : "Disponible al elegir mesa"}</small></header>
+          <div class="teclado-pin-tableta" aria-label="Teclado numérico para código de acceso">
+            ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(numero => `<button data-tecla-pin-tableta="${numero}" type="button" ${tecladoDeshabilitado}>${numero}</button>`).join("")}
+            <button class="borrar" data-tecla-pin-tableta="borrar" type="button" aria-label="Borrar último dígito" ${tecladoDeshabilitado}>←</button>
+            <button data-tecla-pin-tableta="0" type="button" ${tecladoDeshabilitado}>0</button>
+            <button class="confirmar" data-tecla-pin-tableta="confirmar" type="button" aria-label="Confirmar código" ${digitosCapturados === 4 ? "" : "disabled"}>OK</button>
+          </div>
+          <p class="teclado-pin-ayuda">${estado.pinTabletaActivo ? "El código se captura aquí; no se abrirá el teclado de Android." : "Toca una mesa de Comedor para identificarte."}</p>
+        </section>`;
+      return;
+    }
     const secundario = estado.canal === "comedor" ? "llevar" : (estado.canal === "domicilio" ? "recoger" : "");
+    const renderProgramados = canal => {
+      const lista = estado.programados.filter(ticket => ticket.canal === canal);
+      if (!lista.length) return "";
+      return `<section class="pedidos-programados-pos" data-canal="${escapar(canal)}">
+        <header><strong>Programados · ${escapar(nombresCanal[canal] || canal)}</strong><small>Se activarán por fecha y hora en la primera casilla libre</small></header>
+        <div>${lista.map(ticket => `<article class="programado-pos">
+          <span>Programado</span><strong>#${escapar(ticket.folio)} · ${escapar(ticket.cliente_nombre || "Cliente")}</strong>
+          <small>${escapar(ticket.fecha_programada)}${ticket.hora_programada ? ` · ${escapar(ticket.hora_programada)}` : ""}</small><b>${dinero(ticket.total)}</b>
+        </article>`).join("")}</div>
+      </section>`;
+    };
     const principales = renderTarjetas(estado.canal);
+    const programadosPrincipales = renderProgramados(estado.canal);
     if (!secundario) {
       contenedor.className = "rejilla-posiciones rejilla-simple";
-      contenedor.innerHTML = principales || '<p class="vacio">No hay posiciones configuradas.</p>';
+      contenedor.innerHTML = `${principales || '<p class="vacio">No hay posiciones configuradas.</p>'}${programadosPrincipales}`;
       return;
     }
     const auxiliares = renderTarjetas(secundario);
+    const programadosAuxiliares = renderProgramados(secundario);
     contenedor.className = "rejilla-posiciones rejilla-dividida";
-    const programados = estado.canal === "domicilio" && estado.programados.length
-      ? `<section class="pedidos-programados-pos">
-          <header><strong>Programados</strong><small>Se activarán por fecha y hora en la primera casilla libre</small></header>
-          <div>${estado.programados.map(ticket => `<article class="programado-pos">
-            <span>Programado</span><strong>#${escapar(ticket.folio)} · ${escapar(ticket.cliente_nombre || "Cliente")}</strong>
-            <small>${escapar(ticket.fecha_programada)}${ticket.hora_programada ? ` · ${escapar(ticket.hora_programada)}` : ""}</small><b>${dinero(ticket.total)}</b>
-          </article>`).join("")}</div>
-        </section>`
-      : "";
     contenedor.innerHTML = `
       <section class="grupo-posiciones grupo-principal">
         <header><strong>${escapar(nombresCanal[estado.canal])}</strong><small>Pedidos activos y posiciones disponibles</small></header>
-        <div>${principales || '<p class="vacio">No hay posiciones configuradas.</p>'}</div>${programados}
+        <div>${principales || '<p class="vacio">No hay posiciones configuradas.</p>'}</div>${programadosPrincipales}
       </section>
       <section class="grupo-posiciones grupo-auxiliar">
         <header><strong>${escapar(nombresCanal[secundario])}</strong><small>${secundario === "recoger" ? "Nombre y celular" : "Nombre del cliente"}</small></header>
-        <div>${auxiliares || '<p class="vacio">No hay posiciones configuradas.</p>'}</div>
+        <div>${auxiliares || '<p class="vacio">No hay posiciones configuradas.</p>'}</div>${programadosAuxiliares}
       </section>`;
   }
 
@@ -690,9 +861,17 @@
 
   async function abrirPosicion(mesaId) {
     if (estado.operando) return;
-    if (!estado.operador) {
+    if (modoTableta || !estado.operador) {
+      if (modoTableta) {
+        estado.mesaClaveTableta = String(mesaId);
+        estado.errorClaveTableta = "";
+      }
       const identificado = await entrarComoMesero({ mostrarPantalla: false });
-      if (!identificado) return;
+      estado.mesaClaveTableta = "";
+      if (!identificado) {
+        renderPosiciones();
+        return;
+      }
     }
     bloquear(true);
     try {
@@ -712,18 +891,25 @@
       toast(error.message, true);
     } finally {
       bloquear(false);
+      if (modoTableta && !estado.ticket) renderPosiciones();
     }
   }
 
   function mostrarTicket() {
     const ticket = estado.ticket;
     const esSucursal = ticket.canal === "sucursales";
+    const editandoProgramado = esEdicionProgramada(ticket);
     document.body.classList.add("en-ticket");
+    document.body.classList.toggle("edicion-programada", editandoProgramado);
     $("#vista-posiciones").classList.add("oculto");
     $("#vista-ticket").classList.remove("oculto");
     $("#vista-ticket").classList.toggle("ticket-sucursal", esSucursal);
-    $("#ticket-mesa").textContent = ticket.mesa;
+    $("#ticket-mesa").textContent = editandoProgramado
+      ? `Programado · ${ticket.mesa} · ${ticket.fecha_programada} ${ticket.hora_programada || ""}`.trim()
+      : ticket.mesa;
     $("#ticket-folio").textContent = ticket.folio;
+    $("#volver").setAttribute("aria-label", editandoProgramado ? "Guardar y volver a Programados" : "Volver");
+    $("#volver").title = editandoProgramado ? "Guardar y volver a Programados" : "Volver";
     actualizarIndicadorBloqueoTicket();
     iniciarHeartbeatBloqueo();
     estado.comandaVisible = numeroComandaActual(ticket);
@@ -763,7 +949,7 @@
     $("#ticket-switches").classList.toggle("oculto", !admiteSwitches);
     $("#switch-tipo-pedido").checked = esRecoger || esLlevar;
     $("#switch-modo-nombres").checked = Boolean(ticket.captura_por_nombres);
-    $("#switch-tipo-pedido").disabled = !comandaVisibleEditable(ticket);
+    $("#switch-tipo-pedido").disabled = !comandaVisibleEditable(ticket) || editandoProgramado;
     $("#switch-modo-nombres").disabled = !comandaVisibleEditable(ticket);
     $("#tipo-pedido-etiqueta").textContent = esEntrega ? (esRecoger ? "Recoger" : "Domicilio") : (esLlevar ? "Llevar" : "Mesa");
     $("#modo-nombres-etiqueta").textContent = ticket.captura_por_nombres ? "Por nombres" : "Normal";
@@ -919,6 +1105,89 @@
     } finally { bloquear(false); }
   }
 
+  function esPartidaPersonalizada(partida) {
+    return Boolean(partida?.personalizado);
+  }
+
+  function nombrePartida(partida) {
+    return String(partida?.nombre || partida?.nombre_corto || "Producto personalizado");
+  }
+
+  function clavePartidaEdicion(partida) {
+    return esPartidaPersonalizada(partida)
+      ? `personalizado:${partida.id}`
+      : `${partida.producto_id}:${partida.termino || "unico"}`;
+  }
+
+  async function abrirProductoPersonalizado() {
+    if (!estado.ticket || !comandaVisibleEditable() || bloqueoDeOtro()) return;
+    if (!(await finalizarEdicion())) return;
+    const dialogo = $("#dialogo-producto-personalizado");
+    const formulario = $("#form-producto-personalizado");
+    formulario.reset();
+    formulario.removeAttribute("aria-busy");
+    $("#error-producto-personalizado").hidden = true;
+    dialogo.showModal();
+    requestAnimationFrame(() => $("#producto-personalizado-nombre").focus());
+  }
+
+  function cerrarProductoPersonalizado() {
+    const dialogo = $("#dialogo-producto-personalizado");
+    if (!dialogo.open || $("#form-producto-personalizado").getAttribute("aria-busy") === "true") return;
+    dialogo.close();
+  }
+
+  async function guardarProductoPersonalizado() {
+    const dialogo = $("#dialogo-producto-personalizado");
+    const formulario = $("#form-producto-personalizado");
+    const errorNodo = $("#error-producto-personalizado");
+    const boton = $("#guardar-producto-personalizado");
+    const nombre = $("#producto-personalizado-nombre").value.trim().replace(/\s+/g, " ");
+    const precio = Number($("#producto-personalizado-precio").value);
+    errorNodo.hidden = true;
+    if (nombre.length < 2) {
+      errorNodo.textContent = "Escribe un nombre de al menos 2 caracteres.";
+      errorNodo.hidden = false;
+      $("#producto-personalizado-nombre").focus();
+      return;
+    }
+    if (!Number.isFinite(precio) || precio < 0.01 || precio > 999999.99) {
+      errorNodo.textContent = "Captura un precio entre $0.01 y $999,999.99.";
+      errorNodo.hidden = false;
+      $("#producto-personalizado-precio").focus();
+      return;
+    }
+    formulario.setAttribute("aria-busy", "true");
+    boton.disabled = true;
+    boton.textContent = "Agregando…";
+    try {
+      const datos = await api(`/api/tickets/${estado.ticket.id}/partidas/`, {
+        method: "POST",
+        body: JSON.stringify({
+          personalizado: true,
+          nombre_producto: nombre,
+          precio_unitario: Math.round(precio * 100) / 100,
+          cantidad: 1,
+          comensal: estado.persona,
+        }),
+      });
+      estado.ticket = datos.ticket;
+      estado.modoMenu = "productos";
+      dialogo.close();
+      renderMenu();
+      renderComanda();
+      renderAcciones();
+      toast(`${nombre} agregado. Toca su cantidad en la comanda para ajustarla.`);
+    } catch (error) {
+      errorNodo.textContent = `${error.message} Revisa los datos e intenta de nuevo.`;
+      errorNodo.hidden = false;
+    } finally {
+      formulario.removeAttribute("aria-busy");
+      boton.disabled = false;
+      boton.textContent = "Agregar producto";
+    }
+  }
+
   function esBebida(partidaOProducto) {
     return String(partidaOProducto?.categoria || "").toLocaleLowerCase("es-MX") === "bebidas";
   }
@@ -981,6 +1250,28 @@
     $("#productos")?.classList.toggle("modo-calculadora", modoCalculadora);
     const volverProductos = $("#menu-productos");
     volverProductos.classList.toggle("oculto", ["productos", "calculadora", "calculadora-sucursal"].includes(estado.modoMenu));
+    if (estado.modoMenu === "calculadora" && estado.edicion?.personalizado) {
+      $("#menu-contexto").textContent = "Cantidad del producto";
+      $("#menu-indicacion").textContent = `Comensal ${estado.edicion.persona} · ${estado.edicion.nombreProducto}`;
+      $("#productos").innerHTML = `
+        <section class="calculadora-cantidad calculadora-personalizada">
+          <div class="calculadora-producto">
+            <strong>${escapar(estado.edicion.nombreProducto)}</strong>
+            <span>${dinero(estado.edicion.precioUnitario)} c/u</span>
+          </div>
+          <output class="pantalla-cantidad" aria-label="Cantidad">${estado.edicion.cantidadPantalla}</output>
+          <div class="teclado-cantidad">
+            ${[7, 8, 9, 4, 5, 6, 1, 2, 3].map(numero => `<button data-tecla="${numero}" type="button">${numero}</button>`).join("")}
+            <button class="borrar" data-tecla="borrar" type="button" aria-label="Borrar un dígito">←</button>
+            <button data-tecla="0" type="button">0</button>
+            <button class="eliminar" data-tecla="eliminar" type="button" aria-label="Eliminar producto">×</button>
+          </div>
+          <button class="confirmar-edicion" data-confirmar-edicion type="button" aria-label="Confirmar y salir" title="Confirmar y salir">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
+          </button>
+        </section>`;
+      return;
+    }
     if (esSucursal) {
       if (estado.modoMenu === "calculadora-sucursal" && estado.edicion) {
         const producto = (estado.ticket.catalogo_sucursal || []).find(item => item.id === estado.edicion.productoId);
@@ -1007,7 +1298,13 @@
       $("#menu-contexto").textContent = "Productos de sucursal";
       $("#menu-indicacion").textContent = "Selecciona un producto y captura su cantidad";
       const capturados = new Set(ticketVisible.partidas.map(partida => partida.producto_sucursal_id));
-      $("#productos").innerHTML = `<section class="catalogo-sucursal">${(estado.ticket.catalogo_sucursal || []).map(producto => `
+      $("#productos").innerHTML = `<section class="catalogo-sucursal">
+        <button class="producto producto-sucursal producto-personalizado" data-producto-personalizado type="button" ${!abierto ? "disabled" : ""}>
+          <small>Venta fuera de catálogo</small>
+          <strong>Producto personalizado</strong>
+          <b>Nombre + precio</b>
+        </button>
+        ${(estado.ticket.catalogo_sucursal || []).map(producto => `
         <button class="producto producto-sucursal ${capturados.has(producto.id) ? "en-pedido" : ""}" data-sucursal-producto="${producto.id}" type="button" ${!abierto ? "disabled" : ""}>
           <small>${escapar(producto.nombre_ticket)} · ${escapar(producto.unidad)}</small>
           <strong>${escapar(producto.nombre)}</strong>
@@ -1117,7 +1414,16 @@
       segmentos.get(producto.categoria).push(producto);
     }
     const secciones = [...segmentos.entries()];
-    $("#productos").innerHTML = secciones.map(([segmento, items], indice) => {
+    const accesoPersonalizado = soloBebidas ? "" : `
+      <section class="segmento-menu segmento-personalizado">
+        <div class="segmento-productos">
+          <button class="producto producto-menu producto-personalizado" data-producto-personalizado type="button" ${!abierto ? "disabled" : ""}>
+            <span class="producto-personalizado-simbolo" aria-hidden="true"><i></i></span>
+            <span class="producto-copy"><small>Venta fuera de catálogo</small><strong>Producto personalizado</strong></span>
+          </button>
+        </div>
+      </section>`;
+    $("#productos").innerHTML = accesoPersonalizado + secciones.map(([segmento, items], indice) => {
       const numeroSeccion = soloBebidas ? "" : indice + 1;
       const idSeccion = numeroSeccion ? `menu-seccion-${numeroSeccion}` : "";
       const idTitulo = numeroSeccion ? `menu-seccion-titulo-${numeroSeccion}` : "";
@@ -1196,14 +1502,16 @@
     const columnas = [];
     const indiceColumnas = new Map();
     for (const partida of principales) {
-      const clave = `${partida.producto_id}:${partida.termino || "unico"}`;
+      const clave = clavePartidaEdicion(partida);
       if (!indiceColumnas.has(clave)) {
         indiceColumnas.set(clave, columnas.length);
         columnas.push({
           clave,
           productoId: partida.producto_id,
+          partidaId: partida.id,
+          personalizado: esPartidaPersonalizada(partida),
           termino: partida.termino || "",
-          nombre: partida.nombre_corto,
+          nombre: nombrePartida(partida),
           cantidades: new Map(),
         });
       }
@@ -1224,7 +1532,11 @@
         const valor = columna.cantidades.get(persona) || 0;
         const seleccionada = estado.edicion?.clave === columna.clave && estado.edicion?.persona === persona;
         const texto = seleccionada ? estado.edicion.cantidadPantalla : (valor ? cantidad(valor) : "");
-        return `<button class="comanda-nombre-celda cantidad-celda ${claseCantidad(seleccionada ? estado.edicion.cantidadPantalla : valor)} ${seleccionada ? "seleccionada" : ""}" data-celda-producto="${columna.productoId}" data-celda-persona="${persona}" data-celda-termino="${columna.termino}" data-celda-clave="${columna.clave}" type="button">${texto}</button>`;
+        if (columna.personalizado && !valor && !seleccionada) return '<span class="comanda-nombre-celda vacia"></span>';
+        const atributoPartida = columna.personalizado
+          ? `data-celda-personalizada="${columna.partidaId}"`
+          : `data-celda-producto="${columna.productoId}" data-celda-termino="${columna.termino}"`;
+        return `<button class="comanda-nombre-celda cantidad-celda ${claseCantidad(seleccionada ? estado.edicion.cantidadPantalla : valor)} ${seleccionada ? "seleccionada" : ""}" ${atributoPartida} data-celda-persona="${persona}" data-celda-clave="${columna.clave}" type="button">${texto}</button>`;
       }).join("");
       return `<button class="comanda-nombre-persona" data-seleccionar-persona="${persona}" type="button"><b>${persona}. ${escapar(nombres[String(persona)] || "SIN NOMBRE")}</b><small>${escapar(preparacion.get(persona) || "")}</small></button>${celdas}`;
     }).join("");
@@ -1259,13 +1571,19 @@
 
   function renderPedidoSucursal(ticket, contenedor) {
     const abierto = comandaVisibleEditable(ticket);
-    const filas = [...ticket.partidas].sort((a, b) => a.orden - b.orden).map(partida => `
-      <button class="fila-partida-sucursal ${estado.edicion?.partidaId === partida.id ? "seleccionada" : ""}" data-partida-sucursal="${partida.id}" data-producto-sucursal="${partida.producto_sucursal_id}" type="button" ${!abierto ? "disabled" : ""}>
-        <span class="concepto"><strong>${escapar(partida.nombre_catalogo || partida.nombre)}</strong><small>${escapar(partida.nombre)}</small></span>
-        <span><b>${cantidad(partida.cantidad)}</b><small>${escapar(partida.unidad)}</small></span>
+    const filas = [...ticket.partidas].sort((a, b) => a.orden - b.orden).map(partida => {
+      const personalizada = esPartidaPersonalizada(partida);
+      const atributos = personalizada
+        ? `data-partida-personalizada="${partida.id}"`
+        : `data-partida-sucursal="${partida.id}" data-producto-sucursal="${partida.producto_sucursal_id}"`;
+      return `
+      <button class="fila-partida-sucursal ${personalizada ? "fila-personalizada" : ""} ${estado.edicion?.partidaId === partida.id ? "seleccionada" : ""}" ${atributos} type="button" ${!abierto ? "disabled" : ""}>
+        <span class="concepto"><strong>${escapar(partida.nombre_catalogo || nombrePartida(partida))}</strong><small>${personalizada ? "Producto personalizado" : escapar(partida.nombre)}</small></span>
+        <span><b>${cantidad(partida.cantidad)}</b><small>${escapar(partida.unidad || "pza")}</small></span>
         <span><small>Precio</small>${dinero(partida.precio)}</span>
         <span><small>Importe</small><b>${dinero(partida.importe)}</b></span>
-      </button>`).join("");
+      </button>`;
+    }).join("");
     $("#orden-resumen").textContent = `${ticket.partidas.length} ${ticket.partidas.length === 1 ? "producto" : "productos"} · ${dinero(ticket.total)}`;
     contenedor.innerHTML = `
       <section class="pedido-sucursal-lista">
@@ -1297,13 +1615,15 @@
     const partidasComida = ticket.partidas.filter(partida => !esBebida(partida) && !partida.es_promocion);
     const filas = new Map();
     for (const partida of partidasComida) {
-      const clave = `${partida.producto_id}:${partida.termino || "unico"}`;
+      const clave = clavePartidaEdicion(partida);
       if (!filas.has(clave)) {
         filas.set(clave, {
           clave,
           productoId: partida.producto_id,
+          partidaId: partida.id,
+          personalizado: esPartidaPersonalizada(partida),
           termino: partida.termino || "",
-          nombre: partida.nombre_corto,
+          nombre: nombrePartida(partida),
           cantidades: new Map(),
         });
       }
@@ -1335,9 +1655,13 @@
         const seleccionada = estado.edicion?.clave === fila.clave && estado.edicion?.persona === persona;
         const valor = seleccionada ? estado.edicion.cantidadPantalla : (celda?.cantidad || 0);
         const texto = valor || seleccionada ? cantidad(valor) : "";
-        return `<button class="comanda-celda cantidad-celda ${claseCantidad(valor)} ${seleccionada ? "seleccionada" : ""}" data-celda-producto="${fila.productoId}" data-celda-persona="${persona}" data-celda-termino="${fila.termino}" data-celda-clave="${fila.clave}" type="button">${texto}</button>`;
+        if (fila.personalizado && !celda && !seleccionada) return '<span class="comanda-celda cantidad-celda vacia"></span>';
+        const atributoPartida = fila.personalizado
+          ? `data-celda-personalizada="${fila.partidaId}"`
+          : `data-celda-producto="${fila.productoId}" data-celda-termino="${fila.termino}"`;
+        return `<button class="comanda-celda cantidad-celda ${claseCantidad(valor)} ${seleccionada ? "seleccionada" : ""}" ${atributoPartida} data-celda-persona="${persona}" data-celda-clave="${fila.clave}" type="button">${texto}</button>`;
       }).join("");
-      return `<button class="comanda-etiqueta producto-zona" data-modo-menu="productos" type="button">${escapar(fila.nombre)}</button>${celdas}`;
+      return `<button class="comanda-etiqueta producto-zona ${fila.personalizado ? "etiqueta-personalizada" : ""}" data-modo-menu="productos" type="button">${escapar(fila.nombre)}</button>${celdas}`;
     }).join("");
     const promocionesHtml = [...promociones.values()].map(fila => {
       const celdas = personas.map(persona => {
@@ -1589,6 +1913,7 @@
 
   function renderAcciones() {
     const bloqueoAjeno = bloqueoDeOtro();
+    const editandoProgramado = esEdicionProgramada();
     const enEdicion = comandaEnEdicion();
     const abierto = comandaVisibleEditable();
     const cobrable = ["procesado", "cobrar"].includes(estado.ticket.estado);
@@ -1617,7 +1942,7 @@
     $("#cobrar").textContent = esSucursal ? "Completar pedido" : "Cobrar";
     $("#cancelar-orden").textContent = comandaAgregadaPendiente ? "Cancelar comanda" : "Cancelar orden";
     $("#agregar-comanda").textContent = iniciaNuevoTicket ? "Agregar pedido" : "Agregar comanda";
-    $("#procesar").classList.toggle("oculto", !abierto);
+    $("#procesar").classList.toggle("oculto", !abierto || editandoProgramado);
     $("#cancelar-orden").classList.toggle("oculto", !muestraCancelar);
     $("#ticket-cuenta").classList.toggle("oculto", !muestraTicket);
     $("#agregar-comanda").classList.toggle("oculto", !muestraAgregar);
@@ -1626,7 +1951,10 @@
     acciones.classList.toggle("con-agregar", muestraAgregar);
     acciones.classList.toggle("con-cobro-bloqueado", cobroBloqueado && abierto);
     acciones.classList.toggle("solo-agregar", muestraAgregar && !muestraTicket && !muestraCobro);
-    acciones.classList.toggle("oculto", !abierto && !muestraCancelar && !muestraTicket && !muestraAgregar && !muestraCobro);
+    acciones.classList.toggle(
+      "oculto",
+      editandoProgramado || (!abierto && !muestraCancelar && !muestraTicket && !muestraAgregar && !muestraCobro),
+    );
     $("#procesar").disabled = !editable;
     $("#cancelar-orden").disabled = !operable;
     $("#ticket-cuenta").disabled = !operable;
@@ -1645,7 +1973,9 @@
     });
     $$("#datos-cliente button, #datos-cliente input, #datos-cliente textarea").forEach(control => control.disabled = !editable);
     $$("#datos-servicio-directo input, #ticket-switches input, #nombre-persona, .comanda-cliente-llevar input").forEach(control => control.disabled = !editable);
+    $("#switch-tipo-pedido").disabled = !editable || editandoProgramado;
     $$("#entrega, #pago-domicilio input, #comentario").forEach(control => control.disabled = !editable);
+    $("#entrega").disabled = !editable || editandoProgramado;
     renderNavegadorComandas();
   }
 
@@ -1716,6 +2046,34 @@
     estado.modoMenu = "calculadora-sucursal";
     renderMenu();
     renderComanda();
+  }
+
+  function abrirCalculadoraPersonalizada(partida) {
+    estado.edicion = {
+      personalizado: true,
+      productoId: "",
+      partidaId: partida.id,
+      nombreProducto: nombrePartida(partida),
+      precioUnitario: Number(partida.precio || 0),
+      persona: Number(partida.comensal || estado.persona || 1),
+      termino: "",
+      clave: `personalizado:${partida.id}`,
+      ids: [partida.id],
+      cantidadPantalla: Math.min(9999, Math.max(1, Math.trunc(Number(partida.cantidad) || 1))),
+      reemplazar: true,
+    };
+    estado.persona = estado.edicion.persona;
+    estado.modoMenu = "calculadora";
+    renderPersonas();
+    renderMenu();
+    renderComanda();
+  }
+
+  async function editarPartidaPersonalizada(partidaId) {
+    if (!(await finalizarEdicion())) return;
+    const partida = estado.ticket?.partidas.find(item => String(item.id) === String(partidaId));
+    if (!esPartidaPersonalizada(partida)) return;
+    abrirCalculadoraPersonalizada(partida);
   }
 
   async function seleccionarProductoSucursal(productoId) {
@@ -1850,6 +2208,7 @@
       termino: estado.edicion.termino,
       clave: estado.edicion.clave,
       ids: [...estado.edicion.ids],
+      personalizado: Boolean(estado.edicion.personalizado),
       cantidad: estado.edicion.cantidadPantalla,
       eliminar,
       sincronizarCantidad,
@@ -1867,7 +2226,9 @@
       estado.ticket = datos.ticket;
       estado.errorEdicion = null;
       if (estado.edicion?.clave === captura.clave && estado.edicion?.persona === captura.persona) {
-        const partidasActuales = partidasDeEdicion(captura.productoId, captura.persona, captura.termino);
+        const partidasActuales = captura.personalizado
+          ? estado.ticket.partidas.filter(partida => captura.ids.some(id => String(id) === String(partida.id)))
+          : partidasDeEdicion(captura.productoId, captura.persona, captura.termino);
         estado.edicion.ids = partidasActuales.map(partida => partida.id);
         if (captura.sincronizarCantidad && estado.edicion.cantidadPantalla === captura.cantidad) {
           estado.edicion.cantidadPantalla = partidasActuales.reduce(
@@ -1887,7 +2248,7 @@
 
   async function finalizarEdicion() {
     if (!estado.edicion) return true;
-    if (estado.ticket?.canal === "sucursales") return guardarEdicionSucursal();
+    if (estado.ticket?.canal === "sucursales" && !estado.edicion.personalizado) return guardarEdicionSucursal();
     const edicion = estado.edicion;
     await estado.colaEdicion;
     if (estado.errorEdicion) return false;
@@ -1935,7 +2296,7 @@
   }
 
   function seleccionarTermino(termino) {
-    if (!estado.edicion) return;
+    if (!estado.edicion || estado.edicion.personalizado) return;
     const producto = productos.find(item => item.id === estado.edicion.productoId);
     if (!producto?.permite_termino || !producto.abreviaturas_termino[termino]) return;
     estado.edicion.termino = termino;
@@ -2345,6 +2706,19 @@
     if (!forzar && !(await guardarNombreClienteLlevar())) return;
     clearTimeout(estado.temporizadorNombre);
     clearTimeout(estado.temporizadorClienteLlevar);
+    if (estado.edicionProgramada) {
+      bloquear(true);
+      try {
+        await guardarDatos();
+        await liberarBloqueoActual();
+        window.location.assign("/administrador/#programados");
+      } catch (error) {
+        toast(`${error.message} El pedido sigue programado; corrige el dato y vuelve a intentar.`, true);
+      } finally {
+        bloquear(false);
+      }
+      return;
+    }
     await liberarBloqueoActual();
     estado.idempotenciaAgregar = "";
     estado.clienteLlevarGuardado = "";
@@ -2358,6 +2732,10 @@
   }
 
   async function salirModoMesero() {
+    if (estado.edicionProgramada) {
+      await volver();
+      return;
+    }
     if (!(await finalizarEdicion())) return;
     if (!(await guardarNombreClienteLlevar())) return;
     await liberarBloqueoActual();
@@ -2380,34 +2758,104 @@
     catch (error) { toast(error.message, true); }
   }
 
+  function estaEnPantallaCompleta() {
+    return Boolean(
+      document.fullscreenElement
+      || document.webkitFullscreenElement
+      || window.matchMedia?.("(display-mode: fullscreen)")?.matches
+      || window.matchMedia?.("(display-mode: standalone)")?.matches
+      || window.navigator.standalone
+    );
+  }
+
+  function actualizarEstadoPantallaCompleta() {
+    const activa = estaEnPantallaCompleta();
+    const boton = $("#pantalla-completa");
+    const texto = $("#pantalla-completa-texto");
+    const aviso = $("#estado-pantalla-completa");
+    if (boton) {
+      const etiqueta = activa ? "Salir de pantalla completa" : "Activar pantalla completa";
+      boton.setAttribute("aria-label", etiqueta);
+      boton.title = etiqueta;
+    }
+    if (texto) texto.textContent = activa ? "Pantalla completa activa" : "Pantalla completa";
+    if (!aviso) return;
+    aviso.hidden = activa;
+    if (activa) {
+      aviso.textContent = "";
+      return;
+    }
+    const disponible = Boolean(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+    aviso.textContent = disponible
+      ? "El navegador requiere una interacción para ocultar sus controles. Toca «Pantalla completa» si no se activa con tu primer toque."
+      : "Este navegador no permite ocultar sus controles. Instala o abre la PWA para usar la vista sin barras.";
+  }
+
+  async function solicitarPantallaCompleta({ silencioso = false } = {}) {
+    if (estaEnPantallaCompleta()) {
+      actualizarEstadoPantallaCompleta();
+      return true;
+    }
+    try {
+      if (document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen({ navigationUI: "hide" });
+      } else if (document.documentElement.webkitRequestFullscreen) {
+        await document.documentElement.webkitRequestFullscreen();
+      } else {
+        actualizarEstadoPantallaCompleta();
+        if (!silencioso) toast("Este navegador no permite activar pantalla completa. Usa la PWA instalada.", true);
+        return false;
+      }
+      estado.pantallaCompletaSuspendida = false;
+      actualizarEstadoPantallaCompleta();
+      return true;
+    } catch {
+      actualizarEstadoPantallaCompleta();
+      if (!silencioso) toast("El navegador bloqueó la pantalla completa. Toca de nuevo el botón para autorizarla.", true);
+      return false;
+    }
+  }
+
   async function salirModoTableta() {
     if (!(await finalizarEdicion())) return;
     if (!(await guardarNombreClienteLlevar())) return;
+    estado.pantallaCompletaSuspendida = true;
     if (document.fullscreenElement || document.webkitFullscreenElement) {
       try {
         if (document.exitFullscreen) await document.exitFullscreen();
-        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
       } catch { /* El navegador puede conservar el modo standalone de la PWA. */ }
     }
     if (estado.ticket) await volver(true);
+    actualizarEstadoPantallaCompleta();
     toast("Pantalla completa desactivada. Ya puedes cerrar o cambiar de aplicación.");
   }
 
   async function alternarPantallaCompleta() {
-    try {
-      if (document.fullscreenElement || document.webkitFullscreenElement) {
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      estado.pantallaCompletaSuspendida = true;
+      try {
         if (document.exitFullscreen) await document.exitFullscreen();
-        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-      } else if (document.documentElement.requestFullscreen) {
-        await document.documentElement.requestFullscreen({ navigationUI: "hide" });
-      } else if (document.documentElement.webkitRequestFullscreen) {
-        document.documentElement.webkitRequestFullscreen();
-      } else {
-        toast("Este navegador no permite activar pantalla completa desde la página.", true);
+        else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
+      } catch {
+        toast("No fue posible salir de pantalla completa desde este navegador.", true);
       }
-    } catch {
-      toast("No fue posible activar la pantalla completa. Revisa los permisos del navegador.", true);
+      actualizarEstadoPantallaCompleta();
+      return;
     }
+    estado.pantallaCompletaSuspendida = false;
+    await solicitarPantallaCompleta();
+  }
+
+  function activarPantallaCompletaConPrimerToque(evento) {
+    if (estado.pantallaCompletaSuspendida || estaEnPantallaCompleta()) return;
+    if (evento.target.closest?.("#pantalla-completa, #salir-tableta")) return;
+    solicitarPantallaCompleta({ silencioso: true });
+  }
+
+  function iniciarPantallaCompletaPredeterminada() {
+    actualizarEstadoPantallaCompleta();
+    solicitarPantallaCompleta({ silencioso: true });
   }
 
   $$(".canal").forEach(boton => boton.addEventListener("click", () => cambiarCanal(boton.dataset.canal)));
@@ -2442,6 +2890,11 @@
   $("#pantalla-completa")?.addEventListener("click", alternarPantallaCompleta);
   $("#salir-tableta")?.addEventListener("click", salirModoTableta);
   $("#rejilla-posiciones").addEventListener("click", evento => {
+    const teclaPin = evento.target.closest("[data-tecla-pin-tableta]");
+    if (teclaPin) {
+      manejarTeclaClaveTableta(teclaPin.dataset.teclaPinTableta);
+      return;
+    }
     const sucursal = evento.target.closest("[data-sucursal-id]");
     if (sucursal) {
       estado.sucursalSeleccionada = sucursal.dataset.sucursalId;
@@ -2462,6 +2915,11 @@
     if (boton) await seleccionarPersona(Number(boton.dataset.persona));
   });
   $("#productos").addEventListener("click", async evento => {
+    const productoPersonalizado = evento.target.closest("[data-producto-personalizado]");
+    if (productoPersonalizado) {
+      await abrirProductoPersonalizado();
+      return;
+    }
     const productoSucursal = evento.target.closest("[data-sucursal-producto]");
     if (productoSucursal) {
       await seleccionarProductoSucursal(productoSucursal.dataset.sucursalProducto);
@@ -2546,6 +3004,13 @@
   });
   $("#menu-productos").addEventListener("click", async () => cambiarModoMenu("productos"));
   $("#comanda-preview").addEventListener("click", async evento => {
+    const partidaPersonalizada = evento.target.closest("[data-partida-personalizada], [data-celda-personalizada]");
+    if (partidaPersonalizada) {
+      await editarPartidaPersonalizada(
+        partidaPersonalizada.dataset.partidaPersonalizada || partidaPersonalizada.dataset.celdaPersonalizada,
+      );
+      return;
+    }
     const partidaSucursal = evento.target.closest("[data-partida-sucursal]");
     if (partidaSucursal) {
       await editarPartidaSucursal(partidaSucursal.dataset.partidaSucursal);
@@ -2623,6 +3088,16 @@
   });
   $("#cancelar-cliente").addEventListener("click", () => $("#dialogo-cliente").close());
   $("#descartar-cliente").addEventListener("click", () => $("#dialogo-cliente").close());
+  $("#form-producto-personalizado").addEventListener("submit", evento => {
+    evento.preventDefault();
+    guardarProductoPersonalizado();
+  });
+  $("#cancelar-producto-personalizado").addEventListener("click", cerrarProductoPersonalizado);
+  $("#descartar-producto-personalizado").addEventListener("click", cerrarProductoPersonalizado);
+  $("#dialogo-producto-personalizado").addEventListener("cancel", evento => {
+    evento.preventDefault();
+    cerrarProductoPersonalizado();
+  });
   $("#entrega").addEventListener("click", async () => cambiarModoMenu("entrega"));
   $("#switch-tipo-pedido").addEventListener("change", convertirTipoPedido);
   $("#switch-modo-nombres").addEventListener("change", alternarCapturaPorNombres);
@@ -2710,12 +3185,19 @@
     cargarEstado(estado.canal === "sucursales");
   });
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && bloqueoPropio()) renovarBloqueoTicket();
+    if (document.visibilityState !== "visible") return;
+    if (bloqueoPropio()) renovarBloqueoTicket();
+    actualizarEstadoLan();
   });
+  document.addEventListener("fullscreenchange", actualizarEstadoPantallaCompleta);
+  document.addEventListener("webkitfullscreenchange", actualizarEstadoPantallaCompleta);
+  document.addEventListener("pointerdown", activarPantallaCompletaConPrimerToque, true);
   window.addEventListener("pagehide", liberarBloqueoEnSalida);
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/service-worker.js").catch(() => {});
   renderOperadorActual();
   renderPersonas();
   renderMenu();
-  cargarEstado();
+  iniciarActualizacionEstadoLan();
+  iniciarPantallaCompletaPredeterminada();
+  abrirProgramadoDesdeEnlace();
 })();

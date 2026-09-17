@@ -356,6 +356,14 @@ class Ticket(models.Model):
     procesado_en = models.DateTimeField(null=True, blank=True)
     pagado_en = models.DateTimeField(null=True, blank=True)
     cancelado_en = models.DateTimeField(null=True, blank=True)
+    cancelado_por = models.ForeignKey(
+        UsuarioPOS,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="tickets_cancelados",
+    )
+    cancelado_por_nombre = models.CharField(max_length=180, blank=True)
 
     class Meta:
         ordering = ["-creado_en"]
@@ -436,6 +444,7 @@ class Partida(models.Model):
         on_delete=models.PROTECT,
         related_name="partidas",
     )
+    personalizada = models.BooleanField(default=False)
     promocion_aplicada = models.ForeignKey(
         "self",
         null=True,
@@ -460,9 +469,12 @@ class Partida(models.Model):
         ordering = ["creada_en"]
         constraints = [
             models.CheckConstraint(
-                condition=(Q(producto__isnull=False, producto_sucursal__isnull=True)
-                           | Q(producto__isnull=True, producto_sucursal__isnull=False)),
-                name="partida_un_solo_catalogo",
+                condition=(
+                    Q(personalizada=True, producto__isnull=True, producto_sucursal__isnull=True)
+                    | Q(personalizada=False, producto__isnull=False, producto_sucursal__isnull=True)
+                    | Q(personalizada=False, producto__isnull=True, producto_sucursal__isnull=False)
+                ),
+                name="partida_origen_valido",
             )
         ]
 
@@ -533,8 +545,9 @@ class PedidoSucursalImportado(models.Model):
 
 class MovimientoCaja(models.Model):
     class Tipo(models.TextChoices):
-        ENTRADA = "entrada", "Entrada"
-        SALIDA = "salida", "Salida"
+        INGRESO = "ingreso", "Ingreso"
+        GASTO = "gasto", "Gasto"
+        TERMINAL = "terminal", "Terminal"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="movimientos_caja")
@@ -550,6 +563,29 @@ class MovimientoCaja(models.Model):
     class Meta:
         ordering = ["-creado_en"]
 
+
+class ControlEfectivoDia(models.Model):
+    """Conteos editables que alimentan el corte de una fecha local."""
+
+    DENOMINACIONES = ("0.5", "1", "2", "5", "10", "20", "50", "100", "200", "500", "1000")
+    APPS = ("rappi", "didi", "uber_eats")
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="controles_efectivo")
+    fecha = models.DateField()
+    fondo_anterior = models.JSONField(default=dict, blank=True)
+    fondo_siguiente = models.JSONField(default=dict, blank=True)
+    ventas_apps = models.JSONField(default=dict, blank=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-fecha"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sucursal", "fecha"],
+                name="control_efectivo_fecha_sucursal",
+            )
+        ]
 
 class ReporteAdministrativo(models.Model):
     class Tipo(models.TextChoices):
@@ -609,12 +645,47 @@ class CorteCaja(models.Model):
     total_ventas = models.DecimalField(max_digits=12, decimal_places=2)
     total_entradas = models.DecimalField(max_digits=12, decimal_places=2)
     total_salidas = models.DecimalField(max_digits=12, decimal_places=2)
+    total_fondo_anterior = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    total_terminales = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    total_fondo_siguiente = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    ventas_apps = models.JSONField(default=dict, blank=True)
+    totales_sucursales = models.JSONField(default=dict, blank=True)
     total_caja = models.DecimalField(max_digits=12, decimal_places=2)
+    detalle_eliminado_en = models.DateTimeField(null=True, blank=True)
     creado_en = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-fin"]
 
+
+class ConsolidacionMensual(models.Model):
+    class Estado(models.TextChoices):
+        PENDIENTE = "pendiente", "Pendiente"
+        CONFIRMADA = "confirmada", "Confirmada por VPS"
+        PURGADA = "purgada", "Datos locales eliminados"
+        ERROR = "error", "Error"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="consolidaciones_mensuales")
+    periodo = models.DateField(help_text="Primer día del mes consolidado.")
+    idempotencia = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    estado = models.CharField(max_length=12, choices=Estado.choices, default=Estado.PENDIENTE)
+    totales = models.JSONField(default=dict)
+    intentos = models.PositiveIntegerField(default=0)
+    acuse_vps = models.CharField(max_length=160, blank=True)
+    ultimo_error = models.TextField(blank=True)
+    creado_en = models.DateTimeField(auto_now_add=True)
+    confirmado_en = models.DateTimeField(null=True, blank=True)
+    purgado_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-periodo"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sucursal", "periodo"],
+                name="consolidacion_periodo_sucursal",
+            )
+        ]
 
 class CorteSucursal(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

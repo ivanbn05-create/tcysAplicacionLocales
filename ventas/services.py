@@ -63,6 +63,7 @@ CANALES_CONVERSION = {
     Mesa.Canal.RECOGER: Mesa.Canal.DOMICILIO,
 }
 ESTADOS_ACTIVOS = (Ticket.Estado.ABIERTO, Ticket.Estado.PROCESADO, Ticket.Estado.COBRAR)
+ESTADOS_BLOQUEABLES = (*ESTADOS_ACTIVOS, Ticket.Estado.PROGRAMADO)
 TICKET_LOCK_FIELDS = [
     "bloqueo_device_id",
     "bloqueo_operador",
@@ -75,10 +76,18 @@ CANTIDAD_MAXIMA_POS = Decimal("9999")
 
 
 def validar_comanda_editable(ticket):
-    editable = ticket.comanda_en_edicion or ticket.estado == Ticket.Estado.ABIERTO
+    editable = (
+        ticket.comanda_en_edicion
+        or ticket.estado in {Ticket.Estado.ABIERTO, Ticket.Estado.PROGRAMADO}
+    )
     if (
         not editable
-        or ticket.estado not in {Ticket.Estado.ABIERTO, Ticket.Estado.PROCESADO}
+        or ticket.estado
+        not in {
+            Ticket.Estado.ABIERTO,
+            Ticket.Estado.PROCESADO,
+            Ticket.Estado.PROGRAMADO,
+        }
     ):
         raise ErrorVenta("La comanda actual ya fue procesada.")
 
@@ -186,7 +195,7 @@ def lease_bloqueo_ticket_segundos():
 def _bloqueo_vigente(ticket, ahora=None):
     ahora = ahora or timezone.now()
     return (
-        ticket.estado in ESTADOS_ACTIVOS
+        ticket.estado in ESTADOS_BLOQUEABLES
         and bool(ticket.bloqueo_device_id)
         and ticket.bloqueo_expira_en is not None
         and ticket.bloqueo_expira_en > ahora
@@ -262,7 +271,7 @@ def asegurar_bloqueo_ticket(ticket, device_id, operador=None, ahora=None):
         .select_related("mesa", "bloqueo_operador", "atendio")
         .get(pk=ticket.pk)
     )
-    if ticket.estado not in ESTADOS_ACTIVOS:
+    if ticket.estado not in ESTADOS_BLOQUEABLES:
         if ticket.bloqueo_device_id:
             _limpiar_bloqueo_instancia(ticket)
             ticket.save(update_fields=TICKET_LOCK_FIELDS)
@@ -334,11 +343,18 @@ def validar_limite_productos_por_nombre(ticket):
         )
     )
     claves = {
-        (partida.producto_id, partida.termino)
+        (
+            ("personalizado", str(partida.id))
+            if partida.personalizada
+            else (partida.producto_id, partida.termino)
+        )
         for partida in partidas
-        if not configuracion_promocion(partida.producto)
-        and partida.producto.codigo.upper() not in PRODUCTOS_SIEMPRE_AL_FINAL
-        and partida.producto.categoria.nombre.lower() != "bebidas"
+        if partida.personalizada
+        or (
+            not configuracion_promocion(partida.producto)
+            and partida.producto.codigo.upper() not in PRODUCTOS_SIEMPRE_AL_FINAL
+            and partida.producto.categoria.nombre.lower() != "bebidas"
+        )
     }
     if len(claves) > 4:
         raise ErrorVenta("Los pedidos por nombre admiten un máximo de 4 productos principales.")
@@ -460,7 +476,7 @@ def _reasignar_componentes_promocion(ticket):
     regulares = list(
         Partida.objects.select_for_update()
         .select_related("producto__categoria")
-        .filter(ticket=ticket, comanda_numero=ticket.comanda_actual)
+        .filter(ticket=ticket, comanda_numero=ticket.comanda_actual, producto__isnull=False)
         .exclude(producto__codigo__in=PROMOCIONES)
         .order_by("creada_en")
     )
@@ -535,6 +551,9 @@ def abrir_ticket(mesa, atendio=_ATENDIO_AUTOMATICO):
     ).first()
     if activo:
         return activo, False
+    from .consolidacion import exigir_mes_operativo
+
+    exigir_mes_operativo(mesa.sucursal)
     consecutivo = _consecutivo_folio_bloqueado(mesa.sucursal)
     consecutivo.ultimo += 1
     consecutivo.save(update_fields=["ultimo", "actualizado_en"])
@@ -754,6 +773,59 @@ def agregar_partida_sucursal(ticket, producto, cantidad=Decimal("1.000")):
 
 
 @transaction.atomic
+def agregar_partida_personalizada(
+    ticket,
+    nombre,
+    precio_unitario,
+    cantidad=Decimal("1.000"),
+    comensal=1,
+):
+    ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    validar_comanda_editable(ticket)
+    nombre = " ".join(str(nombre or "").split())[:180]
+    if not nombre:
+        raise ErrorVenta("Escribe el nombre del producto personalizado.")
+    try:
+        precio_unitario = Decimal(str(precio_unitario)).quantize(Decimal("0.01"))
+        cantidad = Decimal(str(cantidad))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ErrorVenta("El precio o la cantidad no son válidos.") from exc
+    if precio_unitario <= 0 or precio_unitario > Decimal("99999999.99"):
+        raise ErrorVenta("El precio debe ser mayor que cero.")
+    if cantidad != cantidad.to_integral_value() or not 1 <= cantidad <= CANTIDAD_MAXIMA_POS:
+        raise ErrorVenta("La cantidad debe ser un entero entre 1 y 9999.")
+    try:
+        comensal = int(comensal or 1)
+    except (TypeError, ValueError) as exc:
+        raise ErrorVenta("El comensal no es válido.") from exc
+    if ticket.canal == Mesa.Canal.SUCURSALES:
+        comensal = 1
+    elif not 1 <= comensal <= 24:
+        raise ErrorVenta("El comensal debe estar entre 1 y 24.")
+    partida = Partida.objects.create(
+        sucursal=ticket.sucursal,
+        ticket=ticket,
+        personalizada=True,
+        comanda_numero=ticket.comanda_actual,
+        comensal=comensal,
+        cantidad=cantidad,
+        precio_unitario=precio_unitario,
+        nombre_producto=nombre,
+        nombre_corto=nombre[:24],
+    )
+    _reasignar_componentes_promocion(ticket)
+    if ticket.captura_por_nombres:
+        validar_limite_productos_por_nombre(ticket)
+    guardar_ticket(ticket, [])
+    _evento(
+        ticket,
+        "ticket.partida_personalizada_agregada",
+        {"partida_id": str(partida.id), "nombre": nombre, "precio": str(precio_unitario)},
+    )
+    return partida
+
+
+@transaction.atomic
 def actualizar_partida_sucursal(partida, cantidad):
     ticket = Ticket.objects.select_for_update().get(pk=partida.ticket_id)
     partida = Partida.objects.select_for_update().select_related("ticket").get(pk=partida.pk)
@@ -804,7 +876,7 @@ def actualizar_partida(partida, cantidad, termino=None, validar_componente=True)
         raise ErrorVenta("La cantidad debe ser un entero entre 1 y 9999.")
     partida.cantidad = cantidad
     campos = ["cantidad"]
-    if termino is not None:
+    if termino is not None and not partida.personalizada:
         partida.termino, partida.nombre_producto, partida.nombre_corto = _datos_termino(partida.producto, termino)
         campos.extend(["termino", "nombre_producto", "nombre_corto"])
     partida.save(update_fields=campos)
@@ -839,6 +911,9 @@ def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar
     principal = partidas[0]
     if any(
         partida.producto_id != principal.producto_id
+        or partida.personalizada != principal.personalizada
+        or partida.nombre_producto != principal.nombre_producto
+        or partida.precio_unitario != principal.precio_unitario
         or partida.comensal != principal.comensal
         or partida.termino != principal.termino
         for partida in partidas[1:]
@@ -855,7 +930,7 @@ def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar
     if cantidad != cantidad.to_integral_value() or not 1 <= cantidad <= CANTIDAD_MAXIMA_POS:
         raise ErrorVenta("La cantidad debe ser un entero entre 1 y 9999.")
     duplicadas_destino = []
-    if termino is not None and termino != principal.termino:
+    if termino is not None and termino != principal.termino and not principal.personalizada:
         termino_destino, _, _ = _datos_termino(principal.producto, termino)
         duplicadas_destino = list(
             Partida.objects.select_for_update()
@@ -1102,6 +1177,10 @@ def crear_ticket_repetido(ticket, clave_idempotencia, atendio=None):
 @transaction.atomic
 def procesar_ticket(ticket):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    if ticket.estado == Ticket.Estado.PROGRAMADO:
+        raise ErrorVenta(
+            "El pedido sigue programado; desprográmalo o espera su activación antes de procesarlo."
+        )
     validar_comanda_editable(ticket)
     partidas_actuales = ticket.partidas.filter(comanda_numero=ticket.comanda_actual)
     if not partidas_actuales.exists():
@@ -1146,6 +1225,9 @@ def procesar_ticket(ticket):
 @transaction.atomic
 def cobrar_ticket(ticket, forma_pago, importe_recibido=None):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    from .consolidacion import exigir_mes_operativo
+
+    exigir_mes_operativo(ticket.sucursal)
     if ticket.comanda_en_edicion:
         raise ErrorVenta("Procesa la comanda actual antes de cobrar.")
     if ticket.canal == Mesa.Canal.DOMICILIO:
@@ -1236,7 +1318,12 @@ def cancelar_comanda_adicional(ticket):
 
 
 @transaction.atomic
-def cancelar_ticket(ticket, permitir_procesado=False):
+def cancelar_ticket(
+    ticket,
+    permitir_procesado=False,
+    cancelado_por=None,
+    cancelado_por_nombre="",
+):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     estados_permitidos = [Ticket.Estado.ABIERTO]
     if permitir_procesado:
@@ -1265,6 +1352,14 @@ def cancelar_ticket(ticket, permitir_procesado=False):
     ticket.fecha_programada = None
     ticket.hora_programada = None
     ticket.repartidor = None
+    if cancelado_por is not None:
+        if not cancelado_por.activo or cancelado_por.sucursal_id != ticket.sucursal_id:
+            raise ErrorVenta("El usuario que cancela no está activo en esta sucursal.")
+        ticket.cancelado_por = cancelado_por
+        ticket.cancelado_por_nombre = cancelado_por.nombre
+    elif cancelado_por_nombre:
+        ticket.cancelado_por = None
+        ticket.cancelado_por_nombre = str(cancelado_por_nombre).strip()[:180]
     ticket.estado = Ticket.Estado.CANCELADO
     ticket.cancelado_en = timezone.now()
     guardar_ticket(
@@ -1293,8 +1388,17 @@ def cancelar_ticket(ticket, permitir_procesado=False):
             "nombres_comensales",
             "estado",
             "cancelado_en",
+            "cancelado_por",
+            "cancelado_por_nombre",
         ],
         limpiar_bloqueo=True,
     )
-    _evento(ticket, "ticket.cancelado", {"mesa": ticket.mesa.nombre})
+    _evento(
+        ticket,
+        "ticket.cancelado",
+        {
+            "mesa": ticket.mesa.nombre,
+            "cancelado_por": ticket.cancelado_por_nombre,
+        },
+    )
     return ticket

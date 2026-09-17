@@ -5,7 +5,8 @@ param(
     [string]$LogPath,
     [ValidateRange(1, 3650)][int]$RetentionDays = 30,
     [ValidateRange(1, 300)][int]$TimeoutSeconds = 30,
-    [ValidateRange(1, 3600)][int]$LockTimeoutSeconds = 600
+    [ValidateRange(1, 3600)][int]$LockTimeoutSeconds = 600,
+    [switch]$OnlyIfPurgePending
 )
 
 $ErrorActionPreference = "Stop"
@@ -255,6 +256,21 @@ if ([string]::IsNullOrWhiteSpace($LogPath)) {
     $LogPath = Join-Path $raiz "logs\sqlite-backup.log"
 }
 
+$requestRoot = Join-Path $raiz "runtime\purgas-pendientes"
+if ($OnlyIfPurgePending) {
+    $pendientes = @()
+    if (Test-Path -LiteralPath $requestRoot -PathType Container) {
+        $pendientes = @(
+            Get-ChildItem -LiteralPath $requestRoot -Force -File |
+                Where-Object { $_.Name -cmatch '^purga-[0-9a-fA-F-]{36}\.json$' }
+        )
+    }
+    if ($pendientes.Count -eq 0) {
+        Write-Output '{"status":"sin_solicitudes_pendientes"}'
+        exit 0
+    }
+}
+
 $script = Join-Path $raiz "herramientas\respaldo_sqlite.py"
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
     throw "No se encontro el Python virtual para respaldos: $Python"
@@ -273,8 +289,43 @@ try {
         "--backup-root", $storage.BackupRoot,
         "--log", $storage.LogPath,
         "--retention-days", $RetentionDays,
-        "--timeout", $TimeoutSeconds
+        "--timeout", $TimeoutSeconds,
+        "--request-root", $requestRoot,
+        "--media-root", (Join-Path $raiz "media")
     )
+    if ($OnlyIfPurgePending) {
+        $preflightArguments = $pythonArguments + "--process-pending-only"
+        $preflightOutput = @(& $Python $preflightArguments)
+        $preflightExitCode = $LASTEXITCODE
+        Protect-BackupFiles -Path $storage.BackupRoot
+        Protect-BackupLog -Path $storage.LogPath
+        if ($preflightExitCode -ne 0) {
+            $preflightOutput | Write-Output
+            exit $preflightExitCode
+        }
+        $preflightLines = @(
+            $preflightOutput |
+                ForEach-Object { ([string]$_).Trim() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        )
+        if ($preflightLines.Count -ne 1) {
+            throw "La prevalidacion de purgas no devolvio un unico resultado JSON."
+        }
+        try {
+            $preflightResult = $preflightLines[0] | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            throw "La prevalidacion de purgas devolvio JSON invalido."
+        }
+        if ([string]$preflightResult.status -eq "sin_solicitudes_pendientes") {
+            Write-Output $preflightLines[0]
+            exit 0
+        }
+        if ([string]$preflightResult.status -ne "requiere_respaldo") {
+            throw "La prevalidacion de purgas devolvio un estado no admitido."
+        }
+    }
+
     $pythonOutput = @(& $Python $pythonArguments)
     $pythonExitCode = $LASTEXITCODE
 

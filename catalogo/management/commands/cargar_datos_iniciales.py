@@ -9,6 +9,7 @@ from django.db import transaction
 from catalogo.configuracion_menu import configuracion_producto
 from catalogo.models import Categoria, Precio, Producto
 from personas.models import Rol, Sucursal
+from ventas.bootstrap import inicializar_posiciones_operativas
 from ventas.catalogo_sucursales import (
     PRODUCTOS_SUCURSALES,
     SUCURSALES_PEDIDO,
@@ -146,31 +147,7 @@ class Command(BaseCommand):
                 defaults={"importe": Decimal(importe), "activo": True},
             )
 
-        for numero in range(1, 25):
-            Mesa.objects.get_or_create(
-                sucursal=sucursal,
-                canal=Mesa.Canal.COMEDOR,
-                clave=f"MESA-{numero}",
-                defaults={"nombre": f"Mesa {numero}", "orden": numero},
-            )
-        for numero in range(1, 101):
-            Mesa.objects.get_or_create(
-                sucursal=sucursal,
-                canal=Mesa.Canal.DOMICILIO,
-                clave=f"DOM-{numero}",
-                defaults={"nombre": f"Dom. # {numero}", "orden": numero},
-            )
-        for canal, prefijo, etiqueta in (
-            (Mesa.Canal.RECOGER, "REC", "Recoger"),
-            (Mesa.Canal.LLEVAR, "LLEV", "Llevar"),
-        ):
-            for numero in range(1, 13):
-                Mesa.objects.get_or_create(
-                    sucursal=sucursal,
-                    canal=canal,
-                    clave=f"{prefijo}-{numero}",
-                    defaults={"nombre": f"{etiqueta} {numero}", "orden": numero},
-                )
+        inicializar_posiciones_operativas(sucursal)
         # El catálogo de sucursales conserva los ids del sistema web externo.
         # Cada cliente dispone de una pantalla propia con holgura para todo el turno.
         clientes_sucursal = {}

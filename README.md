@@ -4,6 +4,12 @@ Primera versión local del punto de venta de Los Tocayos. Permite operar pedidos
 comedor, domicilio y sucursales, capturar partidas por comensal, procesar la orden,
 cobrarla y generar comandas/cuentas térmicas en modo ráster.
 
+> **Estado al 17 de septiembre de 2026:** `0.4.0-dev.3` es una candidata de
+> laboratorio. No existe ninguna sucursal en producción y todavía no debe declararse
+> como base estable. La validación automatizada del código ya cerró correctamente;
+> siguen pendientes la construcción reproducible, la instalación limpia, la
+> actualización de `C:\LosTocayosPOS` y la aceptación física en Android e impresoras.
+
 La dirección futura de paquete único, módulos por sucursal, actualización segura,
 sincronización y servidor central Hostinger KVM 2 está documentada en
 [ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md](ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md).
@@ -12,7 +18,23 @@ implementado. El ciclo recomendado para desarrollar, versionar y desplegar por
 sucursal, junto con el estado real de `.exe`, PWA y `.apk`, está en
 [FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md](FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md).
 
-## Producción local en Windows
+## Flujo de desarrollo y actualización
+
+El repositorio es la fuente del producto y puede clonarse en cualquier computadora de
+desarrollo que cumpla sus dependencias; no es necesario programar en la computadora que
+ejecuta el servicio de una sucursal. Para cada cambio se parte del commit soportado, se
+trabaja en una rama o `worktree`, se prueba con datos aislados y se construye una release
+completa e identificable por versión, commit, manifiesto y hash.
+
+La carpeta instalada en una sucursal contiene configuración y estado local; no debe
+usarse como copia de desarrollo ni actualizarse con `git pull`. El paquete validado se
+transfiere al equipo y `actualizar-servidor.ps1` aplica migraciones y estáticos,
+conservando `.env`, identidad y base de datos. La versión y los módulos habilitados se
+registran por sucursal, por lo que una función opcional puede desplegarse sólo donde
+corresponda sin crear variantes del código. El procedimiento detallado está en
+[FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md](FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md).
+
+## Servidor Edge local en Windows
 
 La guía operativa completa está en [DESPLIEGUE_WINDOWS.md](DESPLIEGUE_WINDOWS.md),
 que tiene precedencia para instalar, actualizar, diagnosticar o recuperar el
@@ -71,11 +93,13 @@ exposición LAN exige el consentimiento explícito `-AllowInsecureHttpLan`:
   -Port 8000
 ```
 
-La instalación crea o valida solamente la identidad de `Sucursal`. No crea por
-defecto catálogo, roles, perfiles ni PIN. La carga histórica puede solicitarse
-únicamente para la sucursal `ARBOLEDAS` con `-InicializarDatosArboledas`; es una
-semilla explícita que debe revisarse porque modifica catálogo y precios. No forma
-parte de ninguna actualización.
+La instalación crea o valida la identidad de `Sucursal`. Al aprovisionar una sucursal
+nueva crea la clave maestra administrativa inicial `0000`, guardada como hash; debe
+rotarse manualmente desde **Administrador → Cambiar clave de administrador** antes de
+usar el equipo fuera del laboratorio. No carga catálogo por defecto. La carga histórica
+puede solicitarse únicamente para la sucursal `ARBOLEDAS` con
+`-InicializarDatosArboledas`; es una semilla explícita que debe revisarse porque
+modifica catálogo, posiciones y precios. No forma parte de ninguna actualización.
 
 La impresión de una instalación nueva inicia en `archivo`. Para habilitar las
 impresoras físicas hay que declarar las tres direcciones de esa sucursal:
@@ -98,16 +122,14 @@ no acepta estos parámetros: conserva los valores operativos de `.env`.
 
 El instalador Windows admite por ahora sólo SQLite, migra la base a
 `runtime\db.sqlite3` y rechaza PostgreSQL antes de modificar servicios mientras
-no exista respaldo/restauración `pg_dump`. Solicita un superusuario si
-falta, recopila estáticos, limita el firewall a perfil privado/subred local y
-comprueba `/salud/`. La candidata B también crea el primer rol, perfil POS y
-cuenta operativa mediante prompts si no existe ninguno; nunca fija un PIN o una
-contraseña predeterminados. En la prueba A→B se confirmó después un perfil
-POS activo y una cuenta operativa activa no administrativa; falta probar el
-ingreso y el PIN desde la interfaz. El menú histórico de Arboledas sigue siendo
-una semilla separada y explícita. El servicio corre como `LocalService`; sólo puede
-modificar `runtime`, `logs` y `media`. El código, `.venv`, `.env`, certificados y
-respaldos quedan bajo ACL restringidas.
+no exista respaldo/restauración `pg_dump`. Si faltan, solicita un superusuario y
+después crea mediante prompts el primer rol, perfil POS y cuenta operativa; la
+contraseña y el PIN operativo los elige quien instala y son distintos de la clave
+maestra inicial. También recopila estáticos, limita el firewall a perfil
+privado/subred local y comprueba `/salud/`. El menú histórico de Arboledas sigue
+siendo una semilla separada y explícita. El servicio corre como `LocalService`; sólo
+puede modificar `runtime`, `logs` y `media`. El código, `.venv`, `.env`,
+certificados y respaldos quedan bajo ACL restringidas.
 
 Antes de cualquier migración, una base ya existente se inspecciona en modo de
 sólo lectura: debe estar vacía o contener exactamente la sucursal activa indicada
@@ -172,8 +194,8 @@ serializa la tarea, la ejecución manual y toda fase sensible. El instalador lo
 cede al wrapper hijo y lo recupera obligatoriamente antes de continuar o revertir.
 
 Una actualización supervisada conserva `.env` byte por byte, no vuelve a
-aprovisionar, no carga catálogos, no solicita cuentas y no altera firewall ni la
-tarea de respaldo:
+aprovisionar, no carga catálogos ni solicita cuentas. Tampoco altera el firewall ni
+el horario y la retención del respaldo existentes:
 
 ```powershell
 .\actualizar-servidor.ps1
@@ -193,14 +215,28 @@ red para completar dependencias faltantes:
   -AllowOnlineDependencies
 ```
 
-La actualización actual todavía presupone que el código completo ya fue colocado
-en el directorio. Instala las dependencias fijadas desde el wheelhouse —o desde
-Internet sólo con la autorización anterior—; si la `.venv` no coincide exactamente
-con el lock, conserva la anterior y crea una limpia. Después respalda `.env` y
-SQLite, migra y recopila estáticos. Aún no implementa
-staging, cambio atómico, firma ni rollback; después de modificar runtime o iniciar
-migraciones, un fallo puede dejar el servicio detenido para revisión. No debe
-automatizarse en una sucursal activa hasta completar esa fase.
+Ejecutado por sí solo, `actualizar-servidor.ps1` presupone que el código completo ya
+fue colocado en el directorio. Instala las dependencias fijadas desde el wheelhouse
+—o desde Internet sólo con la autorización anterior—; si la `.venv` no coincide
+exactamente con el lock, conserva la anterior y crea una limpia. Después respalda
+`.env` y SQLite, migra y recopila estáticos.
+
+Para el laboratorio existe además `actualizar-laboratorio-desde-release.ps1`. Este
+wrapper verifica ZIP, manifiesto, SHA-256 y versión antes de detener el servicio;
+extrae a un staging externo, mueve la instalación anterior a un respaldo completo,
+promueve el staging y ejecuta el actualizador oficial. Conserva `.env`, `.venv`,
+`runtime`, `media`, `logs`, `backups` y los archivos SQLite de la raíz
+(`db.sqlite3`, `-wal`, `-shm` y `-journal`). También conserva el horario y la
+retención de respaldos; si la candidata falla, restaura el árbol anterior, la salud
+del servicio y los XML —o la ausencia previa— de las tareas administradas
+`LosTocayosPOS-RespaldoSQLite` y `LosTocayosPOS-PurgasFisicas`. El respaldo anterior
+no se elimina automáticamente.
+
+Ese wrapper es deliberadamente local, elevado y supervisado; no descarga releases
+ni constituye todavía el canal productivo desatendido. Los hashes no firman al
+publicador, queda una ventana TOCTOU entre la verificación y el consumo del ZIP
+local, y el árbol de candidata que se conserva tras un fallo no queda acreditado con
+las ACL finales. Debe mantenerse sólo para diagnóstico en una ubicación restringida.
 
 La herramienta `herramientas\release_servidor.py` construye un ZIP versionado y
 verifica su manifiesto v2 y hashes SHA-256. El manifiesto fija explícitamente
@@ -296,7 +332,10 @@ $env:PRINTER_PORT = "9100"
 ```
 
 La computadora necesita conservar la dirección `192.168.0.30`, preferentemente con
-una reserva DHCP. `Ctrl+C` detiene este modo.
+una reserva DHCP. `Ctrl+C` detiene este modo. La prueba de la candidata en `8001`
+mantiene su base y medios bajo `runtime\prueba`; el servicio instalado de laboratorio
+continúa separado en `8000`. La impresora física sólo se habilita con las variables
+explícitas del bloque anterior.
 
 ## Inicio con Docker
 
@@ -568,6 +607,37 @@ generación de los formatos térmicos. También cubren autenticación/CSRF, rate
 permisos por rol, pagos inválidos, privacidad de caché, rutas de vistas previas y
 validación defensiva de la integración externa.
 
+## Acceso administrativo y retención local
+
+Todos los PIN de perfiles `UsuarioPOS` activos pueden identificar a la persona que
+entra en **Ventas**; la clave maestra también permite ese acceso. Un perfil con rol
+**Elevado** puede abrir y operar el Administrador, pero las siguientes acciones son
+exclusivas de la clave maestra:
+
+- consultar, crear, editar o desactivar usuarios y sus PIN;
+- reiniciar folios;
+- cambiar la propia clave maestra.
+
+El corte diario conserva una instantánea contable y su reporte reimprimible. Después
+del corte elimina el detalle de los pedidos del turno —incluidas cancelaciones—, los
+movimientos de caja ya incorporados, reportes intermedios y archivos de impresión
+relacionados. Los pedidos programados para el futuro quedan fuera de esa purga.
+
+Al detectar un mes anterior con cortes pendientes, el sistema impide iniciar ventas
+nuevas hasta consolidarlo. Envía al VPS los totales mensuales con una clave de
+idempotencia y sólo purga las instantáneas mensuales y reinicia folios cuando recibe
+HTTP exitoso y un JSON con `recibido: true` y un `acuse` no vacío. Un error de red, un
+acuse inválido o una URL ausente conserva los datos locales y deja el mes pendiente.
+
+La candidata reconoce estas variables, pero el endpoint y sus credenciales reales aún
+no están configurados:
+
+```env
+VPS_CONSOLIDACION_URL=
+VPS_CONSOLIDACION_TOKEN=
+VPS_CONSOLIDACION_TIMEOUT=10
+```
+
 ## Controles de seguridad operativa
 
 - Usa la cuenta operativa para ventas y reserva el superusuario para `/admin/`.
@@ -586,4 +656,54 @@ validación defensiva de la integración externa.
 
 ### Módulos por sucursal
 
-La release contiene siempre el mismo código. En una instalación Windows, `-ModulosOpcionales` acepta `domicilios`, `programados`, `reparto` y `pedidos_sucursales`; si se omite, el asistente permite elegirlos. Punto de venta, catálogo, impresión y respaldos forman el núcleo y no se deshabilitan. Las dependencias se activan automáticamente y la decisión queda en `ModuloSucursal`.
+La release contiene siempre el mismo código. En una instalación Windows,
+`-ModulosOpcionales` acepta `domicilios`, `programados`, `reparto` y
+`pedidos_sucursales`. Si se omite, el asistente permite elegirlos y **Enter sin una
+selección instala sólo el núcleo**. Punto de venta, catálogo, impresión y respaldos
+forman ese núcleo y no se deshabilitan. Las dependencias se activan automáticamente y
+la decisión de cada sucursal queda en `ModuloSucursal`; `pedidos_sucursales`, incluida
+la configuración histórica de Arboledas, no se activa por defecto.
+
+## Cambios principales de `0.4.0-dev.3`
+
+- Clave maestra inicial `0000`, usuarios elevados y atribución de operador en Ventas.
+- Corte diario con instantánea reimprimible, purga de detalle y control de efectivo,
+  ingresos, gastos, terminales, aplicaciones y fondos entre días.
+- Consolidación mensual con acuse obligatorio del VPS antes de purgar o reiniciar
+  folios.
+- Pedidos programados editables, eliminables y desprogramables; programación de
+  Recoger sin abrir el turno antes de tiempo.
+- Productos personalizados en todos los canales, 40 posiciones de Llevar y 40 de
+  Recoger, subtotales por sucursal y actualización periódica de terminales LAN.
+- Interfaz de tableta con teclado numérico dentro de comedor y solicitud de pantalla
+  completa, además de los ajustes del Administrador y del ticket total.
+- Cierre físico diferido de archivos y respaldos sensibles mediante una tarea SYSTEM
+  cada cinco minutos. La tarea usa `-OnlyIfPurgePending`, mantiene el respaldo diario
+  a las `03:15` y la retención predeterminada de 30 días sin generar copias cuando no
+  hay una purga pendiente.
+
+Los 14 requisitos funcionales de la candidata están cubiertos por código y pruebas.
+La validación cerró con 172/172 pruebas Django y 68/68 pruebas de infraestructura;
+`test_instalador_windows.ps1 -SkipAcl`, `django check`, la comprobación de
+migraciones, la sintaxis JavaScript, `git diff --check` y el detector de Impeccable
+también aprobaron sin hallazgos. El requisito 14 conserva una validación física
+pendiente en una tableta Android real.
+
+## Brechas pendientes antes de fijar la base
+
+- Construir dos veces el artefacto reproducible y documentar su SHA-256; después
+  completar la instalación limpia, la actualización del servicio de laboratorio y
+  la aceptación manual con la impresora y una tableta Android físicas.
+- Implementar, desplegar y autenticar el endpoint real del VPS; hoy sólo existe el
+  contrato Edge y sus pruebas con respuestas simuladas.
+- Convertir el wrapper reversible de laboratorio en un canal remoto firmado y
+  endurecido: cerrar la ventana TOCTOU del ZIP local, definir las ACL/retención del
+  árbol fallido y probar la recuperación fuera del laboratorio.
+- Construir el proyecto Android envolvente, firmar el APK y probar instalación por
+  USB-C. La PWA funciona como interfaz web instalable, pero el repositorio aún no
+  genera un APK.
+- Cerrar enrolamiento de equipos, HTTPS LAN, canal remoto de releases y catálogo
+  versionado por sucursal.
+- Mantener `0.4.0-dev.3` como candidata de laboratorio hasta que la instalación limpia
+  y la ruta de actualización produzcan evidencia equivalente y cierren su aceptación
+  física.

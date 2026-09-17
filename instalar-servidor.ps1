@@ -23,6 +23,9 @@ param(
     [string]$PrinterCocinaHost,
     [string]$PrinterBarraHost,
     [ValidateRange(1, 65535)][int]$PrinterPort = 9100,
+    [string]$VpsConsolidacionUrl = "",
+    [string]$VpsConsolidacionToken = "",
+    [ValidateRange(1, 60)][int]$VpsConsolidacionTimeout = 10,
     [switch]$SkipFirewall,
     [ValidatePattern("^(?:[01]\d|2[0-3]):[0-5]\d$")][string]$BackupTime = "03:15",
     [ValidateRange(1, 3650)][int]$BackupRetentionDays = 30,
@@ -46,6 +49,9 @@ $argumentos = @{
     AllowInsecureHttpLan = $AllowInsecureHttpLan
     PrintBackend = $PrintBackend
     PrinterPort = $PrinterPort
+    VpsConsolidacionUrl = $VpsConsolidacionUrl
+    VpsConsolidacionToken = $VpsConsolidacionToken
+    VpsConsolidacionTimeout = $VpsConsolidacionTimeout
     SkipFirewall = $SkipFirewall
     BackupTime = $BackupTime
     BackupRetentionDays = $BackupRetentionDays

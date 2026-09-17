@@ -2,12 +2,14 @@ from getpass import getpass
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import check_password
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from personas.models import Rol, Sucursal, UsuarioPOS
+from ventas.models import ConfiguracionSucursal
 
 
 class Command(BaseCommand):
@@ -54,6 +56,15 @@ class Command(BaseCommand):
             for perfil in UsuarioPOS.objects.filter(sucursal=sucursal, activo=True)
         ):
             raise CommandError("El PIN operativo ya está asignado en esta sucursal.")
+        configuracion = (
+            ConfiguracionSucursal.objects.select_for_update()
+            .filter(sucursal=sucursal)
+            .first()
+        )
+        if configuracion and check_password(pin, configuracion.clave_administrador):
+            raise CommandError(
+                "El PIN operativo no puede coincidir con la clave maestra de la sucursal."
+            )
 
         perfil = UsuarioPOS(sucursal=sucursal, rol=rol, nombre=nombre)
         perfil.set_clave(pin)

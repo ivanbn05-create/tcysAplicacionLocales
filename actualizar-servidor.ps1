@@ -3,8 +3,9 @@
 Actualiza el código ya colocado del servidor POS sin cambiar su configuración.
 .DESCRIPTION
 Conserva byte por byte .env, no vuelve a aprovisionar la sucursal, no carga
-catálogos, no solicita cuentas y no modifica firewall ni tareas programadas.
-Esta primera fase aún no descarga ni conmuta releases de forma atómica.
+catálogos ni solicita cuentas. Conserva horario y retención de respaldo al
+normalizar las tareas administradas; no modifica el firewall. La conmutación y
+el rollback de la release completa corresponden al actualizador de laboratorio.
 #>
 [CmdletBinding()]
 param(

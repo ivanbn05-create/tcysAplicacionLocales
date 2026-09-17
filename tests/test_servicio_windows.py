@@ -59,6 +59,9 @@ class EntornoServicioWindowsTests(unittest.TestCase):
                         "PRINT_BACKEND=archivo",
                         "print_backend=tcp",
                         "PRINTER_CAJA_HOST=10.0.0.20",
+                        "VPS_CONSOLIDACION_URL=https://vps.local/api/consolidaciones",
+                        "VPS_CONSOLIDACION_TOKEN=desde-archivo",
+                        "VPS_CONSOLIDACION_TIMEOUT=12",
                         "DJANGO_SETTINGS_MODULE=pos.settings_development",
                         "DJANGO_ALLOW_INSECURE_DEVELOPMENT=true",
                         "DJANGO_ALLOW_INSECURE_TEST_SETTINGS=true",
@@ -81,6 +84,9 @@ class EntornoServicioWindowsTests(unittest.TestCase):
                 "PRINT_BACKEND": "tcp",
                 "PRINT_SYNC": "false",
                 "PRINTER_CAJA_HOST": "192.0.2.50",
+                "VPS_CONSOLIDACION_URL": "https://host-ajeno.invalid/consolidar",
+                "VPS_CONSOLIDACION_TOKEN": "token-ajeno",
+                "VPS_CONSOLIDACION_TIMEOUT": "59",
                 "PYTHONHOME": "python-ajeno",
                 "PYTHONPATH": "codigo-ajeno",
                 "PYTHONUSERBASE": "perfil-ajeno",
@@ -105,6 +111,12 @@ class EntornoServicioWindowsTests(unittest.TestCase):
                 self.assertEqual(os.environ["SUCURSAL_CLAVE"], "NORTE")
                 self.assertEqual(os.environ["PRINT_BACKEND"], "archivo")
                 self.assertEqual(os.environ["PRINTER_CAJA_HOST"], "10.0.0.20")
+                self.assertEqual(
+                    os.environ["VPS_CONSOLIDACION_URL"],
+                    "https://vps.local/api/consolidaciones",
+                )
+                self.assertEqual(os.environ["VPS_CONSOLIDACION_TOKEN"], "desde-archivo")
+                self.assertEqual(os.environ["VPS_CONSOLIDACION_TIMEOUT"], "12")
                 self.assertEqual(os.environ["DJANGO_SETTINGS_MODULE"], "pos.settings")
                 self.assertEqual(os.environ["NO_RELACIONADA"], "se-conserva")
                 self.assertEqual(os.environ["PYTHONNOUSERSITE"], "1")
@@ -139,6 +151,9 @@ class EntornoServicioWindowsTests(unittest.TestCase):
                 "DB_ENGINE": "oracle",
                 "SUCURSAL_CLAVE": "OTRA",
                 "PRINT_BACKEND": "tcp",
+                "VPS_CONSOLIDACION_URL": "https://host-ajeno.invalid/consolidar",
+                "VPS_CONSOLIDACION_TOKEN": "token-ajeno",
+                "VPS_CONSOLIDACION_TIMEOUT": "59",
                 "DJANGO_SETTINGS_MODULE": "pos.settings_test",
                 "DJANGO_ALLOW_INSECURE_TEST_SETTINGS": "true",
             }
@@ -151,6 +166,9 @@ class EntornoServicioWindowsTests(unittest.TestCase):
                     "DB_ENGINE",
                     "SUCURSAL_CLAVE",
                     "PRINT_BACKEND",
+                    "VPS_CONSOLIDACION_URL",
+                    "VPS_CONSOLIDACION_TOKEN",
+                    "VPS_CONSOLIDACION_TIMEOUT",
                     "DJANGO_ALLOW_INSECURE_TEST_SETTINGS",
                 ):
                     self.assertNotIn(nombre, os.environ)

@@ -656,3 +656,73 @@ body {
   .personas.con-nombres { grid-column: 2; grid-row: 1 / -1; }
   .datos-servicio-directo { grid-template-columns: 1fr; }
 }
+
+
+/* Tabletas PIN, pantalla completa y producto personalizado · 0.4.0-dev.3 */
+.pantalla-completa { width: auto; grid-template-columns: auto auto; gap: 6px; padding-inline: 10px; }
+.pantalla-completa span { font-size: .62rem; font-weight: 900; white-space: nowrap; }
+.estado-pantalla-completa { max-width: 290px; margin: 0; padding: 8px 10px; border-radius: 9px; color: var(--carbon); background: #fff; box-shadow: 0 5px 16px rgba(0,0,0,.16); font-size: .66rem; font-weight: 750; line-height: 1.25; }
+.estado-pantalla-completa[hidden] { display: none; }
+
+.modo-tableta .rejilla-posiciones.rejilla-tableta-pin { height: 100%; grid-template-columns: minmax(0, 4fr) minmax(250px, 1.15fr); align-items: stretch; gap: 12px; overflow: hidden; }
+.modo-tableta .rejilla-posiciones.rejilla-tableta-pin > .grupo-comedor-tableta { grid-column: 1; grid-row: 1; }
+.modo-tableta .rejilla-posiciones.rejilla-tableta-pin > .grupo-teclado-tableta { grid-column: 2; grid-row: 1; }
+.modo-tableta .grupo-comedor-tableta, .modo-tableta .grupo-teclado-tableta { min-height: 0; grid-template-rows: 42px minmax(0, 1fr); }
+.modo-tableta .grupo-comedor-tableta { grid-template-columns: minmax(0, 1fr); }
+.modo-tableta .grupo-comedor-tableta > div { min-height: 0; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.modo-tableta .grupo-teclado-tableta { padding-left: 12px; border-left: 1px solid var(--carbon); }
+.modo-tableta .grupo-teclado-tableta > header strong { color: var(--rojo); }
+.pin-tableta-panel { grid-column: 1 / -1; min-height: 100%; padding: clamp(24px, 5vh, 56px); display: grid; place-content: center; justify-items: center; gap: 13px; border-radius: 14px; color: var(--carbon); background: #fff; box-shadow: 0 8px 24px rgba(38,38,38,.08); text-align: center; }
+.pin-tableta-panel > small { color: var(--rojo); font-size: .72rem; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+.pin-tableta-panel h2 { margin: 0; font-size: clamp(1.55rem, 3vw, 2.5rem); line-height: 1; }
+.pin-tableta-panel > p { max-width: 42ch; margin: 0; color: var(--muted); font-size: .86rem; line-height: 1.45; }
+.pin-tableta-cancelar { min-height: 44px; padding: 8px 14px; border: 1px solid var(--borde); border-radius: 9px; color: var(--carbon); background: #f2efe8; font-weight: 850; }
+.pin-tableta-puntos { display: grid; grid-template-columns: repeat(4, 34px); gap: 10px; padding: 8px; }
+.pin-tableta-puntos i { width: 34px; height: 34px; display: grid; place-items: center; border: 2px solid #a8a39a; border-radius: 50%; background: #fff; }
+.pin-tableta-puntos i.capturado::after { content: ""; width: 14px; height: 14px; border-radius: 50%; background: var(--carbon); }
+.pin-tableta-panel .pin-tableta-error { color: var(--rojo); font-weight: 850; }
+.teclado-pin-tableta { min-height: 0; display: grid !important; grid-template-columns: repeat(3, minmax(0, 1fr)) !important; grid-template-rows: repeat(4, minmax(58px, 1fr)); align-content: stretch !important; gap: 8px !important; overflow: hidden; }
+.teclado-pin-tableta button { min-width: 0; min-height: 58px; padding: 4px; border: 1px solid #aaa49a; border-radius: 11px; color: var(--carbon); background: #fff; box-shadow: 0 4px 8px rgba(38,38,38,.09); font-size: clamp(1.4rem, 3.5vh, 2.15rem); font-weight: 900; font-variant-numeric: tabular-nums; }
+.teclado-pin-tableta button:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 2px 5px rgba(38,38,38,.1); }
+.teclado-pin-tableta button:disabled { color: #9a968e; background: #e9e6df; box-shadow: none; opacity: .68; }
+.teclado-pin-tableta .borrar { color: #fff; background: var(--carbon-suave); }
+.teclado-pin-tableta .confirmar:not(:disabled) { color: #fff; border-color: var(--verde-oscuro); background: var(--verde-oscuro); }
+.teclado-pin-ayuda { margin: 0; color: var(--muted); font-size: .66rem; font-weight: 750; line-height: 1.35; text-align: center; }
+
+.segmento-personalizado { margin-bottom: 4px; }
+.segmento-personalizado .segmento-productos { grid-template-columns: minmax(180px, 1fr); }
+.producto.producto-personalizado { border-color: #d0bd19; color: var(--carbon); background: var(--amarillo-suave); }
+.producto.producto-personalizado:hover, .producto.producto-personalizado:focus-visible { border-color: #9f8d00; background: #fff3a0; }
+.producto-personalizado-simbolo { width: 100%; min-height: 42px; display: grid; place-items: center; border-radius: 8px; color: #fff; background: var(--carbon); }
+.producto-personalizado-simbolo i { position: relative; width: 24px; height: 24px; display: block; }
+.producto-personalizado-simbolo i::before, .producto-personalizado-simbolo i::after { content: ""; position: absolute; top: 50%; left: 50%; border-radius: 2px; background: var(--amarillo); transform: translate(-50%, -50%); }
+.producto-personalizado-simbolo i::before { width: 24px; height: 4px; }
+.producto-personalizado-simbolo i::after { width: 4px; height: 24px; }
+.producto-personalizado-formulario { width: min(520px, calc(100vw - 28px)); }
+.producto-personalizado-ayuda { max-width: 52ch; margin: 7px 38px 0 0; color: var(--muted); line-height: 1.45; }
+.campo-precio-personalizado { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; border: 1px solid #cfc9bd; border-radius: 9px; background: #fff; overflow: hidden; }
+.campo-precio-personalizado:focus-within { border-color: var(--azul); box-shadow: 0 0 0 3px rgba(20,92,120,.14); }
+.campo-precio-personalizado b { padding-left: 12px; color: var(--carbon); font-size: 1rem; }
+.campo-precio-personalizado input { border: 0; box-shadow: none !important; }
+.error-producto-personalizado { margin: -6px 0 0; padding: 9px 11px; border-radius: 8px; color: #8d1110; background: #ffe5e2; font-size: .76rem; font-weight: 800; }
+.producto-personalizado-formulario[aria-busy="true"] { cursor: wait; }
+.calculadora-personalizada { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.fila-partida-sucursal.fila-personalizada { background: #fffbea; }
+.comanda-etiqueta.etiqueta-personalizada { background: #fff6b4; font-weight: 900; }
+.comanda-celda.vacia, .comanda-nombre-celda.vacia { background: #f2f0ea; }
+
+@media (max-width: 900px) {
+  .modo-tableta .rejilla-posiciones.rejilla-tableta-pin { grid-template-columns: minmax(0, 3fr) minmax(220px, 1fr); gap: 8px; }
+  .modo-tableta .grupo-teclado-tableta { padding-left: 7px; }
+  .estado-pantalla-completa { max-width: 230px; }
+}
+
+@media (max-width: 700px) {
+  .pantalla-completa span { display: none; }
+  .pantalla-completa { width: 42px; grid-template-columns: 1fr; padding-inline: 8px; }
+  .estado-pantalla-completa { max-width: 190px; font-size: .6rem; }
+  .modo-tableta .rejilla-posiciones.rejilla-tableta-pin { grid-template-columns: minmax(0, 1fr) minmax(176px, .44fr); }
+  .pin-tableta-panel { padding: 16px; }
+  .teclado-pin-tableta { grid-template-rows: repeat(4, minmax(50px, 1fr)); gap: 5px !important; }
+  .teclado-pin-tableta button { min-height: 50px; }
+}

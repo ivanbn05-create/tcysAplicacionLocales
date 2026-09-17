@@ -5,7 +5,7 @@ from django.db import transaction
 from .models import Modulo, ModuloSucursal
 
 
-VERSION_MODULOS = "0.4.0-dev.2"
+VERSION_MODULOS = "0.4.0-dev.3"
 
 CATALOGO_MODULOS = OrderedDict(
     (

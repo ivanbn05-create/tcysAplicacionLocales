@@ -6,6 +6,9 @@
   const csrf = () => document.cookie.split("; ").find(valor => valor.startsWith("csrftoken="))?.split("=")[1] || "";
   const dinero = valor => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(Number(valor || 0));
   const escapar = valor => String(valor ?? "").replace(/[&<>'"]/g, caracter => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[caracter]);
+  const DENOMINACIONES = ["0.5", "1", "2", "5", "10", "20", "50", "100", "200", "500", "1000"];
+  const RUTAS = Object.freeze({ controlEfectivo: "/api/administrador/control-efectivo/" });
+
   const estado = {
     administrador: null,
     resolucionClave: null,
@@ -18,9 +21,26 @@
     ticketsSeleccionados: new Set(),
     canalPedidosAbierto: "",
     movimientoEditandoId: "",
+    sucursalActivaId: "",
     asignacionesRepartidor: new Map(),
     secuenciaAsignacion: 0,
+    panelInicialSolicitado: "",
   };
+
+  function tienePermisoAdministrador(nombre) {
+    return estado.administrador?.acceso?.permisos?.[nombre] === true;
+  }
+
+  function elementoPermitido(nodo) {
+    const permiso = nodo?.dataset?.permisoAdmin;
+    return !permiso || tienePermisoAdministrador(permiso);
+  }
+
+  function exigirPermisoAdministrador(nombre) {
+    if (tienePermisoAdministrador(nombre)) return true;
+    toast("Tu acceso administrativo no permite esta acción.", true);
+    return false;
+  }
 
   class ErrorAPI extends Error {
     constructor(mensaje, status, datos) {
@@ -98,6 +118,14 @@
     return new Intl.DateTimeFormat("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(valor));
   }
 
+  function periodoMensual(valor) {
+    if (!valor) return "Sin periodo";
+    const [anio, mes] = String(valor).split("-").map(Number);
+    if (!anio || !mes) return valor;
+    const etiqueta = new Intl.DateTimeFormat("es-MX", { month: "long", year: "numeric" }).format(new Date(anio, mes - 1, 1));
+    return etiqueta.charAt(0).toUpperCase() + etiqueta.slice(1);
+  }
+
   function fechaLocalISO(fecha) {
     const anio = fecha.getFullYear();
     const mes = String(fecha.getMonth() + 1).padStart(2, "0");
@@ -115,13 +143,17 @@
   }
 
   function mostrarPanel(nombre) {
+    const destino = $("[data-admin-panel=\"" + CSS.escape(nombre) + "\"]");
+    if (!destino || !elementoPermitido(destino)) nombre = "inicio";
     $$("[data-admin-panel]").forEach(panel => {
-      const activo = panel.dataset.adminPanel === nombre;
+      const activo = elementoPermitido(panel) && panel.dataset.adminPanel === nombre;
       panel.hidden = !activo;
       panel.classList.toggle("activo", activo);
     });
     $$(".rail-item").forEach(boton => {
-      const activo = boton.dataset.panel === nombre;
+      const permitido = elementoPermitido(boton);
+      const activo = permitido && boton.dataset.panel === nombre;
+      boton.hidden = !permitido;
       boton.classList.toggle("activo", activo);
       if (activo) boton.setAttribute("aria-current", "page");
       else boton.removeAttribute("aria-current");
@@ -129,6 +161,16 @@
     history.replaceState(null, "", `#${nombre}`);
     const movimientoReducido = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     window.scrollTo({ top: 0, behavior: movimientoReducido ? "auto" : "smooth" });
+  }
+
+  function aplicarPermisosAdministrativos() {
+    $$("[data-permiso-admin]").forEach(nodo => {
+      nodo.hidden = !elementoPermitido(nodo);
+    });
+    const panelActivo = $(".admin-panel.activo");
+    const panelDeseado = estado.panelInicialSolicitado || panelActivo?.dataset.adminPanel || "inicio";
+    estado.panelInicialSolicitado = "";
+    mostrarPanel(panelDeseado);
   }
 
   function pedirClave(titulo, ayuda) {
@@ -152,7 +194,7 @@
 
   async function autorizarEntrada() {
     while (true) {
-      const clave = await pedirClave("Abrir administrador", "Esta pantalla administra el turno de la sucursal. Clave inicial: 1212.");
+      const clave = await pedirClave("Abrir administrador", "Esta pantalla administra el turno de la sucursal. Clave inicial: 0000.");
       if (!clave) {
         window.location.assign("/");
         return false;
@@ -186,6 +228,9 @@
           datos = await api("/api/administrador/resumen/");
         }
         estado.administrador = datos.administrador;
+        if (!tienePermisoAdministrador("gestionar_usuarios")) {
+          estado.administrador.usuarios = [];
+        }
         depurarSeleccion();
         renderTodo();
         return true;
@@ -543,17 +588,36 @@
     }
   }
 
-  function tarjetaTicket(ticket, { programar = false } = {}) {
+  function tarjetaTicket(ticket, { programar = false, administrarProgramado = false } = {}) {
     const programacion = programacionPredeterminada();
-    const controles = programar
-      ? `<div class="ticket-controles programacion-control"><input type="date" min="${programacion.minima}" value="${programacion.fecha}" aria-label="Fecha para ticket ${ticket.folio}"><input type="time" value="${programacion.hora}" aria-label="Hora para ticket ${ticket.folio}"><button class="boton mini primario" data-accion-ticket="programar" type="button">Programar</button></div>`
-      : "";
-    return `<article class="ticket-pendiente ${ticket.estado === "programado" ? "programado" : ""}" data-ticket-id="${ticket.id}">
-      <div class="ticket-cabecera"><strong>${escapar(ticket.mesa || ticket.canal_etiqueta)}</strong><b>#${escapar(ticket.folio)}</b></div>
-      <div class="ticket-cliente">${escapar(ticket.cliente_nombre || "Cliente sin nombre")}</div>
-      <address>${escapar(ticket.cliente_domicilio || ticket.estado_etiqueta || "Sin domicilio capturado")}</address>
-      <div class="ticket-pie"><strong>${dinero(ticket.total)}</strong>${ticket.fecha_programada ? `<time datetime="${ticket.fecha_programada}T${ticket.hora_programada || "00:00"}">${fechaCorta(ticket.fecha_programada)} · ${escapar(ticket.hora_programada || "Sin hora")}</time>` : `<time>${ticket.terminal ? "Terminal" : "Efectivo"}</time>`}${controles}</div>
-    </article>`;
+    const fecha = ticket.fecha_programada || programacion.fecha;
+    const hora = String(ticket.hora_programada || programacion.hora).slice(0, 5);
+    let controles = "";
+    if (programar) {
+      controles = '<div class="ticket-controles programacion-control">' +
+        '<input type="date" min="' + programacion.minima + '" value="' + escapar(fecha) + '" aria-label="Fecha para ticket ' + escapar(ticket.folio) + '">' +
+        '<input type="time" value="' + escapar(hora) + '" aria-label="Hora para ticket ' + escapar(ticket.folio) + '">' +
+        '<button class="boton mini primario" data-accion-ticket="programar" type="button">Programar</button></div>';
+    } else if (administrarProgramado) {
+      controles = '<div class="ticket-controles programacion-control programacion-control-agenda">' +
+        '<a class="boton mini primario" data-editar-programado href="/?editar_programado=' + escapar(ticket.id) + '" aria-label="Editar contenido del pedido ' + escapar(ticket.folio) + '">Editar pedido</a>' +
+        '<input type="date" min="' + programacion.minima + '" value="' + escapar(fecha) + '" aria-label="Nueva fecha para ticket ' + escapar(ticket.folio) + '">' +
+        '<input type="time" value="' + escapar(hora) + '" aria-label="Nueva hora para ticket ' + escapar(ticket.folio) + '">' +
+        '<button class="boton mini" data-accion-ticket="reprogramar" type="button">Guardar fecha</button>' +
+        '<button class="boton mini" data-accion-ticket="desprogramar" type="button">Desprogramar</button>' +
+        '<button class="boton mini peligro" data-accion-ticket="eliminar-programado" type="button">Eliminar</button></div>';
+    }
+    const ubicacion = [ticket.canal_etiqueta, ticket.mesa].filter(Boolean).join(" · ");
+    const referencia = ticket.cliente_domicilio || ticket.estado_etiqueta || "Sin referencia capturada";
+    const momento = ticket.fecha_programada
+      ? '<time datetime="' + escapar(ticket.fecha_programada) + 'T' + escapar(hora || "00:00") + '">' + fechaCorta(ticket.fecha_programada) + ' · ' + escapar(hora || "Sin hora") + '</time>'
+      : '<time>' + (ticket.terminal ? "Terminal" : "Efectivo") + '</time>';
+    return '<article class="ticket-pendiente ' + (ticket.estado === "programado" ? "programado" : "") + '" data-ticket-id="' + escapar(ticket.id) + '">' +
+      '<div class="ticket-cabecera"><strong>' + escapar(ubicacion || "Pedido") + '</strong><b>#' + escapar(ticket.folio) + '</b></div>' +
+      '<div class="ticket-cliente">' + escapar(ticket.cliente_nombre || "Cliente sin nombre") + '</div>' +
+      '<address>' + escapar(referencia) + '</address>' +
+      '<div class="ticket-pie"><strong>' + dinero(ticket.total) + '</strong>' + momento + controles + '</div>' +
+    '</article>';
   }
 
   function renderPendientes() {
@@ -585,20 +649,37 @@
     renderBloqueos("#bloqueos-reporte");
   }
 
+  function configurarTipoUsuario(tipo = "mesero") {
+    const selector = $("#usuario-tipo");
+    const opcionPrincipal = $("#usuario-tipo-encargado");
+    const esOperadorPrincipal = tipo === "encargado";
+    opcionPrincipal.hidden = !esOperadorPrincipal;
+    opcionPrincipal.disabled = !esOperadorPrincipal;
+    selector.disabled = esOperadorPrincipal;
+    selector.value = tipo;
+  }
+
   function limpiarFormularioUsuario() {
     $("#form-usuario").reset();
     $("#usuario-id").value = "";
     $("#usuario-activo").checked = true;
     $("#usuario-clave").required = true;
+    configurarTipoUsuario();
     $("#titulo-form-usuario").textContent = "Nuevo usuario";
   }
 
   function renderPersonal() {
-    const usuarios = estado.administrador.usuarios || [];
-    $("#lista-usuarios").innerHTML = usuarios.length ? usuarios.map(usuario => `<button class="fila-persona ${usuario.activo ? "" : "inactivo"}" data-editar-usuario="${usuario.id}" type="button">
-      <div><strong>${escapar(usuario.nombre)}</strong><span>${escapar(usuario.tipo_etiqueta)}</span></div>
-      <span class="estado-chip">${usuario.activo ? "Activo" : "Inactivo"}</span><span>Editar</span>
-    </button>`).join("") : '<p class="vacio">Aún no hay personal operativo registrado.</p>';
+    const lista = $("#lista-usuarios");
+    if (tienePermisoAdministrador("gestionar_usuarios")) {
+      const usuarios = estado.administrador.usuarios || [];
+      lista.innerHTML = usuarios.length ? usuarios.map(usuario => `<button class="fila-persona ${usuario.activo ? "" : "inactivo"}" data-editar-usuario="${usuario.id}" type="button">
+        <div><strong>${escapar(usuario.nombre)}</strong><span>${escapar(usuario.tipo_etiqueta)}</span></div>
+        <span class="estado-chip">${usuario.activo ? "Activo" : "Inactivo"}</span><span>Editar</span>
+      </button>`).join("") : '<p class="vacio">Aún no hay personal operativo registrado.</p>';
+    } else {
+      lista.replaceChildren();
+      limpiarFormularioUsuario();
+    }
     $("#liquidacion-repartidor").innerHTML = opcionesRepartidores();
   }
 
@@ -619,33 +700,211 @@
   }
 
   function renderProgramados() {
-    const procesados = (estado.administrador.tickets || []).filter(ticket => ticket.canal === "domicilio" && ticket.estado === "procesado");
+    const procesados = (estado.administrador.tickets || []).filter(ticket => ["domicilio", "recoger"].includes(ticket.canal) && ticket.estado === "procesado");
     $("#lista-programables").innerHTML = procesados.length
       ? procesados.map(ticket => tarjetaTicket(ticket, { programar: true })).join("")
-      : '<p class="vacio">No hay domicilios procesados que puedan programarse.</p>';
+      : '<p class="vacio">No hay domicilios ni pedidos para recoger listos para agendar.</p>';
     $("#lista-programados").innerHTML = estado.administrador.programados.length
-      ? estado.administrador.programados.map(ticket => tarjetaTicket(ticket)).join("")
+      ? estado.administrador.programados.map(ticket => tarjetaTicket(ticket, { administrarProgramado: true })).join("")
       : '<p class="vacio">La agenda futura está vacía.</p>';
+  }
+
+  function tipoMovimientoCanonico(tipo) {
+    if (tipo === "entrada") return "ingreso";
+    if (tipo === "salida") return "gasto";
+    return tipo || "ingreso";
+  }
+
+  function etiquetaMovimiento(tipo) {
+    return { ingreso: "Ingreso", gasto: "Gasto", terminal: "Terminal" }[tipoMovimientoCanonico(tipo)] || "Movimiento";
+  }
+
+  function simboloMovimiento(tipo) {
+    return { ingreso: "+", gasto: "−", terminal: "T" }[tipoMovimientoCanonico(tipo)] || "·";
   }
 
   function renderMovimientos() {
     const movimientos = estado.administrador.movimientos || [];
-    $("#lista-movimientos").innerHTML = movimientos.length ? movimientos.map(item => `<article class="fila-movimiento ${item.tipo}" data-movimiento-id="${item.id}">
-      <b>${item.tipo === "entrada" ? "+" : "−"}</b><div><strong>${escapar(item.concepto)}</strong><small>${fechaHora(item.creado_en)}</small></div><b>${dinero(item.importe)}</b>
-      <div class="movimiento-acciones"><button class="boton mini" data-editar-movimiento="${item.id}" type="button">Editar</button><button class="boton mini peligro" data-eliminar-movimiento="${item.id}" type="button">Eliminar</button></div>
-    </article>`).join("") : '<p class="vacio">No hay entradas ni salidas en este turno.</p>';
+    $("#lista-movimientos").innerHTML = movimientos.length ? movimientos.map(item => {
+      const tipo = tipoMovimientoCanonico(item.tipo);
+      return '<article class="fila-movimiento ' + tipo + '" data-movimiento-id="' + escapar(item.id) + '">' +
+        '<b aria-label="' + etiquetaMovimiento(tipo) + '">' + simboloMovimiento(tipo) + '</b>' +
+        '<div><strong>' + escapar(item.concepto) + '</strong><small>' + etiquetaMovimiento(tipo) + ' · ' + fechaHora(item.creado_en) + '</small></div>' +
+        '<b>' + dinero(item.importe) + '</b>' +
+        '<div class="movimiento-acciones"><button class="boton mini" data-editar-movimiento="' + escapar(item.id) + '" type="button">Editar</button><button class="boton mini peligro" data-eliminar-movimiento="' + escapar(item.id) + '" type="button">Eliminar</button></div>' +
+      '</article>';
+    }).join("") : '<p class="vacio">No hay movimientos registrados en este turno.</p>';
+  }
+
+  function numeroSeguro(valor) {
+    const numero = Number(valor);
+    return Number.isFinite(numero) && numero >= 0 ? numero : 0;
+  }
+
+  function sumarDenominaciones(valores = {}) {
+    return DENOMINACIONES.reduce((total, denominacion) => total + numeroSeguro(valores[denominacion]) * Number(denominacion), 0);
+  }
+
+  function renderDenominaciones(contenedorId, prefijo, valores = {}) {
+    const contenedor = $("#" + contenedorId);
+    contenedor.innerHTML = DENOMINACIONES.map(denominacion => {
+      const id = prefijo + "-" + denominacion.replace(".", "-");
+      const etiqueta = Number(denominacion) < 1 ? "50 ¢" : dinero(denominacion).replace(".00", "");
+      return '<label for="' + id + '"><span>' + etiqueta + '</span><input id="' + id + '" data-denominacion="' + denominacion + '" type="number" min="0" max="99999" step="1" inputmode="numeric" value="' + escapar(valores[denominacion] || 0) + '"></label>';
+    }).join("");
+  }
+
+  function mapaDenominaciones(contenedorId) {
+    return Object.fromEntries($$("#" + contenedorId + " [data-denominacion]").map(input => [input.dataset.denominacion, Math.max(0, Math.trunc(numeroSeguro(input.value)))]));
+  }
+
+  function totalesFormula() {
+    const admin = estado.administrador || {};
+    const control = admin.control_efectivo || {};
+    const totales = control.totales || {};
+    const movimientos = admin.movimientos || [];
+    const parcial = admin.totales_parciales || {};
+    const sumarTipo = tipo => movimientos
+      .filter(item => tipoMovimientoCanonico(item.tipo) === tipo)
+      .reduce((suma, item) => suma + numeroSeguro(item.importe), 0);
+    const ventasLocales = ["comedor", "llevar", "domicilio", "recoger"].reduce((suma, canal) => suma + numeroSeguro(parcial[canal]), 0);
+    return {
+      ingresos: numeroSeguro(totales.ingresos ?? sumarTipo("ingreso")),
+      ventas: numeroSeguro(totales.ventas ?? ventasLocales),
+      gastos: numeroSeguro(totales.gastos ?? sumarTipo("gasto")),
+      terminales: numeroSeguro(totales.terminales ?? sumarTipo("terminal")),
+    };
+  }
+
+  function actualizarTotalesControl() {
+    const fondoAnterior = sumarDenominaciones(mapaDenominaciones("fondo-anterior-denominaciones"));
+    const fondoSiguiente = sumarDenominaciones(mapaDenominaciones("fondo-siguiente-denominaciones"));
+    const apps = numeroSeguro($("#app-rappi").value) + numeroSeguro($("#app-didi").value) + numeroSeguro($("#app-uber-eats").value);
+    const base = totalesFormula();
+    const saldo = fondoAnterior + base.ingresos + base.ventas - base.gastos - base.terminales - fondoSiguiente;
+    $("#total-fondo-anterior").textContent = dinero(fondoAnterior);
+    $("#total-fondo-siguiente").textContent = dinero(fondoSiguiente);
+    $("#total-ventas-apps").textContent = dinero(apps);
+    $("#saldo-efectivo-esperado").textContent = dinero(saldo);
+    $("#saldo-efectivo-esperado").classList.toggle("saldo-negativo", saldo < 0);
+  }
+
+  function renderControlEfectivo() {
+    const control = estado.administrador.control_efectivo || {};
+    renderDenominaciones("fondo-anterior-denominaciones", "fondo-anterior", control.fondo_anterior || {});
+    renderDenominaciones("fondo-siguiente-denominaciones", "fondo-siguiente", control.fondo_siguiente || {});
+    const apps = control.ventas_apps || {};
+    $("#app-rappi").value = numeroSeguro(apps.rappi);
+    $("#app-didi").value = numeroSeguro(apps.didi);
+    $("#app-uber-eats").value = numeroSeguro(apps.uber_eats);
+    $("#control-efectivo-fecha").textContent = control.fecha ? fechaCorta(control.fecha) : "Hoy";
+    if (control.fecha) $("#control-efectivo-fecha").setAttribute("datetime", control.fecha);
+    actualizarTotalesControl();
+  }
+
+  function claveSucursal(item = {}) {
+    return String(item.id ?? item.cliente_sucursal_id ?? item.nombre ?? item.cliente_sucursal ?? "");
   }
 
   function renderSucursales() {
-    const sucursales = estado.administrador.sucursales || [];
-    $("#lista-sucursales").innerHTML = sucursales.length ? sucursales.map(item => `<article class="tarjeta-sucursal" data-sucursal-id="${item.id}">
-      <header><h2>${escapar(item.nombre)}</h2><b>${item.pendientes}</b></header>
-      <p>${item.pendientes ? `${item.pendientes} pedido(s) procesado(s) se agruparán por producto en el ticket.` : "Sin pedidos procesados pendientes de corte."}</p>
-      <button class="boton ${item.pendientes ? "primario" : "secundario"}" data-accion-sucursal="corte" type="button" ${item.pendientes ? "" : "disabled"}>Realizar corte</button>
-    </article>`).join("") : '<p class="vacio">No hay sucursales cliente configuradas.</p>';
+    const configuradas = estado.administrador.sucursales || [];
+    const pedidos = tickets().filter(ticket => ticket.canal === "sucursales" && !["cancelado", "pagado"].includes(ticket.estado));
+    const fuentes = new Map();
+    configuradas.forEach(item => {
+      const clave = claveSucursal(item);
+      if (clave) fuentes.set(clave, { id: item.id, nombre: item.nombre || "Sucursal", pendientes: numeroSeguro(item.pendientes), configurada: item });
+    });
+    pedidos.forEach(ticket => {
+      const clave = String(ticket.cliente_sucursal_id || ticket.cliente_sucursal || "sin-origen");
+      if (!fuentes.has(clave)) fuentes.set(clave, {
+        id: ticket.cliente_sucursal_id || "",
+        nombre: ticket.cliente_sucursal || "Sucursal sin identificar",
+        pendientes: 0,
+        configurada: null,
+      });
+    });
+    const lista = [...fuentes.entries()];
+    if (!lista.some(([clave]) => clave === estado.sucursalActivaId)) estado.sucursalActivaId = lista[0]?.[0] || "";
+    $("#tabs-sucursales").innerHTML = lista.length ? lista.map(([clave, item], indice) => {
+      const activa = clave === estado.sucursalActivaId;
+      const total = pedidos.filter(ticket => String(ticket.cliente_sucursal_id || ticket.cliente_sucursal || "sin-origen") === clave).length;
+      return '<button id="tab-sucursal-' + indice + '" class="tab-sucursal ' + (activa ? "activo" : "") + '" data-sucursal-tab="' + escapar(clave) + '" type="button" role="tab" tabindex="' + (activa ? "0" : "-1") + '" aria-selected="' + (activa ? "true" : "false") + '" aria-controls="pedidos-sucursal-activa">' +
+        '<span>' + escapar(item.nombre) + '</span><b>' + total + '</b></button>';
+    }).join("") : "";
+    const pedidosActivos = pedidos.filter(ticket => String(ticket.cliente_sucursal_id || ticket.cliente_sucursal || "sin-origen") === estado.sucursalActivaId);
+    const panelSucursal = $("#pedidos-sucursal-activa");
+    const tabActiva = $("#tabs-sucursales [aria-selected=\"true\"]");
+    if (tabActiva) panelSucursal.setAttribute("aria-labelledby", tabActiva.id);
+    else panelSucursal.removeAttribute("aria-labelledby");
+    panelSucursal.tabIndex = 0;
+    panelSucursal.innerHTML = lista.length
+      ? (pedidosActivos.length ? pedidosActivos.map(ticket => tarjetaTicket(ticket)).join("") : '<p class="vacio">Esta sucursal no tiene pedidos activos.</p>')
+      : '<p class="vacio">No hay sucursales cliente configuradas.</p>';
+
+    $("#lista-sucursales").innerHTML = configuradas.length ? configuradas.map(item => '<article class="tarjeta-sucursal" data-sucursal-id="' + escapar(item.id) + '">' +
+      '<header><h2>' + escapar(item.nombre) + '</h2><b>' + numeroSeguro(item.pendientes) + '</b></header>' +
+      '<p>' + (numeroSeguro(item.pendientes) ? numeroSeguro(item.pendientes) + ' pedido(s) procesado(s) se agruparán por producto en el ticket.' : "Sin pedidos procesados pendientes de corte.") + '</p>' +
+      '<button class="boton ' + (numeroSeguro(item.pendientes) ? "primario" : "secundario") + '" data-accion-sucursal="corte" type="button" ' + (numeroSeguro(item.pendientes) ? "" : "disabled") + '>Realizar corte</button>' +
+    '</article>').join("") : '<p class="vacio">No hay sucursales cliente configuradas.</p>';
+  }
+
+  function renderCancelaciones() {
+    const cancelaciones = estado.administrador.cancelaciones || [];
+    $("#conteo-cancelaciones").textContent = cancelaciones.length;
+    $("#lista-cancelaciones").innerHTML = cancelaciones.length ? cancelaciones.map(ticket => {
+      const responsable = ticket.cancelado_por_nombre || ticket.cancelado_por || "Usuario no identificado";
+      const momento = ticket.cancelado_en || ticket.actualizado_en || ticket.creado_en;
+      return '<article class="fila-cancelacion">' +
+        '<div><strong>Ticket #' + escapar(ticket.folio) + ' · ' + escapar(ticket.canal_etiqueta || ticket.canal || "Pedido") + '</strong><span>' + escapar(ticket.mesa || ticket.cliente_nombre || "Sin referencia") + '</span></div>' +
+        '<div><span>Canceló</span><strong>' + escapar(responsable) + '</strong></div>' +
+        '<time datetime="' + escapar(momento || "") + '">' + fechaHora(momento) + '</time>' +
+        '<b>' + dinero(ticket.total) + '</b>' +
+      '</article>';
+    }).join("") : '<p class="vacio">No hay cancelaciones en el turno actual.</p>';
+  }
+
+  function renderCortesCaja() {
+    const cortes = estado.administrador.cortes_caja || [];
+    $("#conteo-cortes-caja").textContent = cortes.length;
+    $("#lista-cortes-caja").innerHTML = cortes.length ? cortes.map(corte => {
+      const inicio = corte.inicio ? fechaHora(corte.inicio) : "Inicio no disponible";
+      const fin = fechaHora(corte.fin);
+      return '<article class="fila-corte-caja">' +
+        '<div class="corte-caja-fecha"><strong>' + fin + '</strong><span>' + inicio + ' → ' + fin + '</span></div>' +
+        '<dl><div><dt>Ventas</dt><dd>' + dinero(corte.total_ventas) + '</dd></div><div><dt>Resultado</dt><dd>' + dinero(corte.total_caja) + '</dd></div></dl>' +
+        '<button class="boton mini" data-reimprimir-corte="' + escapar(corte.reporte_id) + '" type="button">Reimprimir reporte</button>' +
+      '</article>';
+    }).join("") : '<p class="vacio">Aún no hay cortes diarios para consultar.</p>';
+  }
+
+  function renderCierreMensual() {
+    const cierre = estado.administrador.cierre_mensual || {};
+    const aviso = $("#aviso-cierre-mensual");
+    aviso.hidden = !cierre.requerido;
+    if (!cierre.requerido) return;
+    $("#cierre-mensual-periodo").textContent = periodoMensual(cierre.periodo);
+    $("#cierre-mensual-estado").textContent = cierre.estado ? cierre.estado.replaceAll("_", " ") : "Pendiente de envío";
+    $("#cierre-mensual-vps").textContent = cierre.vps_configurado ? "Configurado" : "Sin configurar";
+    const purgaPendiente = Boolean(cierre.purga_fisica_pendiente);
+    const error = $("#cierre-mensual-error");
+    const mensajePurga = purgaPendiente
+      ? "El VPS ya confirmó el mes. La tarea segura cerrará los archivos y respaldos pendientes en un máximo aproximado de 5 minutos."
+      : "";
+    error.textContent = cierre.ultimo_error || mensajePurga;
+    error.hidden = !error.textContent;
+    const boton = $("#ejecutar-cierre-mensual");
+    boton.dataset.periodo = cierre.periodo || "";
+    boton.disabled = !cierre.vps_configurado || !cierre.periodo || purgaPendiente;
+    boton.textContent = purgaPendiente
+      ? "Cierre físico en proceso"
+      : "Enviar al VPS, purgar mes y reiniciar folios tras el acuse";
+    boton.title = purgaPendiente
+      ? "La tarea SYSTEM comprueba solicitudes cada cinco minutos."
+      : (cierre.vps_configurado ? "" : "Configura la URL del VPS antes de consolidar el mes.");
   }
 
   function renderTodo() {
+    aplicarPermisosAdministrativos();
     const admin = estado.administrador;
     $("#turno-inicio").textContent = admin.inicio_turno ? `Desde ${fechaHora(admin.inicio_turno)}` : "Sin pedidos en el turno";
     renderPendientes();
@@ -655,7 +914,11 @@
     renderPedidos();
     renderProgramados();
     renderMovimientos();
+    renderControlEfectivo();
     renderSucursales();
+    renderCancelaciones();
+    renderCortesCaja();
+    renderCierreMensual();
   }
 
   async function asignarRepartidorInmediato(select) {
@@ -726,21 +989,41 @@
     const ticketId = fila?.dataset.ticketId;
     if (!ticketId) return;
     const accion = boton.dataset.accionTicket;
-    if (accion === "programar") {
+    if (["programar", "reprogramar"].includes(accion)) {
       const fecha = fila.querySelector('input[type="date"]')?.value;
       const hora = fila.querySelector('input[type="time"]')?.value;
       if (!fecha || !hora) return toast("Selecciona la fecha y la hora de entrega.", true);
       await ejecutarAccion({
-        url: `/api/administrador/tickets/${ticketId}/programar/`,
+        url: "/api/administrador/tickets/" + ticketId + "/programar/",
+        method: accion === "reprogramar" ? "PATCH" : "POST",
         cuerpo: { fecha_programada: fecha, hora_programada: hora },
-        mensaje: `Pedido programado para el ${fechaCorta(fecha)} a las ${hora}.`,
+        mensaje: accion === "reprogramar" ? "Fecha y hora actualizadas." : "Pedido programado para el " + fechaCorta(fecha) + " a las " + hora + ".",
+        control: boton,
+      });
+      return;
+    }
+    if (accion === "desprogramar") {
+      if (!window.confirm("¿Devolver este pedido al turno activo? Se asignará una posición disponible de su canal.")) return;
+      await ejecutarAccion({
+        url: "/api/administrador/tickets/" + ticketId + "/desprogramar/",
+        mensaje: "Pedido devuelto al turno activo.",
+        control: boton,
+      });
+      return;
+    }
+    if (accion === "eliminar-programado") {
+      if (!window.confirm("¿Eliminar definitivamente este pedido programado? Esta acción no se puede deshacer.")) return;
+      await ejecutarAccion({
+        url: "/api/administrador/tickets/" + ticketId + "/programar/",
+        method: "DELETE",
+        mensaje: "Pedido programado eliminado.",
+        control: boton,
       });
       return;
     }
     if (accion === "descuento") {
       const porcentaje = fila.querySelector('input[type="number"]')?.value;
-      await ejecutarConClave({ titulo: "Aplicar descuento", ayuda: `Confirma el descuento de ${porcentaje || 0}% para este pedido.`, url: `/api/administrador/tickets/${ticketId}/descuento/`, cuerpo: { porcentaje }, mensaje: "Descuento actualizado." });
-      return;
+      await ejecutarConClave({ titulo: "Aplicar descuento", ayuda: "Confirma el descuento de " + (porcentaje || 0) + "% para este pedido.", url: "/api/administrador/tickets/" + ticketId + "/descuento/", cuerpo: { porcentaje }, mensaje: "Descuento actualizado." });
     }
   }
 
@@ -749,10 +1032,33 @@
     if (select) asignarRepartidorInmediato(select);
   });
 
+  document.addEventListener("keydown", evento => {
+    const tabSucursal = evento.target.closest("#tabs-sucursales [data-sucursal-tab]");
+    if (!tabSucursal || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(evento.key)) return;
+    const tabs = $$("#tabs-sucursales [data-sucursal-tab]");
+    const actual = tabs.indexOf(tabSucursal);
+    const destino = evento.key === "Home"
+      ? 0
+      : evento.key === "End"
+        ? tabs.length - 1
+        : (actual + (evento.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    evento.preventDefault();
+    estado.sucursalActivaId = tabs[destino].dataset.sucursalTab;
+    renderSucursales();
+    requestAnimationFrame(() => $$("#tabs-sucursales [data-sucursal-tab]")[destino]?.focus());
+  });
+
   document.addEventListener("click", async evento => {
     const navegacion = evento.target.closest("[data-panel], [data-panel-ir]");
     if (navegacion) {
       mostrarPanel(navegacion.dataset.panel || navegacion.dataset.panelIr);
+      return;
+    }
+    const tabSucursal = evento.target.closest("[data-sucursal-tab]");
+    if (tabSucursal) {
+      estado.sucursalActivaId = tabSucursal.dataset.sucursalTab;
+      renderSucursales();
+      requestAnimationFrame(() => $("[data-sucursal-tab=\"" + CSS.escape(estado.sucursalActivaId) + "\"]")?.focus());
       return;
     }
     const accion = evento.target.closest("[data-accion-ticket]");
@@ -829,7 +1135,7 @@
       if (!item) return;
       estado.movimientoEditandoId = String(item.id);
       $("#movimiento-id").value = item.id;
-      $("#movimiento-tipo").value = item.tipo;
+      $("#movimiento-tipo").value = tipoMovimientoCanonico(item.tipo);
       $("#movimiento-concepto").value = item.concepto;
       $("#movimiento-importe").value = item.importe;
       $("#titulo-form-movimiento").textContent = "Editar movimiento";
@@ -841,7 +1147,7 @@
     const eliminarMovimiento = evento.target.closest("[data-eliminar-movimiento]");
     if (eliminarMovimiento) {
       const movimientoId = eliminarMovimiento.dataset.eliminarMovimiento;
-      if (!window.confirm("¿Eliminar esta entrada o salida de caja?")) return;
+      if (!window.confirm("¿Eliminar este movimiento de caja?")) return;
       const resultado = await ejecutarAccion({
         url: "/api/administrador/movimientos/" + movimientoId + "/",
         method: "DELETE",
@@ -853,16 +1159,41 @@
     }
     const usuario = evento.target.closest("[data-editar-usuario]");
     if (usuario) {
+      if (!exigirPermisoAdministrador("gestionar_usuarios")) return;
       const datos = estado.administrador.usuarios.find(item => item.id === usuario.dataset.editarUsuario);
       if (!datos) return;
       $("#usuario-id").value = datos.id;
       $("#usuario-nombre").value = datos.nombre;
-      $("#usuario-tipo").value = datos.tipo;
+      configurarTipoUsuario(datos.tipo);
       $("#usuario-clave").value = "";
       $("#usuario-clave").required = false;
       $("#usuario-activo").checked = datos.activo;
       $("#titulo-form-usuario").textContent = "Editar usuario";
       $("#usuario-nombre").focus();
+      return;
+    }
+    const reimprimirCorte = evento.target.closest("[data-reimprimir-corte]");
+    if (reimprimirCorte) {
+      await ejecutarAccion({
+        url: "/api/administrador/reportes/" + reimprimirCorte.dataset.reimprimirCorte + "/reimprimir/",
+        mensaje: "Reporte de corte enviado a impresión.",
+        refrescar: false,
+        control: reimprimirCorte,
+      });
+      return;
+    }
+    const consolidarMes = evento.target.closest("#ejecutar-cierre-mensual");
+    if (consolidarMes) {
+      const periodo = consolidarMes.dataset.periodo;
+      if (!periodo) return toast("No se recibió el periodo que debe consolidarse.", true);
+      const advertencia = "¿Cerrar " + periodoMensual(periodo) + "? Se enviarán los totales al VPS. Sólo después de recibir su acuse se purgarán los comprobantes mensuales y los folios se reiniciarán a 1.";
+      if (!window.confirm(advertencia)) return;
+      await ejecutarAccion({
+        url: "/api/administrador/consolidacion-mensual/",
+        cuerpo: { periodo },
+        mensaje: "El VPS confirmó el mes y reinició los folios. El cierre físico seguro quedó programado.",
+        control: consolidarMes,
+      });
       return;
     }
     const accionGeneral = evento.target.closest("[data-accion]")?.dataset.accion;
@@ -876,6 +1207,7 @@
       return;
     }
     if (accionGeneral === "reiniciar-folios") {
+      if (!exigirPermisoAdministrador("reiniciar_folios")) return;
       if (!window.confirm("¿Reiniciar los folios? El siguiente pedido será el número 1; no se eliminará ningún pedido existente.")) return;
       await ejecutarAccion({
         url: "/api/administrador/folios/reiniciar/",
@@ -915,10 +1247,14 @@
   $("#pantalla-completa-admin").addEventListener("click", alternarPantallaCompletaAdmin);
   document.addEventListener("fullscreenchange", actualizarBotonPantallaCompleta);
   document.addEventListener("webkitfullscreenchange", actualizarBotonPantallaCompleta);
-  $("#nuevo-usuario").addEventListener("click", limpiarFormularioUsuario);
+  $("#nuevo-usuario").addEventListener("click", () => {
+    if (!exigirPermisoAdministrador("gestionar_usuarios")) return;
+    limpiarFormularioUsuario();
+  });
 
   $("#form-usuario").addEventListener("submit", async evento => {
     evento.preventDefault();
+    if (!exigirPermisoAdministrador("gestionar_usuarios")) return;
     const id = $("#usuario-id").value;
     const cuerpo = {
       nombre: $("#usuario-nombre").value,
@@ -954,8 +1290,30 @@
   });
   $("#cancelar-edicion-movimiento").addEventListener("click", limpiarFormularioMovimiento);
 
+  $("#form-control-efectivo").addEventListener("input", actualizarTotalesControl);
+  $("#form-control-efectivo").addEventListener("submit", async evento => {
+    evento.preventDefault();
+    const resultado = await ejecutarAccion({
+      url: RUTAS.controlEfectivo,
+      method: "PUT",
+      cuerpo: {
+        fondo_anterior: mapaDenominaciones("fondo-anterior-denominaciones"),
+        fondo_siguiente: mapaDenominaciones("fondo-siguiente-denominaciones"),
+        ventas_apps: {
+          rappi: $("#app-rappi").value || "0",
+          didi: $("#app-didi").value || "0",
+          uber_eats: $("#app-uber-eats").value || "0",
+        },
+      },
+      mensaje: "Control de efectivo guardado.",
+      control: $("#guardar-control-efectivo"),
+    });
+    if (resultado) actualizarTotalesControl();
+  });
+
   $("#form-clave").addEventListener("submit", async evento => {
     evento.preventDefault();
+    if (!exigirPermisoAdministrador("cambiar_clave_maestra")) return;
     const claveActual = $("#clave-actual").value;
     const nuevaClave = $("#nueva-clave").value;
     const resultado = await ejecutarAccion({
@@ -968,6 +1326,8 @@
   });
 
   const panelInicial = window.location.hash.slice(1);
-  if ($(`[data-admin-panel="${CSS.escape(panelInicial)}"]`)) mostrarPanel(panelInicial);
+  if ($(`[data-admin-panel="${CSS.escape(panelInicial)}"]`)) {
+    estado.panelInicialSolicitado = panelInicial;
+  }
   cargarResumen();
 })();

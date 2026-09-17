@@ -2,6 +2,7 @@ import os
 import re
 from ipaddress import ip_address
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from django.core.exceptions import ImproperlyConfigured
 
@@ -357,3 +358,41 @@ PEDIDOS_SUCURSALES_SYNC_SECONDS = int(os.getenv("PEDIDOS_SUCURSALES_SYNC_SECONDS
 PEDIDOS_SUCURSALES_HORA_INICIO = os.getenv("PEDIDOS_SUCURSALES_HORA_INICIO", "06:00")
 # Cinco minutos de gracia garantizan una lectura posterior al último pedido de las 17:30.
 PEDIDOS_SUCURSALES_HORA_FIN = os.getenv("PEDIDOS_SUCURSALES_HORA_FIN", "17:35")
+
+# Consolidación mensual Edge -> VPS. URL y token vacíos mantienen los envíos desactivados.
+VPS_CONSOLIDACION_URL = os.getenv("VPS_CONSOLIDACION_URL", "").strip()
+VPS_CONSOLIDACION_TOKEN = os.getenv("VPS_CONSOLIDACION_TOKEN", "").strip()
+if bool(VPS_CONSOLIDACION_URL) != bool(VPS_CONSOLIDACION_TOKEN):
+    raise ImproperlyConfigured(
+        "VPS_CONSOLIDACION_URL y VPS_CONSOLIDACION_TOKEN deben configurarse juntos."
+    )
+if VPS_CONSOLIDACION_URL:
+    try:
+        _vps_consolidacion_uri = urlsplit(VPS_CONSOLIDACION_URL)
+        _vps_consolidacion_port = _vps_consolidacion_uri.port
+    except ValueError as exc:
+        raise ImproperlyConfigured(
+            "VPS_CONSOLIDACION_URL debe ser una URL HTTPS absoluta sin credenciales embebidas."
+        ) from exc
+    if (
+        any(caracter.isspace() for caracter in VPS_CONSOLIDACION_URL)
+        or _vps_consolidacion_uri.scheme.lower() != "https"
+        or not _vps_consolidacion_uri.netloc
+        or not _vps_consolidacion_uri.hostname
+        or _vps_consolidacion_uri.username is not None
+        or _vps_consolidacion_uri.password is not None
+        or _vps_consolidacion_uri.fragment
+    ):
+        raise ImproperlyConfigured(
+            "VPS_CONSOLIDACION_URL debe ser una URL HTTPS absoluta sin credenciales embebidas."
+        )
+try:
+    VPS_CONSOLIDACION_TIMEOUT = int(os.getenv("VPS_CONSOLIDACION_TIMEOUT", "10"))
+except ValueError as exc:
+    raise ImproperlyConfigured(
+        "VPS_CONSOLIDACION_TIMEOUT debe ser un entero entre 1 y 60 segundos."
+    ) from exc
+if not 1 <= VPS_CONSOLIDACION_TIMEOUT <= 60:
+    raise ImproperlyConfigured(
+        "VPS_CONSOLIDACION_TIMEOUT debe ser un entero entre 1 y 60 segundos."
+    )

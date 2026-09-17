@@ -57,6 +57,35 @@ function ConvertFrom-DotEnvBoolean {
     throw "$Name no contiene un booleano válido en .env."
 }
 
+function Assert-VpsConsolidationConfiguration {
+    param(
+        [AllowEmptyString()][string]$Url,
+        [AllowEmptyString()][string]$Token
+    )
+
+    $urlNormalizada = ([string]$Url).Trim()
+    $tokenNormalizado = ([string]$Token).Trim()
+    if ([string]::IsNullOrWhiteSpace($urlNormalizada)) {
+        if (-not [string]::IsNullOrWhiteSpace($tokenNormalizado)) {
+            throw "VPS_CONSOLIDACION_URL y VPS_CONSOLIDACION_TOKEN deben configurarse juntos."
+        }
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($tokenNormalizado)) {
+        throw "VPS_CONSOLIDACION_URL y VPS_CONSOLIDACION_TOKEN deben configurarse juntos."
+    }
+
+    $uri = $null
+    if (-not [Uri]::TryCreate($urlNormalizada, [UriKind]::Absolute, [ref]$uri) -or
+        -not $uri.Scheme.Equals([Uri]::UriSchemeHttps, [StringComparison]::OrdinalIgnoreCase) -or
+        [string]::IsNullOrWhiteSpace($uri.Host) -or
+        $urlNormalizada -match '\s' -or
+        -not [string]::IsNullOrEmpty($uri.UserInfo) -or
+        -not [string]::IsNullOrEmpty($uri.Fragment)) {
+        throw "VPS_CONSOLIDACION_URL debe ser una URL HTTPS absoluta sin credenciales embebidas."
+    }
+}
+
 function Resolve-ProjectPath {
     param([string]$Value)
     $resolved = if ([IO.Path]::IsPathRooted($Value)) {
@@ -128,7 +157,8 @@ foreach ($requiredKey in $requiredEnvironmentKeys) {
 $optionalEnvironmentKeys = @(
     "DB_ENGINE", "SQLITE_PATH", "PRINT_BACKEND", "PRINT_SYNC",
     "PRINTER_CAJA_HOST", "PRINTER_COCINA_HOST", "PRINTER_BARRA_HOST",
-    "PRINTER_PORT"
+    "PRINTER_PORT", "VPS_CONSOLIDACION_URL", "VPS_CONSOLIDACION_TOKEN",
+    "VPS_CONSOLIDACION_TIMEOUT"
 )
 foreach ($optionalKey in $optionalEnvironmentKeys) {
     $optionalPattern = "(?i)^\s*" + [Regex]::Escape($optionalKey) + "\s*="
@@ -137,6 +167,15 @@ foreach ($optionalKey in $optionalEnvironmentKeys) {
         throw "$optionalKey no puede aparecer más de una vez en .env."
     }
 }
+$vpsConsolidacionUrl = Get-DotEnvValue -Name "VPS_CONSOLIDACION_URL"
+$vpsConsolidacionToken = Get-DotEnvValue -Name "VPS_CONSOLIDACION_TOKEN"
+$vpsConsolidacionTimeout = ConvertFrom-DotEnvInteger `
+    -Name "VPS_CONSOLIDACION_TIMEOUT" `
+    -Value (Get-DotEnvValue -Name "VPS_CONSOLIDACION_TIMEOUT" -Default "10") `
+    -Minimum 1 -Maximum 60
+Assert-VpsConsolidationConfiguration `
+    -Url $vpsConsolidacionUrl `
+    -Token $vpsConsolidacionToken
 $branchKey = Get-RequiredDotEnvValue -Name "SUCURSAL_CLAVE"
 if ($branchKey -notmatch '^[A-Z0-9](?:[A-Z0-9_-]{0,28}[A-Z0-9])?$') { throw "SUCURSAL_CLAVE no tiene el formato canónico esperado." }
 $secretKey = Get-RequiredDotEnvValue -Name "DJANGO_SECRET_KEY"
@@ -333,6 +372,51 @@ if ($task) {
 } elseif ($RunBackup) {
     throw "RunBackup requiere una tarea SQLite instalada; pudo omitirse expresamente durante el alta."
 }
+$purgeTask = Get-ScheduledTask -TaskName "LosTocayosPOS-PurgasFisicas" -ErrorAction SilentlyContinue
+$purgeTaskState = "NotConfigured"
+if ($task -and -not $purgeTask) {
+    throw "Falta la tarea SYSTEM de purgas físicas para cerrar consolidaciones oportunamente."
+}
+if (-not $task -and $purgeTask) {
+    throw "Existe la tarea de purgas físicas sin la tarea SQLite principal."
+}
+if ($purgeTask) {
+    if ($dbEngine -ne "sqlite") { throw "Existe una tarea de purgas SQLite aunque DB_ENGINE usa PostgreSQL." }
+    if ($purgeTask.Principal.UserId -notin @("SYSTEM", "S-1-5-18", "NT AUTHORITY\SYSTEM") -or
+        [string]$purgeTask.Principal.RunLevel -ne "Highest") {
+        throw "La tarea de purgas físicas no usa SYSTEM con privilegios máximos."
+    }
+    if ([string]$purgeTask.State -eq "Disabled" -or
+        -not [bool]$purgeTask.Settings.Enabled -or
+        -not [bool]$purgeTask.Settings.StartWhenAvailable -or
+        [string]$purgeTask.Settings.MultipleInstances -ne "IgnoreNew" -or
+        [string]$purgeTask.Settings.ExecutionTimeLimit -ne "PT1H") {
+        throw "La tarea de purgas físicas no conserva sus ajustes de recuperación."
+    }
+    $purgeTriggers = @($purgeTask.Triggers)
+    if ($purgeTriggers.Count -ne 1 -or
+        [string]$purgeTriggers[0].CimClass.CimClassName -ne "MSFT_TaskTimeTrigger" -or
+        -not [bool]$purgeTriggers[0].Enabled -or
+        [string]$purgeTriggers[0].Repetition.Interval -ne "PT5M") {
+        throw "La tarea de purgas físicas no se repite cada cinco minutos."
+    }
+    $purgeActions = @($purgeTask.Actions)
+    if ($purgeActions.Count -ne 1) { throw "La tarea de purgas físicas no tiene una acción única." }
+    $purgeAction = $purgeActions[0]
+    if (-not (Test-SamePath $purgeAction.Execute $expectedPowerShell) -or
+        -not (Test-SamePath $purgeAction.WorkingDirectory $root)) {
+        throw "La tarea de purgas físicas usa otro ejecutable o directorio."
+    }
+    foreach ($expectedPath in @($backupScript, $python, $database, $backupRoot, $backupLog)) {
+        if (-not (Test-ContainsOrdinalIgnoreCase -Value ([string]$purgeAction.Arguments) -Expected ('"' + $expectedPath + '"'))) {
+            throw "La tarea de purgas físicas no referencia la ruta esperada: $expectedPath"
+        }
+    }
+    if (-not (Test-ContainsOrdinalIgnoreCase -Value ([string]$purgeAction.Arguments) -Expected "-OnlyIfPurgePending")) {
+        throw "La tarea frecuente crearía respaldos aun sin solicitudes pendientes."
+    }
+    $purgeTaskState = [string]$purgeTask.State
+}
 $healthAddress = if ($listenAddress -eq "0.0.0.0") {
     "127.0.0.1"
 } elseif ($listenAddress -eq "::") {
@@ -509,6 +593,8 @@ if ($violations.Count) { throw ("ACL no conformes: " + $violations.Count + "; " 
     DatabaseEngine = $dbEngine
     BackupTask = if ($task) { $task.TaskName } else { $null }
     BackupTaskState = $taskState
+    PhysicalPurgeTask = if ($purgeTask) { $purgeTask.TaskName } else { $null }
+    PhysicalPurgeTaskState = $purgeTaskState
     BackupLastResult = if ($info) { $info.LastTaskResult } else { $null }
     BackupLastRun = if ($info) { $info.LastRunTime } else { $null }
     BackupCreated = $backupCreated

@@ -58,6 +58,7 @@ RUTAS_REQUERIDAS = (
     ".env.example", "VERSION", "requirements.txt", "requirements-lock.txt",
     "manage.py", "servicio_windows.py", "instalar-servicio-lan.ps1",
     "instalar-servidor.ps1", "actualizar-servidor.ps1",
+    "actualizar-laboratorio-desde-release.ps1",
     "aprovisionar-sucursal.ps1", "reparar-permisos-servidor.ps1",
     "iniciar-servicio-lan.ps1", "verificar-servicio-lan.ps1",
     "respaldar-db-sqlite.ps1", "certs/prod-ca-2021.crt",
@@ -69,6 +70,7 @@ ARCHIVOS_CONTRATO_REQUERIDOS = (
     ".env.example", "VERSION", "requirements.txt", "requirements-lock.txt",
     "manage.py", "servicio_windows.py", "instalar-servicio-lan.ps1",
     "instalar-servidor.ps1", "actualizar-servidor.ps1",
+    "actualizar-laboratorio-desde-release.ps1",
     "aprovisionar-sucursal.ps1", "reparar-permisos-servidor.ps1",
     "iniciar-servicio-lan.ps1", "verificar-servicio-lan.ps1",
     "respaldar-db-sqlite.ps1", "certs/prod-ca-2021.crt",
@@ -76,6 +78,7 @@ ARCHIVOS_CONTRATO_REQUERIDOS = (
     "herramientas/validar_despliegue.py", "pos/settings.py",
     "personas/identidad.py",
     "personas/management/commands/aprovisionar_sucursal.py",
+    "personas/management/commands/inicializar_operacion_sucursal.py",
     "personas/management/commands/verificar_identidad_local.py",
 )
 PREFIJOS_CONTRATO_REQUERIDOS = (

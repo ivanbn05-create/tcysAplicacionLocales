@@ -29,21 +29,35 @@ from .admin_services import (
     aplicar_descuento,
     asignar_repartidor,
     activar_programados,
+    autenticar_acceso_administrador,
     cambiar_clave_administrador,
     cancelar_ticket_administrador,
     crear_corte_caja,
     crear_corte_sucursal,
     crear_liquidacion_repartidor,
     crear_reporte_parcial,
+    desprogramar_ticket,
     eliminar_movimiento,
+    eliminar_ticket_programado,
+    guardar_control_efectivo,
     guardar_usuario,
-    identificar_mesero,
+    identificar_usuario_ventas,
     programar_ticket,
     reasignar_ticket,
     resumen_administrador,
     usuario_payload,
     validar_clave_administrador,
+    validar_clave_administrativa,
 )
+
+from .api_throttle import (
+    clave_intentos,
+    limpiar_fallos,
+    limite_agotado,
+    registrar_fallo,
+    respuesta_limite,
+)
+from .consolidacion import consolidar_periodo
 
 from .clientes import (
     ErrorCliente,
@@ -67,6 +81,7 @@ from .models import (
     MovimientoCaja,
     Partida,
     ProductoSucursal,
+    ReporteAdministrativo,
     SucursalPedido,
     TelefonoCliente,
     Ticket,
@@ -85,6 +100,7 @@ from .services import (
     actualizar_partida_sucursal,
     agregar_comanda,
     agregar_partida,
+    agregar_partida_personalizada,
     agregar_partida_sucursal,
     alternar_comentario_general,
     alternar_modificador,
@@ -141,12 +157,16 @@ COMENTARIOS_GENERALES_PERMITIDOS = {
 
 # Cambiar este valor obliga a las terminales y tabletas instaladas a descargar
 # los recursos de interfaz de esta entrega, incluso si conservan una caché PWA.
-ASSET_VERSION = "20260902-produccion-simulada-1"
+ASSET_VERSION = "0.4.0-dev.3"
 PWA_CACHE = f"tocayos-pos-{ASSET_VERSION}"
 
 
 class ErrorSolicitudJSON(ErrorVenta, ErrorCliente):
     """Error de entrada común a las API de ventas y clientes."""
+
+
+class EdicionProgramadaNoAutorizada(ErrorVenta):
+    status_code = 403
 
 
 def permiso_pos(campo):
@@ -216,19 +236,105 @@ def transaccion_en_metodos(*metodos):
     return decorar
 
 
+PERMISOS_ADMINISTRADOR = {
+    "gestionar_usuarios": True,
+    "reiniciar_folios": True,
+    "cambiar_clave_maestra": True,
+}
+PERMISOS_ELEVADO = {
+    "gestionar_usuarios": False,
+    "reiniciar_folios": False,
+    "cambiar_clave_maestra": False,
+}
+
+
+def _limpiar_acceso_administrador(request):
+    for clave in (
+        "admin_autorizado_hasta",
+        "admin_nivel",
+        "admin_perfil_id",
+    ):
+        request.session.pop(clave, None)
+
+
+def _acceso_administrador_actual(request):
+    try:
+        autorizado_hasta = float(request.session.get("admin_autorizado_hasta", 0) or 0)
+    except (TypeError, ValueError):
+        autorizado_hasta = 0
+    if autorizado_hasta < timezone.now().timestamp():
+        _limpiar_acceso_administrador(request)
+        return None
+
+    nivel = request.session.get("admin_nivel")
+    if nivel == "administrador":
+        return {
+            "nivel": nivel,
+            "perfil": None,
+            "permisos": dict(PERMISOS_ADMINISTRADOR),
+        }
+    if nivel == "elevado":
+        perfil = (
+            UsuarioPOS.objects.select_related("rol")
+            .filter(
+                pk=request.session.get("admin_perfil_id"),
+                sucursal=_sucursal(),
+                activo=True,
+                rol__tipo=Rol.Tipo.ELEVADO,
+            )
+            .first()
+        )
+        if perfil is not None:
+            return {
+                "nivel": nivel,
+                "perfil": perfil,
+                "permisos": dict(PERMISOS_ELEVADO),
+            }
+
+    _limpiar_acceso_administrador(request)
+    return None
+
+
 def acceso_administrador(vista):
     @wraps(vista)
     def protegida(request, *args, **kwargs):
-        autorizado_hasta = float(request.session.get("admin_autorizado_hasta", 0) or 0)
-        if autorizado_hasta < timezone.now().timestamp():
-            return JsonResponse({"error": "Vuelve a ingresar la clave de administrador."}, status=401)
+        acceso = _acceso_administrador_actual(request)
+        if acceso is None:
+            return JsonResponse(
+                {"error": "Vuelve a ingresar una clave de acceso administrativo."},
+                status=401,
+            )
+        request.acceso_administrador = acceso
+        return vista(request, *args, **kwargs)
+
+    return protegida
+
+
+def acceso_administrador_maestro(vista):
+    @wraps(vista)
+    def protegida(request, *args, **kwargs):
+        acceso = _acceso_administrador_actual(request)
+        if acceso is None:
+            return JsonResponse(
+                {"error": "Vuelve a ingresar una clave de acceso administrativo."},
+                status=401,
+            )
+        if acceso["nivel"] != "administrador":
+            return JsonResponse(
+                {
+                    "error": "Esta acción requiere la clave maestra del administrador.",
+                    "codigo": "administrador_maestro_requerido",
+                },
+                status=403,
+            )
+        request.acceso_administrador = acceso
         return vista(request, *args, **kwargs)
 
     return protegida
 
 
 def _validar_clave_admin_datos(sucursal, datos):
-    validar_clave_administrador(sucursal, datos.get("clave_administrador"))
+    validar_clave_administrativa(sucursal, datos.get("clave_administrador"))
 
 
 def _sucursal():
@@ -274,7 +380,6 @@ def _operador_actual_pos(request, sucursal):
             pk=perfil_id,
             sucursal=sucursal,
             activo=True,
-            rol__tipo__in=[Rol.Tipo.MESERO, Rol.Tipo.ENCARGADO],
         ).first()
     if not getattr(settings, "POS_REQUIRE_AUTH", True):
         return UsuarioPOS.objects.filter(sucursal=sucursal, activo=True).first()
@@ -291,10 +396,31 @@ def _respuesta_error_venta(error, device_id=""):
     return JsonResponse(payload, status=status)
 
 
-def _asegurar_edicion_ticket(request, ticket, datos=None, validar_version=True):
+def _asegurar_edicion_ticket(
+    request,
+    ticket,
+    datos=None,
+    validar_version=True,
+    permitir_programado=False,
+):
     datos = datos or {}
     device_id = _device_id(request, datos)
     operador = _operador_actual_pos(request, ticket.sucursal)
+    if ticket.estado == Ticket.Estado.PROGRAMADO:
+        if not permitir_programado or datos.get("edicion_programada") is not True:
+            raise ErrorVenta(
+                "Abre el pedido desde Administración para editarlo sin cambiar su programación."
+            )
+        acceso = _acceso_administrador_actual(request)
+        if acceso is None:
+            raise EdicionProgramadaNoAutorizada(
+                "El acceso administrativo venció. Vuelve a Programados para autorizar la edición."
+            )
+        if not device_id:
+            raise ErrorSolicitudJSON(
+                "El identificador del dispositivo es obligatorio para editar un pedido programado."
+            )
+        operador = acceso["perfil"] or operador
     ticket = asegurar_bloqueo_ticket(ticket, device_id, operador=operador)
     if validar_version and device_id and "version_entidad" not in datos:
         raise ErrorSolicitudJSON("La versión de la orden es obligatoria.")
@@ -374,19 +500,33 @@ def _ticket_payload(ticket, device_id=""):
     partidas = []
     es_sucursal = ticket.canal == Mesa.Canal.SUCURSALES
     if es_sucursal:
-        consulta_partidas = ticket.partidas.select_related("producto_sucursal").order_by(
-            "producto_sucursal__orden", "creada_en"
-        )
+        consulta_partidas = ticket.partidas.select_related(
+            "producto_sucursal"
+        ).order_by("personalizada", "producto_sucursal__orden", "creada_en")
         for partida in consulta_partidas:
             producto = partida.producto_sucursal
+            personalizada = bool(partida.personalizada)
             partidas.append(
                 {
                     "id": str(partida.id),
-                    "producto_id": str(partida.producto_sucursal_id),
-                    "producto_sucursal_id": str(partida.producto_sucursal_id),
-                    "codigo": str(producto.origen_id),
+                    "producto_id": (
+                        "" if personalizada else str(partida.producto_sucursal_id)
+                    ),
+                    "producto_sucursal_id": (
+                        "" if personalizada else str(partida.producto_sucursal_id)
+                    ),
+                    "personalizado": personalizada,
+                    "codigo": (
+                        "PERSONALIZADO"
+                        if personalizada
+                        else str(producto.origen_id)
+                    ),
                     "nombre": partida.nombre_producto,
-                    "nombre_catalogo": producto.nombre,
+                    "nombre_catalogo": (
+                        partida.nombre_producto
+                        if personalizada
+                        else producto.nombre
+                    ),
                     "nombre_corto": partida.nombre_corto,
                     "comensal": 1,
                     "comanda_numero": partida.comanda_numero,
@@ -395,23 +535,42 @@ def _ticket_payload(ticket, device_id=""):
                     "importe": str(partida.importe),
                     "cantidad_por_precio": str(partida.cantidad_por_precio),
                     "unidad": partida.unidad,
-                    "categoria": "Sucursales",
+                    "categoria": (
+                        "Personalizado" if personalizada else "Sucursales"
+                    ),
                     "destino": "caja",
                     "termino": "",
-                    "orden": producto.orden,
+                    "orden": 99999 if personalizada else producto.orden,
                     "es_promocion": False,
                     "promocion_id": "",
                 }
             )
     else:
-        consulta_partidas = ticket.partidas.select_related("producto__categoria", "promocion_aplicada__producto").all()
+        consulta_partidas = ticket.partidas.select_related(
+            "producto__categoria",
+            "promocion_aplicada__producto",
+        ).all()
         for partida in ordenar_partidas(consulta_partidas):
-            promocion = configuracion_promocion(partida.producto)
+            personalizada = bool(partida.personalizada)
+            producto = partida.producto
+            promocion = (
+                None
+                if personalizada
+                else configuracion_promocion(producto)
+            )
             partidas.append(
                 {
                     "id": str(partida.id),
-                    "producto_id": str(partida.producto_id),
-                    "codigo": partida.producto.codigo,
+                    "producto_id": (
+                        "" if personalizada else str(partida.producto_id)
+                    ),
+                    "producto_sucursal_id": "",
+                    "personalizado": personalizada,
+                    "codigo": (
+                        "PERSONALIZADO"
+                        if personalizada
+                        else producto.codigo
+                    ),
                     "nombre": partida.nombre_producto,
                     "nombre_corto": partida.nombre_corto,
                     "comensal": partida.comensal,
@@ -421,12 +580,24 @@ def _ticket_payload(ticket, device_id=""):
                     "importe": str(partida.importe),
                     "cantidad_por_precio": str(partida.cantidad_por_precio),
                     "unidad": partida.unidad,
-                    "categoria": partida.producto.categoria.nombre,
-                    "destino": partida.producto.destino_impresion,
+                    "categoria": (
+                        "Personalizado"
+                        if personalizada
+                        else producto.categoria.nombre
+                    ),
+                    "destino": (
+                        "cocina"
+                        if personalizada
+                        else producto.destino_impresion
+                    ),
                     "termino": partida.termino,
-                    "orden": partida.producto.orden,
+                    "orden": 99999 if personalizada else producto.orden,
                     "es_promocion": bool(promocion),
-                    "promocion_id": str(partida.promocion_aplicada_id) if partida.promocion_aplicada_id else "",
+                    "promocion_id": (
+                        str(partida.promocion_aplicada_id)
+                        if partida.promocion_aplicada_id
+                        else ""
+                    ),
                 }
             )
     modificadores = [
@@ -665,6 +836,7 @@ def api_estado(request):
             "ticket_id": str(ticket.id),
             "folio": ticket.folio,
             "estado": ticket.estado,
+            "canal": ticket.canal,
             "total": str(ticket.total),
             "fecha_programada": ticket.fecha_programada.isoformat() if ticket.fecha_programada else "",
             "hora_programada": ticket.hora_programada.strftime("%H:%M") if ticket.hora_programada else "",
@@ -674,7 +846,7 @@ def api_estado(request):
         for ticket in Ticket.objects.filter(
             sucursal=sucursal,
             estado=Ticket.Estado.PROGRAMADO,
-            canal=Mesa.Canal.DOMICILIO,
+            canal__in=[Mesa.Canal.DOMICILIO, Mesa.Canal.RECOGER],
         )
         .prefetch_related("partidas")
         .order_by("fecha_programada", "hora_programada", "creado_en")
@@ -686,13 +858,26 @@ def api_estado(request):
 
 @require_POST
 def api_identificar_operador(request):
+    sucursal = _sucursal()
+    clave_limite = clave_intentos(request, "operador", sucursal)
+    if limite_agotado(clave_limite):
+        return respuesta_limite()
     try:
-        perfil = identificar_mesero(_sucursal(), _json(request).get("clave"))
-        request.session["mesero_pos_id"] = str(perfil.id)
-        request.session["mesero_pos_nombre"] = perfil.nombre
-        return JsonResponse({"operador": usuario_payload(perfil)})
+        perfil = identificar_usuario_ventas(
+            sucursal,
+            _json(request).get("clave"),
+            perfil_administrador=getattr(request, "pos_user", None),
+        )
     except ErrorVenta as exc:
+        registrar_fallo(clave_limite)
+        if limite_agotado(clave_limite):
+            return respuesta_limite()
         return JsonResponse({"error": str(exc)}, status=400)
+
+    limpiar_fallos(clave_limite)
+    request.session["mesero_pos_id"] = str(perfil.id)
+    request.session["mesero_pos_nombre"] = perfil.nombre
+    return JsonResponse({"operador": usuario_payload(perfil)})
 
 
 @require_POST
@@ -809,7 +994,12 @@ def api_ticket(request, ticket_id):
                     )
                     .get(pk=ticket.pk)
                 )
-                ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+                ticket, device_id = _asegurar_edicion_ticket(
+                    request,
+                    ticket,
+                    datos,
+                    permitir_programado=True,
+                )
                 validar_comanda_editable(ticket)
                 if "comentario_general" in datos:
                     comentario = str(datos["comentario_general"]).strip()
@@ -1014,8 +1204,13 @@ def api_ticket_cliente(request, ticket_id):
                 )
                 .get(pk=ticket.pk)
             )
-            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
-            if ticket.estado != Ticket.Estado.ABIERTO:
+            ticket, device_id = _asegurar_edicion_ticket(
+                request,
+                ticket,
+                datos,
+                permitir_programado=True,
+            )
+            if ticket.estado not in {Ticket.Estado.ABIERTO, Ticket.Estado.PROGRAMADO}:
                 raise ErrorVenta("La orden ya fue procesada.")
             if ticket.canal != Mesa.Canal.DOMICILIO:
                 raise ErrorVenta("Sólo los pedidos a domicilio admiten clientes.")
@@ -1117,40 +1312,75 @@ def api_agregar_partida(request, ticket_id):
         datos = _json(request)
         with transaction.atomic():
             ticket = _ticket(ticket_id)
-            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
-            if ticket.canal == Mesa.Canal.SUCURSALES:
+            ticket, device_id = _asegurar_edicion_ticket(
+                request,
+                ticket,
+                datos,
+                permitir_programado=True,
+            )
+            if datos.get("personalizado"):
+                agregar_partida_personalizada(
+                    ticket,
+                    datos.get("nombre_producto"),
+                    datos.get("precio_unitario"),
+                    cantidad=datos.get("cantidad", "1"),
+                    comensal=datos.get("comensal", 1),
+                )
+            elif ticket.canal == Mesa.Canal.SUCURSALES:
                 producto = ProductoSucursal.objects.get(
-                    pk=datos.get("producto_sucursal_id") or datos.get("producto_id"),
+                    pk=datos.get("producto_sucursal_id")
+                    or datos.get("producto_id"),
                     sucursal=ticket.sucursal,
                 )
-                agregar_partida_sucursal(ticket, producto, Decimal(str(datos.get("cantidad", "1"))))
-                ticket.refresh_from_db()
-                return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
-            producto = Producto.objects.get(pk=datos.get("producto_id"), sucursal=ticket.sucursal)
-            comensal = int(datos.get("comensal", 1))
-            cantidad = Decimal(str(datos.get("cantidad", "1")))
-            if not 1 <= comensal <= 24 or cantidad <= 0:
-                raise ErrorVenta("Comensal o cantidad fuera de rango.")
-            promocion_aplicada = None
-            if datos.get("promocion_id"):
-                promocion_aplicada = Partida.objects.select_related("producto").get(
-                    pk=datos["promocion_id"], ticket=ticket, promocion_aplicada__isnull=True
+                agregar_partida_sucursal(
+                    ticket,
+                    producto,
+                    Decimal(str(datos.get("cantidad", "1"))),
                 )
-            agregar_partida(
-                ticket,
-                producto,
-                comensal,
-                cantidad,
-                datos.get("termino"),
-                promocion_aplicada=promocion_aplicada,
-            )
+            else:
+                producto = Producto.objects.get(
+                    pk=datos.get("producto_id"),
+                    sucursal=ticket.sucursal,
+                )
+                comensal = int(datos.get("comensal", 1))
+                cantidad = Decimal(str(datos.get("cantidad", "1")))
+                if not 1 <= comensal <= 24 or cantidad <= 0:
+                    raise ErrorVenta("Comensal o cantidad fuera de rango.")
+                promocion_aplicada = None
+                if datos.get("promocion_id"):
+                    promocion_aplicada = Partida.objects.select_related(
+                        "producto"
+                    ).get(
+                        pk=datos["promocion_id"],
+                        ticket=ticket,
+                        promocion_aplicada__isnull=True,
+                    )
+                agregar_partida(
+                    ticket,
+                    producto,
+                    comensal,
+                    cantidad,
+                    datos.get("termino"),
+                    promocion_aplicada=promocion_aplicada,
+                )
             ticket.refresh_from_db()
-        return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
-    except (Producto.DoesNotExist, ProductoSucursal.DoesNotExist, Partida.DoesNotExist, ErrorVenta, InvalidOperation, ValueError) as exc:
+        return JsonResponse(
+            {"ticket": _ticket_payload(_ticket(ticket.id), device_id)}
+        )
+    except (
+        Producto.DoesNotExist,
+        ProductoSucursal.DoesNotExist,
+        Partida.DoesNotExist,
+        ErrorVenta,
+        InvalidOperation,
+        ValueError,
+    ) as exc:
         if isinstance(exc, ErrorVenta):
             return _respuesta_error_venta(exc, device_id)
-        return JsonResponse({"error": str(exc) or "Producto no encontrado."}, status=400)
-
+        return JsonResponse(
+            {"error": str(exc) or "Producto no encontrado."},
+            status=400,
+        )
 
 @require_http_methods(["PATCH", "DELETE"])
 def api_partida(request, partida_id):
@@ -1160,7 +1390,12 @@ def api_partida(request, partida_id):
         with transaction.atomic():
             partida = Partida.objects.select_related("ticket__sucursal").get(pk=partida_id, sucursal=_sucursal())
             ticket = partida.ticket
-            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+            ticket, device_id = _asegurar_edicion_ticket(
+                request,
+                ticket,
+                datos,
+                permitir_programado=True,
+            )
             cantidad = Decimal("0") if request.method == "DELETE" else Decimal(str(datos.get("cantidad", partida.cantidad)))
             termino = datos.get("termino") if "termino" in datos else None
             if partida.producto_sucursal_id:
@@ -1182,7 +1417,12 @@ def api_ajustar_partidas(request, ticket_id):
         datos = _json(request)
         with transaction.atomic():
             ticket = _ticket(ticket_id)
-            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+            ticket, device_id = _asegurar_edicion_ticket(
+                request,
+                ticket,
+                datos,
+                permitir_programado=True,
+            )
             partida_ids = [str(valor) for valor in datos.get("partida_ids", [])]
             eliminar = bool(datos.get("eliminar", False))
             cantidad = Decimal(str(datos.get("cantidad", "1")))
@@ -1202,7 +1442,12 @@ def api_modificador(request, ticket_id):
         datos = _json(request)
         with transaction.atomic():
             ticket = _ticket(ticket_id)
-            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+            ticket, device_id = _asegurar_edicion_ticket(
+                request,
+                ticket,
+                datos,
+                permitir_programado=True,
+            )
             codigo = str(datos.get("codigo", "")).strip()[:20]
             if datos.get("tipo") == "general":
                 nombre = COMENTARIOS_GENERALES_PERMITIDOS.get(codigo)
@@ -1305,8 +1550,15 @@ def api_cancelar(request, ticket_id):
         with transaction.atomic():
             ticket = _ticket(ticket_id)
             ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+            operador = _operador_actual_pos(request, ticket.sucursal)
             if ticket.estado == Ticket.Estado.ABIERTO:
-                ticket = cancelar_ticket(ticket)
+                ticket = cancelar_ticket(
+                    ticket,
+                    cancelado_por=operador,
+                    cancelado_por_nombre=(
+                        "" if operador is not None else "Operador no identificado"
+                    ),
+                )
             elif (
                 ticket.estado == Ticket.Estado.PROCESADO
                 and ticket.comanda_en_edicion
@@ -1314,12 +1566,19 @@ def api_cancelar(request, ticket_id):
             ):
                 ticket = cancelar_comanda_adicional(ticket)
             else:
-                _validar_clave_admin_datos(ticket.sucursal, datos)
-                ticket = cancelar_ticket_administrador(ticket)
-        return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
+                _, perfil_elevado = autenticar_acceso_administrador(
+                    ticket.sucursal,
+                    datos.get("clave_administrador"),
+                )
+                ticket = cancelar_ticket_administrador(
+                    ticket,
+                    cancelado_por=perfil_elevado or operador,
+                )
+        return JsonResponse(
+            {"ticket": _ticket_payload(_ticket(ticket.id), device_id)}
+        )
     except ErrorVenta as exc:
         return _respuesta_error_venta(exc, device_id)
-
 
 @require_POST
 def api_imprimir(request, ticket_id):
@@ -1361,25 +1620,56 @@ def api_imprimir(request, ticket_id):
 
 @require_POST
 def api_admin_acceso(request):
+    sucursal = _sucursal()
+    clave_limite = clave_intentos(request, "administrador", sucursal)
+    if limite_agotado(clave_limite):
+        return respuesta_limite()
     try:
         datos = _json(request)
-        validar_clave_administrador(_sucursal(), datos.get("clave_administrador"))
-        request.session["admin_autorizado_hasta"] = (
-            timezone.now() + timedelta(minutes=30)
-        ).timestamp()
-        return JsonResponse({"ok": True, "destino": reverse("ventas:administrador")})
+        nivel, perfil = autenticar_acceso_administrador(
+            sucursal,
+            datos.get("clave_administrador"),
+        )
     except ErrorVenta as exc:
+        registrar_fallo(clave_limite)
+        if limite_agotado(clave_limite):
+            return respuesta_limite()
         return JsonResponse({"error": str(exc)}, status=400)
+
+    limpiar_fallos(clave_limite)
+    request.session["admin_autorizado_hasta"] = (
+        timezone.now() + timedelta(minutes=30)
+    ).timestamp()
+    request.session["admin_nivel"] = nivel
+    if perfil is None:
+        request.session.pop("admin_perfil_id", None)
+        permisos = PERMISOS_ADMINISTRADOR
+    else:
+        request.session["admin_perfil_id"] = str(perfil.id)
+        permisos = PERMISOS_ELEVADO
+    return JsonResponse(
+        {
+            "ok": True,
+            "destino": reverse("ventas:administrador"),
+            "nivel": nivel,
+            "permisos": dict(permisos),
+        }
+    )
 
 
 @require_GET
 @acceso_administrador
 def api_admin_resumen(request):
-    return JsonResponse({"administrador": resumen_administrador(_sucursal())})
+    resumen = resumen_administrador(_sucursal())
+    resumen["acceso"] = {
+        "nivel": request.acceso_administrador["nivel"],
+        "permisos": dict(request.acceso_administrador["permisos"]),
+    }
+    return JsonResponse({"administrador": resumen})
 
 
 @require_POST
-@acceso_administrador
+@acceso_administrador_maestro
 def api_admin_usuarios(request):
     try:
         datos = _json(request)
@@ -1391,7 +1681,7 @@ def api_admin_usuarios(request):
 
 
 @require_http_methods(["PATCH"])
-@acceso_administrador
+@acceso_administrador_maestro
 def api_admin_usuario(request, usuario_id):
     try:
         datos = _json(request)
@@ -1406,7 +1696,7 @@ def api_admin_usuario(request, usuario_id):
 
 
 @require_POST
-@acceso_administrador
+@acceso_administrador_maestro
 def api_admin_cambiar_clave(request):
     try:
         datos = _json(request)
@@ -1439,22 +1729,80 @@ def api_admin_asignar_repartidor(request, ticket_id):
 @require_POST
 @requiere_modulo("programados")
 @acceso_administrador
-def api_admin_programar_ticket(request, ticket_id):
+def api_admin_editar_programado(request, ticket_id):
+    device_id = ""
     try:
         datos = _json(request)
+        device_id = _device_id(request, datos)
+        if not device_id:
+            raise ErrorSolicitudJSON(
+                "El identificador del dispositivo es obligatorio para editar un pedido programado."
+            )
+        with transaction.atomic():
+            ticket = _ticket(ticket_id)
+            if ticket.estado != Ticket.Estado.PROGRAMADO:
+                raise ErrorVenta("Este pedido ya no está programado.")
+            operador = request.acceso_administrador["perfil"] or _operador_actual_pos(
+                request,
+                ticket.sucursal,
+            )
+            ticket = asegurar_bloqueo_ticket(ticket, device_id, operador=operador)
+            if ticket.estado != Ticket.Estado.PROGRAMADO:
+                raise ErrorVenta("Este pedido ya no está programado.")
+        return JsonResponse(
+            {
+                "ticket": _ticket_payload(ticket, device_id),
+                "edicion_programada": True,
+            }
+        )
+    except ErrorVenta as exc:
+        return _respuesta_error_venta(exc, device_id)
+
+
+@require_http_methods(["POST", "PATCH", "DELETE"])
+@requiere_modulo("programados")
+@acceso_administrador
+def api_admin_programar_ticket(request, ticket_id):
+    try:
         ticket = _ticket(ticket_id)
-        fecha_programada = date.fromisoformat(str(datos.get("fecha_programada", "")))
+        if request.method == "DELETE":
+            eliminar_ticket_programado(ticket)
+            return JsonResponse(
+                {"eliminado": True, "ticket_id": str(ticket_id)}
+            )
+        datos = _json(request)
+        fecha_programada = date.fromisoformat(
+            str(datos.get("fecha_programada", ""))
+        )
         hora_programada = datetime.strptime(
             str(datos.get("hora_programada", "")),
             "%H:%M",
         ).time()
-        ticket = programar_ticket(ticket, fecha_programada, hora_programada)
+        ticket = programar_ticket(
+            ticket,
+            fecha_programada,
+            hora_programada,
+        )
         return JsonResponse({"ticket": _ticket_payload(ticket)})
     except ValueError:
-        return JsonResponse({"error": "La fecha u hora programada no es válida."}, status=400)
+        return JsonResponse(
+            {"error": "La fecha u hora programada no es válida."},
+            status=400,
+        )
     except ErrorVenta as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
+
+@require_POST
+@requiere_modulo("programados")
+@acceso_administrador
+def api_admin_desprogramar_ticket(request, ticket_id):
+    try:
+        _json(request)
+        ticket = desprogramar_ticket(_ticket(ticket_id))
+        return JsonResponse({"ticket": _ticket_payload(ticket)})
+    except ErrorVenta as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
 
 @require_POST
 @acceso_administrador
@@ -1487,9 +1835,15 @@ def api_admin_descuento_ticket(request, ticket_id):
 @acceso_administrador
 def api_admin_cancelar_ticket(request, ticket_id):
     try:
-        datos = _json(request)
+        _json(request)
         ticket = _ticket(ticket_id)
-        ticket = cancelar_ticket_administrador(ticket)
+        actor = request.acceso_administrador.get("perfil")
+        if actor is None:
+            actor = _operador_actual_pos(request, ticket.sucursal)
+        ticket = cancelar_ticket_administrador(
+            ticket,
+            cancelado_por=actor,
+        )
         return JsonResponse({"ticket": _ticket_payload(ticket)})
     except ErrorVenta as exc:
         return JsonResponse({"error": str(exc)}, status=400)
@@ -1567,6 +1921,20 @@ def api_admin_movimientos(request):
         return JsonResponse({"error": str(exc)}, status=400)
 
 
+@require_http_methods(["PUT"])
+@acceso_administrador
+def api_admin_control_efectivo(request):
+    try:
+        datos = _json(request)
+        sucursal = _sucursal()
+        control = guardar_control_efectivo(sucursal, datos)
+        resumen = resumen_administrador(sucursal)
+        return JsonResponse(
+            {"control_efectivo": resumen["control_efectivo"]}
+        )
+    except ErrorVenta as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
 @require_http_methods(["PATCH", "DELETE"])
 @acceso_administrador
 def api_admin_movimiento(request, movimiento_id):
@@ -1634,7 +2002,7 @@ def api_admin_acciones_tickets_lote(request):
 
 
 @require_POST
-@acceso_administrador
+@acceso_administrador_maestro
 def api_admin_reiniciar_folios(request):
     try:
         _json(request)
@@ -1643,6 +2011,44 @@ def api_admin_reiniciar_folios(request):
     except ErrorVenta as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
+
+@require_POST
+@acceso_administrador
+def api_admin_reimprimir_reporte(request, reporte_id):
+    try:
+        _json(request)
+        reporte = ReporteAdministrativo.objects.get(
+            pk=reporte_id,
+            sucursal=_sucursal(),
+        )
+        return _respuesta_reporte(reporte)
+    except ReporteAdministrativo.DoesNotExist:
+        return JsonResponse(
+            {"error": "El reporte solicitado ya no está disponible."},
+            status=404,
+        )
+
+
+@require_POST
+@acceso_administrador
+def api_admin_consolidacion_mensual(request):
+    try:
+        datos = _json(request)
+        consolidacion = consolidar_periodo(
+            _sucursal(),
+            periodo=datos.get("periodo") or None,
+        )
+        return JsonResponse(
+            {
+                "ok": True,
+                "periodo": consolidacion.periodo.isoformat(),
+                "estado": consolidacion.estado,
+                "acuse_vps": consolidacion.acuse_vps,
+                "siguiente_folio": 1,
+            }
+        )
+    except ErrorVenta as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
 
 @require_POST
 @acceso_administrador
@@ -1718,8 +2124,8 @@ def service_worker(request):
     ]
     codigo = """const CACHE='__CACHE__';
 const PRECACHE=__PRECACHE__;
-self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(PRECACHE))));
-self.addEventListener('activate', e => e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))));
+self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(PRECACHE)).then(() => self.skipWaiting())));
+self.addEventListener('activate', e => e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', e => { if (e.request.method === 'GET') e.respondWith(fetch(e.request).catch(() => caches.match(e.request))); });
 """.replace("__CACHE__", PWA_CACHE).replace("__PRECACHE__", json.dumps(precache))
     return HttpResponse(codigo, content_type="application/javascript", headers={"Cache-Control": "no-cache"})

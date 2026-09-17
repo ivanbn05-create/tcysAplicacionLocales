@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
@@ -124,6 +125,26 @@ def _logo_actual():
     return logo
 
 
+def _es_personalizada(partida):
+    return bool(getattr(partida, "personalizada", False) or partida.producto_id is None)
+
+
+def _es_promocion(partida):
+    return not _es_personalizada(partida) and bool(
+        configuracion_promocion(partida.producto)
+    )
+
+
+def _clave_visual_partida(partida):
+    if _es_personalizada(partida):
+        return (
+            "personalizada",
+            partida.nombre_producto.casefold(),
+            str(partida.precio_unitario),
+        )
+    return (partida.producto_id, partida.termino)
+
+
 def _partidas_destino(ticket, destino, comanda_numero=None, canal=None):
     consulta = ticket.partidas.select_related("producto__categoria").all()
     if comanda_numero is not None:
@@ -133,14 +154,22 @@ def _partidas_destino(ticket, destino, comanda_numero=None, canal=None):
         return [
             p
             for p in partidas
-            if p.producto.categoria.nombre.lower() not in {"extras", "bebidas"}
-            and (
-                (canal or ticket.canal) in {"comedor", "llevar", "domicilio", "recoger"}
-                or p.producto.destino_impresion == "cocina"
+            if _es_personalizada(p)
+            or (
+                p.producto.categoria.nombre.lower() not in {"extras", "bebidas"}
+                and (
+                    (canal or ticket.canal)
+                    in {"comedor", "llevar", "domicilio", "recoger"}
+                    or p.producto.destino_impresion == "cocina"
+                )
             )
         ]
     if destino == "barra":
-        return [p for p in partidas if p.producto.destino_impresion == "barra"]
+        return [
+            p
+            for p in partidas
+            if not _es_personalizada(p) and p.producto.destino_impresion == "barra"
+        ]
     return partidas
 
 
@@ -223,10 +252,19 @@ def _agrupar_partidas_total(ticket):
     ]
     agrupadas = {}
     for partida in partidas:
-        clave = (partida.producto_id, partida.termino, partida.nombre_producto)
+        personalizada = _es_personalizada(partida)
+        nombre_total = (
+            partida.nombre_producto
+            if personalizada
+            else partida.producto.nombre
+        )
+        clave = (
+            *_clave_visual_partida(partida),
+            nombre_total,
+        ) if personalizada else ("producto", partida.producto_id, nombre_total)
         if clave not in agrupadas:
             agrupadas[clave] = {
-                "nombre": partida.nombre_producto,
+                "nombre": nombre_total,
                 "cantidad": Decimal("0"),
                 "precio_unitario": Decimal("0"),
                 "importe": Decimal("0"),
@@ -254,13 +292,16 @@ def _datos_comanda_por_nombres(ticket, comanda_numero=None):
     partidas = [
         partida
         for partida in ordenar_partidas(consulta)
-        if not configuracion_promocion(partida.producto)
+        if not _es_promocion(partida)
     ]
     principales, complementos = [], []
     for partida in partidas:
         if (
-            partida.producto.codigo.upper() in PRODUCTOS_SIEMPRE_AL_FINAL
-            or partida.producto.categoria.nombre.lower() == "bebidas"
+            not _es_personalizada(partida)
+            and (
+                partida.producto.codigo.upper() in PRODUCTOS_SIEMPRE_AL_FINAL
+                or partida.producto.categoria.nombre.lower() == "bebidas"
+            )
         ):
             complementos.append(partida)
         else:
@@ -268,7 +309,7 @@ def _datos_comanda_por_nombres(ticket, comanda_numero=None):
 
     columnas = []
     for partida in principales:
-        clave = (partida.producto_id, partida.termino)
+        clave = _clave_visual_partida(partida)
         if not any(columna and columna["clave"] == clave for columna in columnas):
             columnas.append({"clave": clave, "nombre": partida.nombre_corto})
     columnas = columnas[:4]
@@ -277,7 +318,7 @@ def _datos_comanda_por_nombres(ticket, comanda_numero=None):
 
     cantidades = defaultdict(lambda: defaultdict(Decimal))
     for partida in principales:
-        cantidades[partida.comensal][(partida.producto_id, partida.termino)] += partida.cantidad
+        cantidades[partida.comensal][_clave_visual_partida(partida)] += partida.cantidad
     modificaciones = defaultdict(list)
     for modificador in modificadores:
         modificaciones[modificador.comensal].append(modificador.codigo)
@@ -406,7 +447,7 @@ def render_comanda(ticket, destino, comanda_numero=None):
     )
     # La fila de promociones sólo es una ayuda de captura en la comanda virtual.
     # En cocina se imprimen exclusivamente los productos que la componen.
-    partidas = [partida for partida in partidas_destino if not configuracion_promocion(partida.producto)]
+    partidas = [partida for partida in partidas_destino if not _es_promocion(partida)]
     bebidas = (
         list(
             ticket.partidas.select_related("producto__categoria").filter(
@@ -503,7 +544,7 @@ def render_comanda(ticket, destino, comanda_numero=None):
     else:
         agrupadas = {}
         for partida in partidas:
-            clave = (partida.producto_id, partida.termino)
+            clave = _clave_visual_partida(partida)
             if clave not in agrupadas:
                 agrupadas[clave] = {"nombre": partida.nombre_corto, "cantidades": defaultdict(Decimal)}
             agrupadas[clave]["cantidades"][partida.comensal] += partida.cantidad
@@ -761,21 +802,14 @@ def render_cuenta(ticket):
     y += 38
     draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
     y += 18
-    mods_por_persona = defaultdict(list)
-    for modificador in ticket.modificadores.all():
-        mods_por_persona[modificador.comensal].append(modificador.nombre.upper())
     for partida in partidas:
         lineas = _ajustar(draw, partida["nombre"].upper(), f_bold, 325)
         draw.text((MARGEN, y), lineas[0], font=f_bold, fill=0)
         draw.text((372, y), _cantidad_matriz(partida["cantidad"]), font=f_cant, fill=0)
         _derecha(draw, y, f"${partida['precio_unitario']:,.2f}", f_normal)
         y += 31
-        modificadores_fila = []
-        for comensal in sorted(partida["comensales"]):
-            modificadores_fila.extend(mods_por_persona[comensal])
-        extras = lineas[1:] + ([" - ".join(dict.fromkeys(modificadores_fila))] if modificadores_fila else [])
-        if extras:
-            draw.text((MARGEN, y), " ".join(extras)[:38], font=f_bold, fill=0)
+        if lineas[1:]:
+            draw.text((MARGEN, y), " ".join(lineas[1:])[:38], font=f_bold, fill=0)
         _derecha(draw, y, f"${partida['importe']:,.2f}", f_bold)
         y += 36
     draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=3)
@@ -795,8 +829,8 @@ def render_sucursal(ticket):
     """Ticket total mayorista, sin la cuadrícula de comensales."""
     partidas = list(
         ticket.partidas.select_related("producto_sucursal")
-        .filter(producto_sucursal__isnull=False)
-        .order_by("producto_sucursal__orden", "creada_en")
+        .filter(Q(producto_sucursal__isnull=False) | Q(personalizada=True))
+        .order_by("personalizada", "producto_sucursal__orden", "creada_en")
     )
     alto = 610 + len(partidas) * 82
     imagen = Image.new("L", (ANCHO, max(alto, 1050)), 255)
@@ -929,35 +963,65 @@ def render_reporte_administrativo(reporte):
             "domicilio": "DOMICILIO",
             "recoger": "RECOGER",
         }
-        if tipo == "corte_caja":
-            etiquetas["sucursales"] = "SUCURSALES"
         for canal, etiqueta in etiquetas.items():
             valor = Decimal(str(datos.get("canales", {}).get(canal, 0)))
-            fila(etiqueta, f"${valor:,.2f}")
+            fila(etiqueta, "$" + f"{valor:,.2f}")
         if tipo == "corte_caja":
             y += 5
             draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
             y += 15
-            fila("VENTAS", f"${Decimal(str(datos.get('total_ventas', 0))):,.2f}")
-            fila("ENTRADAS", f"${Decimal(str(datos.get('entradas', 0))):,.2f}")
-            fila("SALIDAS", f"${Decimal(str(datos.get('salidas', 0))):,.2f}")
+            fila("FONDO ANTERIOR", "$" + f"{Decimal(str(datos.get('fondo_anterior', 0))):,.2f}")
+            fila("INGRESOS", "$" + f"{Decimal(str(datos.get('ingresos', datos.get('entradas', 0)))):,.2f}")
+            fila("VENTAS", "$" + f"{Decimal(str(datos.get('total_ventas', 0))):,.2f}")
+            fila("GASTOS", "-$" + f"{Decimal(str(datos.get('gastos', datos.get('salidas', 0)))):,.2f}")
+            fila("TERMINALES", "-$" + f"{Decimal(str(datos.get('terminales', 0))):,.2f}")
+            fila("FONDO SIGUIENTE", "-$" + f"{Decimal(str(datos.get('fondo_siguiente', 0))):,.2f}")
             movimientos = datos.get("movimientos", [])
             if movimientos:
                 y += 8
                 draw.text((MARGEN, y), "MOVIMIENTOS", font=f_subtitulo, fill=0)
                 y += 34
                 for movimiento in movimientos:
-                    signo = "+" if movimiento.get("tipo") == "entrada" else "-"
+                    signo = "+" if movimiento.get("tipo") == "ingreso" else "-"
                     for linea in _ajustar(draw, movimiento.get("concepto", ""), f_normal, 360):
                         draw.text((MARGEN, y), linea, font=f_normal, fill=0)
                         y += 25
                     _derecha(
                         draw,
                         y - 25,
-                        f"{signo}${Decimal(str(movimiento.get('importe', 0))):,.2f}",
+                        f"{signo}$" + f"{Decimal(str(movimiento.get('importe', 0))):,.2f}",
                         f_bold,
                     )
-            fila("TOTAL CAJA", f"${Decimal(str(datos.get('total_caja', 0))):,.2f}", total=True)
+            fila("RESULTADO CAJA", "$" + f"{Decimal(str(datos.get('total_caja', 0))):,.2f}", total=True)
+
+            totales_sucursales = datos.get("totales_sucursales", {})
+            if totales_sucursales:
+                y += 12
+                draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
+                y += 15
+                draw.text((MARGEN, y), "PEDIDOS POR SUCURSAL", font=f_subtitulo, fill=0)
+                y += 34
+                for nombre, valor in totales_sucursales.items():
+                    fila(str(nombre).upper(), "$" + f"{Decimal(str(valor)):,.2f}")
+
+            ventas_apps = datos.get("ventas_apps", {})
+            if ventas_apps and any(Decimal(str(valor or 0)) for valor in ventas_apps.values()):
+                nombres_apps = {
+                    "rappi": "RAPPI",
+                    "didi": "DIDI",
+                    "uber_eats": "UBER EATS",
+                }
+                y += 12
+                draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
+                y += 15
+                draw.text((MARGEN, y), "VENTAS APPS", font=f_subtitulo, fill=0)
+                y += 34
+                total_apps = Decimal("0.00")
+                for clave, valor in ventas_apps.items():
+                    importe = Decimal(str(valor or 0))
+                    total_apps += importe
+                    fila(nombres_apps.get(clave, str(clave).upper()), "$" + f"{importe:,.2f}")
+                fila("TOTAL APPS", "$" + f"{total_apps:,.2f}", total=True)
         else:
             fila("TOTAL", f"${Decimal(str(datos.get('total', 0))):,.2f}", total=True)
     elif tipo == "corte_sucursal":

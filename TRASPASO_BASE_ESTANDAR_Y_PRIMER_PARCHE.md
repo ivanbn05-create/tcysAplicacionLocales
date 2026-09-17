@@ -4,6 +4,95 @@
 > aporta contexto a un agente nuevo; no reemplaza una solicitud posterior del
 > usuario ni constituye autorización permanente para acciones destructivas.
 
+## Estado vigente: candidata `0.4.0-dev.3`
+
+Actualización del 2026-09-17. Las secciones 4 a 7 conservan evidencia histórica del
+snapshot `0.4.0-dev.1`; este bloque y el estado comprobado del repositorio tienen
+precedencia para continuar el trabajo.
+
+**No existe ninguna sucursal en producción.** Hay cuatro contextos distintos en esta
+máquina:
+
+| Contexto | Estado |
+| --- | --- |
+| Repositorio original | `C:\tcysAplicacionLocales` |
+| Candidata activa | worktree `codex/candidata-0.4.0-dev.3` bajo `C:\Users\Srv1\.codex\visualizations\2026\09\14\01a0a104-1066-79f1-9e18-9de37c022fa6\tcys-base-work\base-a-src` |
+| Servicio instalado de laboratorio | `C:\LosTocayosPOS`, `LosTocayosPOS` activo en `0.0.0.0:8000` |
+| Prueba aislada | `127.0.0.1:8001`, base y medios bajo `runtime\prueba`; impresora TCP real habilitada sólo de forma explícita |
+
+La candidata declara `0.4.0-dev.3`. Su HEAD base conocido es `927c5dc`
+(`feat: habilitar prueba aislada con impresora real`); la integración funcional se
+encuentra en el worktree de candidata y todavía debe quedar en un commit limpio
+antes de construir el artefacto reproducible.
+
+### Cambios incorporados en dev.3
+
+- Una sucursal nueva recibe la clave maestra inicial `0000`, almacenada como hash.
+  Debe rotarse manualmente. La contraseña y el PIN del primer operador se capturan
+  aparte durante una instalación si todavía no existen.
+- Todos los perfiles POS activos pueden identificarse en **Ventas**. Los usuarios
+  con rol **Elevado** operan el Administrador, salvo consulta/gestión de usuarios y
+  PIN, reinicio de folios y cambio de la clave maestra, que siguen reservados al
+  maestro.
+- Los módulos opcionales se eligen por sucursal. La selección vacía instala sólo
+  `pos`, `catalogo`, `impresion` y `respaldos`; ni Arboledas ni
+  `pedidos_sucursales` son predeterminados.
+- El corte diario conserva una instantánea reimprimible y elimina el detalle del
+  turno, incluidas cancelaciones, movimientos incorporados y archivos relacionados.
+  Los pedidos programados futuros permanecen.
+- Al cambiar de mes se bloquea la apertura de ventas mientras exista un periodo
+  pendiente. Sólo un HTTP exitoso y JSON con `recibido: true` y `acuse` no vacío
+  permiten purgar las instantáneas mensuales y reiniciar folios.
+- Se agregaron control de caja por denominaciones, ingresos/gastos/terminales,
+  aplicaciones y fondos; edición de programados; Recoger programable; artículos
+  personalizados; 40 posiciones Llevar/Recoger; subtotales por sucursal; refresco
+  LAN y la interfaz táctil con teclado numérico/pantalla completa.
+- El ticket total usa el nombre del producto y omite comentario, modificador y
+  término de preparación.
+- Las purgas lógicas generan solicitudes persistentes para cerrar archivos y
+  respaldos sensibles. `LosTocayosPOS-PurgasFisicas` las procesa como SYSTEM cada
+  cinco minutos y no crea respaldos cuando no hay solicitudes; la tarea diaria
+  `LosTocayosPOS-RespaldoSQLite` conserva su horario predeterminado de `03:15` y
+  retención predeterminada de 30 días.
+
+Los requisitos funcionales 1 a 14 quedaron cubiertos por implementación y pruebas.
+La validación cerró con 172/172 pruebas Django, 68/68 pruebas unitarias de
+infraestructura, `test_instalador_windows.ps1 -SkipAcl`, `django check`,
+`makemigrations --check --dry-run`, comprobación de sintaxis JavaScript,
+`git diff --check` y el detector de Impeccable sin hallazgos. El requisito 14 aún
+requiere aceptación física en una tableta Android real. La construcción reproducible,
+la instalación limpia y la actualización del laboratorio siguen pendientes, por lo
+que esta versión todavía no es la base estable.
+
+### Brechas vigentes
+
+- Falta configurar `VPS_CONSOLIDACION_URL`, `VPS_CONSOLIDACION_TOKEN` y, si se
+  modifica, `VPS_CONSOLIDACION_TIMEOUT`. El backend real del VPS, su autenticación,
+  enrolamiento y operación no existen todavía; una respuesta simulada sólo valida el
+  contrato.
+- El motor `actualizar-servidor.ps1` continúa siendo in-place cuando se ejecuta solo,
+  pero ya existe `actualizar-laboratorio-desde-release.ps1` para la prueba A→B. El
+  wrapper verifica release y versión, extrae a staging externo, intercambia árboles,
+  conserva el estado operativo y ejecuta el motor oficial; ante fallo restaura el
+  árbol anterior, su salud y los XML —o ausencia— de ambas tareas programadas.
+- El wrapper preserva exactamente `.env`, `.venv`, `runtime`, `media`, `logs`,
+  `backups` y los archivos SQLite de la raíz. También conserva horario y retención
+  existentes, y mantiene el respaldo completo anterior. Falta ejecutar la prueba real
+  contra `C:\LosTocayosPOS`.
+- El wrapper sigue limitado al laboratorio: no descarga ni valida una firma del
+  publicador, tiene una ventana TOCTOU entre verificar y consumir el ZIP local, y las
+  ACL finales del árbol de candidata conservado tras un rollback no quedan
+  acreditadas. Ese árbol es sólo diagnóstico y debe permanecer restringido.
+- Falta completar la aceptación equivalente de instalación limpia y actualización,
+  incluida interfaz, acceso LAN, respaldo, ACL, impresión física y el recorrido del
+  requisito 14 en Android.
+- El ejecutable Windows es un cliente ligero del Edge local. La PWA existe, pero el
+  repositorio aún no contiene un proyecto Android ni genera un APK firmado; falta
+  construir el envolvente WebView/TWA en Android Studio y probar la instalación
+  USB-C.
+- Siguen pendientes HTTPS LAN, canal remoto de releases, catálogo versionado por
+  sucursal y CI atestada.
+
 ## 1. Lectura obligatoria y precedencia
 
 Leer completamente, en este orden:
@@ -25,6 +114,10 @@ La siguiente etapa debe usar dos artefactos internos:
   instalación limpia.
 - **Parche B:** cambios funcionales y de interfaz que aún solicite el usuario.
 
+El parche B se materializó como la candidata `0.4.0-dev.3`. No es todavía una base
+estable: falta cerrar la secuencia de validación y comparar instalación limpia con
+actualización.
+
 Secuencia aprobada conceptualmente:
 
 1. Congelar y empaquetar Base A desde un commit limpio.
@@ -45,14 +138,15 @@ Base A no debe distribuirse a sucursales. Es únicamente un banco de prueba.
   realizado simulaciones.
 - El usuario permite detener y levantar el servicio y contempla reiniciar el
   estado simulado desde cero.
-- El repositorio y la instalación comparten `C:\tcysAplicacionLocales`. Nunca
-  borrar recursivamente esa raíz: contiene código Git y estado instalado.
-- Antes de borrar, mover o reemplazar datos, enumerar destinos exactos
+- El repositorio original, el worktree de la candidata y `C:\LosTocayosPOS` son
+  raíces distintas. La carpeta instalada es estado de laboratorio, no fuente.
+- Nunca borrar recursivamente ninguna de esas raíces. Antes de borrar, mover o
+  reemplazar datos, enumerar destinos exactos
   (`.env`, base, runtime, media, logs, backups, `.venv`, servicio, tarea y
   firewall), decidir qué se conserva en cuarentena y confirmar el alcance.
 - No revelar `.env`, claves, certificados privados, bases ni logs completos.
 
-## 4. Estado del repositorio al redactar este archivo
+## 4. Estado histórico del repositorio en el snapshot dev.1
 
 | Dato | Valor comprobado |
 | --- | --- |
@@ -90,7 +184,7 @@ Cambios del checkpoint, agrupados:
 - Documentación: `README.md`, `DESPLIEGUE_WINDOWS.md`,
   `ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md` y este archivo.
 
-## 5. Estado de la instalación simulada
+## 5. Estado histórico de la instalación simulada
 
 | Componente | Estado comprobado |
 | --- | --- |
@@ -110,7 +204,7 @@ triplete y puede eliminar tripletes completos que superen la retención. No se
 ejecutó contra el estado real en este cierre. Debe acreditarse sobre la
 instalación limpia.
 
-## 6. Trabajo implementado
+## 6. Trabajo implementado hasta el snapshot dev.1
 
 - Puntos de entrada separados para instalar, adoptar, actualizar y reparar. El
   operador no debe invocar directamente `instalar-servicio-lan.ps1`.
@@ -140,7 +234,7 @@ instalación limpia.
 - No existe bypass público `ParentHoldsBackupMutex`. Su texto sólo debe aparecer
   en una aserción negativa o en el rechazo del verificador.
 
-## 7. Evidencia de validación más reciente
+## 7. Evidencia histórica de validación del snapshot dev.1
 
 Ejecutada el 2026-09-14 sobre el árbol que se va a guardar:
 
@@ -163,17 +257,22 @@ Ejecutada el 2026-09-14 sobre el árbol que se va a guardar:
 Repetir desde el commit y desde cada ZIP que vaya a instalarse. Un test sobre el
 checkout no acredita por sí solo el artefacto distribuible.
 
-## 8. Límites todavía abiertos
+## 8. Límites registrados en el snapshot dev.1
 
-- El actualizador sigue siendo `in-place`: faltan staging, intercambio atómico,
-  firma, diario reanudable y rollback transaccional.
+Este bloque describe el estado histórico de dev.1. Ya no debe interpretarse como el
+estado del wrapper de laboratorio en dev.3; la sección vigente al inicio documenta su
+staging, swap y rollback. Permanecen pendientes la firma, el canal remoto, el cierre
+TOCTOU y una política acreditada para las ACL del árbol fallido.
+
+- En dev.1 el actualizador era exclusivamente `in-place` y carecía de staging,
+  intercambio de árboles y rollback transaccional.
 - Volver al código anterior no deshace una migración ya iniciada.
 - Falta construir y verificar una release limpia del checkpoint; no usar
   `--allow-dirty` para la Base A que se instalará.
 - Falta un desinstalador canónico probado. No improvisar un borrado amplio.
 - Edge Windows admite sólo SQLite. PostgreSQL corresponde al VPS.
 - Faltan enrolamiento autorizado, catálogo inicial versionado por sucursal,
-  selección/validación de módulos, canal firmado y CI atestada.
+  canal firmado y CI atestada. La selección local de módulos ya existe en dev.3.
 - Falta aceptación LAN desde otro dispositivo y comprobación física de
   impresoras según la configuración elegida.
 
@@ -181,22 +280,23 @@ checkout no acredita por sí solo el artefacto distribuible.
 
 - Un repositorio y un paquete común; datos y configuración separados por
   sucursal.
-- Módulos activados por configuración/`entitlement`. La instalación presencial
-  identifica sucursal y conjunto mínimo.
+- Módulos activados por configuración local; la instalación presencial identifica
+  sucursal y conjunto mínimo. Un `entitlement` remoto sigue siendo futuro.
 - Hostinger KVM2 separado, idealmente bajo `deploy/vps/`: PostgreSQL, API/panel
   del administrador general, HTTPS, respaldos externos y monitoreo.
-- El VPS recibe consolidación diaria y publica cambios versionados de catálogo,
-  precios y módulos. Cada Edge consulta y aplica cambios idempotentemente al
-  iniciar/sincronizar.
+- El contrato actual del Edge envía una consolidación mensual y exige acuse antes
+  de purgar; el VPS real sigue pendiente. La publicación central de catálogo,
+  precios y módulos continúa como arquitectura futura.
 - El Edge sigue cobrando localmente si el VPS no está disponible.
 - Supabase no reemplaza la decisión KVM2. La integración actual
   `tcysPedidosSucursales` es distinta y de sólo lectura.
 
-## 10. Matriz funcional y de interfaz que debe revalidarse
+## 10. Matriz funcional histórica que debe revalidarse
 
-No reimplementar estos puntos a ciegas: parte de ellos ya está cubierta por
-`faf52da` y por el cambio sin publicar anterior. Primero relacionar solicitud,
-código, prueba automática y resultado manual. Los puntos conocidos son:
+No reimplementar estos puntos a ciegas: dev.3 cubre buena parte de esta matriz
+histórica. Primero relacionar cada requisito con el código vigente, una prueba
+automática y el resultado manual; cualquier divergencia comprobada manda sobre
+este listado. Los puntos conocidos son:
 
 1. Importar automáticamente pedidos confirmados desde
    `tcysPedidosSucursales` y reflejar sus totales en reportes/corte.
@@ -217,53 +317,34 @@ código, prueba automática y resultado manual. Los puntos conocidos son:
 13. Pantalla completa en administración; sesión/salida en la pantalla correcta.
 14. Comensal 1 por defecto; comentario “Individual”; comentarios y 50 minutos
     predeterminados sólo para domicilio.
-15. Reinicio mensual de folios y posterior integración explícita con la
-    sincronización VPS. No ocultar una mutación remota futura detrás de un botón
-    sin contrato auditable.
+15. Consolidación mensual con acuse explícito del VPS antes de purgar y reiniciar
+    folios. El contrato Edge ya existe; faltan endpoint, credenciales y aceptación
+    contra el VPS real.
 
 Crear una tabla de aceptación con columnas: requisito, evidencia de código, test
 automático, prueba manual y estado. Los cambios nuevos que indique el usuario
 constituyen el parche B.
 
-## 11. Secuencia de la siguiente etapa
+## 11. Secuencia vigente para cerrar la candidata
 
-### A0 — Confirmar el checkpoint
-
-1. Leer este archivo y los dos documentos canónicos.
-2. Inventariar repositorio, servicio y tarea sin mutar.
-3. Confirmar HEAD, árbol limpio y versión.
-4. Repetir pruebas críticas.
-5. Construir Base A sin `--allow-dirty`; guardar commit, versión, ZIP,
-   manifiesto y SHA-256.
-
-### A1 — Diseñar una limpieza recuperable
-
-1. Inventariar por separado código Git y estado instalado.
-2. Definir exactamente qué se conserva fuera de la raíz y qué se elimina.
-3. Confirmar los destinos con el usuario antes de actuar.
-4. No usar `git reset --hard`, `git checkout --` ni borrado recursivo de la raíz.
-
-### A2 — Instalar Base A
-
-1. Retirar sólo servicio, tarea, firewall y estado autorizados.
-2. Instalar el ZIP completo con identidad, red e impresoras confirmadas.
-3. Aceptar migraciones, servicio, salud, ACL, firewall, tarea, respaldo fresco
-   y acceso LAN externo.
-
-### B1/B2 — Implementar y actualizar
-
-1. Revalidar la matriz y aplicar únicamente fallos vigentes.
-2. Añadir pruebas y revisar migraciones.
-3. Construir B limpio y actualizar A mediante `actualizar-servidor.ps1`.
-4. Acreditar preservación de `.env`, identidad y datos, además de salud,
-   ACL, tarea, respaldo y UI.
-
-### B3/B4 — Instalar B y declarar la base mínima
-
-1. Repetir la limpieza controlada.
-2. Instalar B desde cero.
-3. Comparar evidencia con A → B.
-4. Etiquetar/publicar B sólo con ambos recorridos verdes.
+1. **Completado:** integrar dev.3 y cerrar suite, checks de Django, migraciones,
+   JavaScript, `git diff --check` e Impeccable.
+2. **Operativo para desarrollo:** mantener la prueba aislada en
+   `127.0.0.1:8001` con `runtime\prueba\db.sqlite3`, separada del servicio
+   instalado en `8000`. La aceptación física Android del requisito 14 sigue
+   pendiente.
+3. **Pendiente:** construir dos releases desde el mismo commit y epoch, comprobar
+   SHA-256 idéntico y validar una de ellas en una instalación limpia. Confirmar clave
+   maestra `0000`, rotación manual, alta de operador y módulos opcionales vacíos.
+4. **Pendiente:** aplicar el mismo artefacto a `C:\LosTocayosPOS` mediante
+   `actualizar-laboratorio-desde-release.ps1`. Verificar preservación de `.env`,
+   identidad, datos, impresoras, módulos, ambas tareas, horario, retención y ACL.
+5. Ejecutar aceptación manual de Ventas, Administrador, tabletas, programados,
+   corte diario, reimpresión y salida física de los tickets.
+6. Configurar y aceptar el endpoint real antes de depender del cierre mensual en una
+   sucursal; las pruebas actuales sólo acreditan el contrato y respuestas simuladas.
+7. Comparar instalación limpia y actualización. Sólo si ambas son equivalentes,
+   documentar el artefacto, etiquetar la versión y promoverla como base.
 
 ## 12. Comandos iniciales
 
@@ -346,9 +427,10 @@ Fuentes:
 ## 15. Primer mensaje sugerido
 
 > Lee completamente `TRASPASO_BASE_ESTANDAR_Y_PRIMER_PARCHE.md`,
-> `DESPLIEGUE_WINDOWS.md` y
-> `ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md`. Empieza con un
-> inventario de sólo lectura y compara el estado real con el snapshot. No borres
-> ni reinstales hasta enumerar y confirmar destinos exactos. Después cierra Base
-> A y sigue la secuencia instalación limpia A → actualización A→B → instalación
-> limpia B.
+> `README.md`, `DESPLIEGUE_WINDOWS.md` y
+> `ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md`. Continúa sobre
+> `codex/candidata-0.4.0-dev.3`, verifica primero el estado real y conserva separados
+> el worktree, la prueba `8001` y `C:\LosTocayosPOS`. La suite ya está cerrada;
+> completa build reproducible, instalación limpia, actualización de laboratorio y
+> aceptación física Android. No declares la base ni configures una sucursal como
+> producción sin esa evidencia.

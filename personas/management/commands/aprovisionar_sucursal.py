@@ -1,11 +1,13 @@
 import uuid
 
 from django.conf import settings
+from django.contrib.auth.hashers import make_password
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
 
 from personas.identidad import normalizar_clave_sucursal, normalizar_nombre_sucursal
 from personas.models import Sucursal
+from ventas.models import ConfiguracionSucursal
 
 
 _BLOQUEO_APROVISIONAMIENTO = 2026091101
@@ -30,8 +32,8 @@ def bloquear_aprovisionamiento():
 
 class Command(BaseCommand):
     help = (
-        "Aprovisiona explícitamente la identidad local de una sucursal. "
-        "No crea catálogos, posiciones ni usuarios."
+        "Aprovisiona explícitamente la identidad local de una sucursal y su "
+        "clave maestra inicial. No crea catálogos, posiciones ni usuarios."
     )
 
     def add_arguments(self, parser):
@@ -94,6 +96,10 @@ class Command(BaseCommand):
             defaults=defaults,
         )
         if creada:
+            ConfiguracionSucursal.objects.create(
+                sucursal=sucursal,
+                clave_administrador=make_password("0000"),
+            )
             self.stdout.write(
                 self.style.SUCCESS(f"Sucursal aprovisionada: {nombre} ({clave}).")
             )

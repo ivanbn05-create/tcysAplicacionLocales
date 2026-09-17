@@ -42,7 +42,7 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
           <button id="entrar-mesero" class="perfil-acceso mesero" type="button">
             <span class="perfil-icono" aria-hidden="true">
               <svg viewBox="0 0 24 24"><circle cx="12" cy="7" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg>
-            </span><strong>Mesero</strong><small>Comedor, domicilio y sucursales</small>
+            </span><strong>Ventas</strong><small>Comedor, domicilio y sucursales</small>
           </button>
           <button id="entrar-administrador" class="perfil-acceso administrador" type="button">
             <span class="perfil-icono" aria-hidden="true">
@@ -67,7 +67,9 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
     <div class="controles-tableta{% if not modo_tableta %} controles-escritorio{% endif %}">
       <button id="pantalla-completa" class="control-operacion pantalla-completa" type="button" aria-label="Abrir pantalla completa" title="Pantalla completa">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+        <span id="pantalla-completa-texto">Pantalla completa</span>
       </button>
+      <p id="estado-pantalla-completa" class="estado-pantalla-completa" role="status" aria-live="polite" hidden></p>
       {% if not modo_tableta %}
         <button class="control-operacion salir-mesero salir-mesero-cabecera" data-salir-mesero type="button" aria-label="Salir al menú principal" title="Salir al menú principal">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></svg><span>Salir</span>
@@ -247,6 +249,28 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
       <div class="acciones-formulario">
         <button id="descartar-cliente" class="boton secundario" type="button">Cancelar</button>
         <button class="boton cobro" id="guardar-cliente" type="submit">Guardar cliente</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dialogo-producto-personalizado" class="dialogo-producto-personalizado" aria-labelledby="titulo-producto-personalizado">
+    <form id="form-producto-personalizado" class="dialogo-contenido producto-personalizado-formulario" novalidate>
+      <button id="cancelar-producto-personalizado" class="cerrar-dialogo" type="button" aria-label="Cancelar">×</button>
+      <div>
+        <p class="eyebrow">Venta fuera de catálogo</p>
+        <h2 id="titulo-producto-personalizado">Producto personalizado</h2>
+        <p class="producto-personalizado-ayuda">Captura el concepto y su precio unitario. Se agregará al comensal seleccionado.</p>
+      </div>
+      <label>Nombre del producto
+        <input id="producto-personalizado-nombre" maxlength="120" autocomplete="off" placeholder="Ej. Paquete especial" required>
+      </label>
+      <label>Precio unitario
+        <span class="campo-precio-personalizado"><b aria-hidden="true">$</b><input id="producto-personalizado-precio" type="number" inputmode="decimal" min="0.01" max="999999.99" step="0.01" placeholder="0.00" required></span>
+      </label>
+      <p id="error-producto-personalizado" class="error-producto-personalizado" role="alert" hidden></p>
+      <div class="acciones-formulario">
+        <button id="descartar-producto-personalizado" class="boton secundario" type="button">Cancelar</button>
+        <button id="guardar-producto-personalizado" class="boton cobro" type="submit">Agregar producto</button>
       </div>
     </form>
   </dialog>

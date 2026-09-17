@@ -69,6 +69,7 @@ class ModuloSucursal(models.Model):
 class Rol(models.Model):
     class Tipo(models.TextChoices):
         ENCARGADO = "encargado", "Encargado"
+        ELEVADO = "elevado", "Elevado"
         MESERO = "mesero", "Mesero"
         REPARTIDOR = "repartidor", "Repartidor"
 

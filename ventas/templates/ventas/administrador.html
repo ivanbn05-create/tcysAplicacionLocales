@@ -55,7 +55,7 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
       <button class="rail-item" data-panel="pedidos" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h10v4H7zM5 5H3v16h18V5h-2M8 11h8M8 15h8M8 19h5"/></svg><span>Pedidos</span>
       </button>
-      <button class="rail-item" data-panel="personal" type="button">
+      <button class="rail-item" data-panel="personal" data-permiso-admin="gestionar_usuarios" type="button" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M2.5 20a5.5 5.5 0 0 1 11 0M13 20a4 4 0 0 1 8 0"/></svg><span>Personal</span>
       </button>
       <button class="rail-item" data-panel="domicilios" type="button"{% if not modulos.domicilios %} disabled title="Módulo no habilitado"{% endif %}>
@@ -65,7 +65,7 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="1"/><path d="M7 2v6M17 2v6M3 10h18M8 14h3M13 14h3M8 18h3"/></svg><span>Programados</span>
       </button>
       <button class="rail-item" data-panel="movimientos" type="button">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h14M14 3l4 4-4 4M20 17H6M10 13l-4 4 4 4"/></svg><span>Entradas / salidas</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h14M14 3l4 4-4 4M20 17H6M10 13l-4 4 4 4"/></svg><span>Movimientos</span>
       </button>
       <button class="rail-item" data-panel="reportes" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h11l3 3v15H5zM15 3v4h4M8 11h8M8 15h8M8 19h5"/></svg><span>Reportes y corte</span>
@@ -138,8 +138,8 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
         </section>
       </section>
 
-      <section class="admin-panel" data-admin-panel="personal" hidden>
-        <header class="panel-titulo"><div><h1>Personal operativo</h1><p>Meseros para identificar comandas y repartidores para liquidar domicilios.</p></div></header>
+      <section class="admin-panel" data-admin-panel="personal" data-permiso-admin="gestionar_usuarios" hidden>
+        <header class="panel-titulo"><div><h1>Personal operativo</h1><p>Meseros para comandas, repartidores para domicilios y responsables con acceso elevado al turno.</p></div></header>
         <div class="dos-columnas">
           <section class="hoja">
             <header class="hoja-titulo"><div><h2>Usuarios registrados</h2></div><button class="boton mini" id="nuevo-usuario" type="button">Nuevo</button></header>
@@ -150,7 +150,8 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
             <form id="form-usuario" class="formulario-admin">
               <input id="usuario-id" type="hidden">
               <label>Nombre<input id="usuario-nombre" maxlength="100" autocomplete="off" required></label>
-              <label>Función<select id="usuario-tipo" required><option value="mesero">Mesero</option><option value="repartidor">Repartidor</option></select></label>
+              <label>Función<select id="usuario-tipo" required><option value="mesero">Mesero</option><option value="repartidor">Repartidor</option><option value="elevado">Elevado</option><option id="usuario-tipo-encargado" value="encargado" hidden disabled>Operador principal</option></select></label>
+              <p class="ayuda-campo">Elevado permite operar el Administrador; la gestión de personal, la clave maestra y los folios siguen reservados al administrador maestro.</p>
               <label>Código de 4 dígitos<input id="usuario-clave" class="pin-enmascarado" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
               <label class="casilla"><input id="usuario-activo" type="checkbox" checked><span>Usuario activo</span></label>
               <p class="ayuda-campo">Al editar, deja el código vacío para conservar el actual.</p>
@@ -180,10 +181,10 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
       </section>
 
       <section class="admin-panel" data-admin-panel="programados" hidden>
-        <header class="panel-titulo"><div><h1>Pedidos programados</h1><p>Define fecha y hora de entrega; se activarán en la primera casilla de domicilio disponible.</p></div></header>
+        <header class="panel-titulo"><div><h1>Pedidos programados</h1><p>Agenda domicilios y pedidos para recoger. Puedes ajustar la entrega, devolverlos al turno o eliminarlos antes de activarlos.</p></div></header>
         <div class="dos-columnas">
           <section class="hoja">
-            <header class="hoja-titulo"><div><h2>Domicilios procesados</h2></div></header>
+            <header class="hoja-titulo"><div><h2>Pedidos listos para agendar</h2></div></header>
             <div id="lista-programables" class="tickets-pendientes"></div>
           </section>
           <section class="hoja">
@@ -194,14 +195,14 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
       </section>
 
       <section class="admin-panel" data-admin-panel="movimientos" hidden>
-        <header class="panel-titulo"><div><h1>Entradas y salidas</h1><p>Registra movimientos de efectivo que formarán parte del siguiente corte.</p></div></header>
+        <header class="panel-titulo"><div><h1>Movimientos</h1><p>Registra ingresos, gastos y cobros por terminal; prepara el efectivo que pasa de un día al siguiente.</p></div></header>
         <div class="dos-columnas">
           <section class="hoja">
             <header class="hoja-titulo"><div><h2 id="titulo-form-movimiento">Nuevo movimiento</h2></div></header>
             <form id="form-movimiento" class="formulario-admin">
               <input id="movimiento-id" type="hidden">
-              <label>Tipo<select id="movimiento-tipo" required><option value="entrada">Entrada +</option><option value="salida">Salida −</option></select></label>
-              <label>Concepto<input id="movimiento-concepto" maxlength="180" required placeholder="Ej. Cambio inicial"></label>
+              <label>Tipo<select id="movimiento-tipo" required><option value="ingreso">Ingreso +</option><option value="gasto">Gasto −</option><option value="terminal">Terminal −</option></select></label>
+              <label>Concepto<input id="movimiento-concepto" maxlength="180" required placeholder="Ej. Compra de insumos"></label>
               <label>Importe<input id="movimiento-importe" type="number" min="0.01" step="0.01" inputmode="decimal" required></label>
               <div class="acciones-formulario">
                 <button class="boton primario" id="guardar-movimiento" type="submit">Registrar movimiento</button>
@@ -214,6 +215,43 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
             <div id="lista-movimientos" class="lista-movimientos"></div>
           </section>
         </div>
+
+        <section class="hoja control-efectivo" aria-labelledby="control-efectivo-titulo">
+          <header class="hoja-titulo">
+            <div><h2 id="control-efectivo-titulo">Control de efectivo del día</h2></div>
+            <time id="control-efectivo-fecha">Hoy</time>
+          </header>
+          <form id="form-control-efectivo">
+            <div class="control-efectivo-grid">
+              <fieldset class="desglose-efectivo">
+                <legend>Fondo del día anterior</legend>
+                <p>Indica cuántas piezas hay de cada denominación al iniciar.</p>
+                <div id="fondo-anterior-denominaciones" class="denominaciones-grid"></div>
+                <output class="total-desglose" id="total-fondo-anterior">$0.00</output>
+              </fieldset>
+              <fieldset class="desglose-efectivo">
+                <legend>Fondo del día siguiente</legend>
+                <p>Este importe se convertirá en el fondo anterior después del corte.</p>
+                <div id="fondo-siguiente-denominaciones" class="denominaciones-grid"></div>
+                <output class="total-desglose" id="total-fondo-siguiente">$0.00</output>
+              </fieldset>
+              <fieldset class="ventas-apps">
+                <legend>Ventas de apps</legend>
+                <p>Se imprimen como referencia y no alteran la fórmula de efectivo.</p>
+                <label>Rappi<input id="app-rappi" type="number" min="0" step="0.01" inputmode="decimal" value="0"></label>
+                <label>Didi<input id="app-didi" type="number" min="0" step="0.01" inputmode="decimal" value="0"></label>
+                <label>Uber Eats<input id="app-uber-eats" type="number" min="0" step="0.01" inputmode="decimal" value="0"></label>
+                <output class="total-desglose" id="total-ventas-apps">$0.00</output>
+              </fieldset>
+            </div>
+            <div class="formula-efectivo" aria-live="polite">
+              <span>Fondo anterior + Ingresos + Ventas − Gastos − Terminales − Fondo siguiente</span>
+              <strong id="saldo-efectivo-esperado">$0.00</strong>
+              <small>Apps y pedidos de sucursal se muestran por separado en el reporte.</small>
+            </div>
+            <button class="boton primario" id="guardar-control-efectivo" type="submit">Guardar control de efectivo</button>
+          </form>
+        </section>
       </section>
 
       <section class="admin-panel" data-admin-panel="reportes" hidden>
@@ -226,6 +264,19 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
           <div><span>Sucursales</span><strong id="total-sucursales">$0.00</strong></div>
           <div class="total-general"><span>Total</span><strong id="total-general">$0.00</strong></div>
         </section>
+        <section id="aviso-cierre-mensual" class="aviso-cierre-mensual" aria-labelledby="cierre-mensual-titulo" hidden>
+          <div class="cierre-mensual-copia">
+            <h2 id="cierre-mensual-titulo">Cierre mensual obligatorio</h2>
+            <p>Envía el resumen al VPS. Los comprobantes mensuales se purgan y los folios vuelven a 1 únicamente después de recibir el acuse.</p>
+          </div>
+          <dl class="cierre-mensual-datos">
+            <div><dt>Periodo</dt><dd id="cierre-mensual-periodo">—</dd></div>
+            <div><dt>Estado</dt><dd id="cierre-mensual-estado">Pendiente</dd></div>
+            <div><dt>VPS</dt><dd id="cierre-mensual-vps">Sin configurar</dd></div>
+          </dl>
+          <p id="cierre-mensual-error" class="cierre-mensual-error" role="alert" hidden></p>
+          <button class="boton primario" id="ejecutar-cierre-mensual" type="button">Enviar al VPS, purgar mes y reiniciar folios tras el acuse</button>
+        </section>
         <div class="dos-columnas">
           <section class="hoja">
             <header class="hoja-titulo"><div><h2>Acciones de cierre</h2></div></header>
@@ -237,8 +288,8 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
           <section class="hoja">
             <header class="hoja-titulo"><div><h2>Requisitos del corte</h2></div></header>
             <div id="bloqueos-reporte" class="lista-bloqueos"></div>
-            <hr>
-            <form id="form-clave" class="formulario-admin formulario-clave">
+            <hr data-permiso-admin="cambiar_clave_maestra" hidden>
+            <form id="form-clave" class="formulario-admin formulario-clave" data-permiso-admin="cambiar_clave_maestra" hidden>
               <h3>Cambiar clave de administrador</h3>
               <label>Clave actual<input id="clave-actual" class="pin-enmascarado" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
               <label>Nueva clave<input id="nueva-clave" class="pin-enmascarado" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
@@ -246,7 +297,17 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
             </form>
           </section>
         </div>
-        <section class="hoja zona-peligro" aria-labelledby="reiniciar-folios-titulo">
+        <section class="hoja historial-cortes" aria-labelledby="historial-cortes-titulo">
+          <header class="hoja-titulo"><div><h2 id="historial-cortes-titulo">Historial de cortes diarios</h2></div><b id="conteo-cortes-caja">0</b></header>
+          <p class="nota-seccion">Consulta los cierres conservados y vuelve a imprimir su reporte cuando lo necesites.</p>
+          <div id="lista-cortes-caja" class="lista-cortes-caja"></div>
+        </section>
+        <section class="hoja cancelaciones-turno" aria-labelledby="cancelaciones-turno-titulo">
+          <header class="hoja-titulo"><div><h2 id="cancelaciones-turno-titulo">Cancelaciones del turno</h2></div><b id="conteo-cancelaciones">0</b></header>
+          <p class="nota-seccion">Se conserva quién canceló cada pedido hasta realizar el corte diario.</p>
+          <div id="lista-cancelaciones" class="lista-cancelaciones"></div>
+        </section>
+        <section class="hoja zona-peligro" data-permiso-admin="reiniciar_folios" aria-labelledby="reiniciar-folios-titulo" hidden>
           <div>
             <h2 id="reiniciar-folios-titulo">Reiniciar folios</h2>
             <p>El siguiente pedido usará el folio 1. Los pedidos existentes conservan su número y no se eliminan.</p>
@@ -257,8 +318,16 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
       </section>
 
       <section class="admin-panel" data-admin-panel="sucursales" hidden>
-        <header class="panel-titulo"><div><h1>Corte de sucursales</h1><p>Agrupa todas las partidas procesadas de una sucursal y las da por cobradas.</p></div></header>
-        <div id="lista-sucursales" class="tarjetas-sucursales"></div>
+        <header class="panel-titulo"><div><h1>Pedidos por sucursal</h1><p>Revisa cada origen por separado y agrupa sus partidas procesadas cuando corresponda hacer el corte.</p></div></header>
+        <section class="hoja pedidos-por-sucursal" aria-labelledby="pedidos-por-sucursal-titulo">
+          <header class="hoja-titulo"><div><h2 id="pedidos-por-sucursal-titulo">Pedidos recibidos</h2></div></header>
+          <div id="tabs-sucursales" class="tabs-sucursales" role="tablist" aria-label="Sucursal de origen"></div>
+          <div id="pedidos-sucursal-activa" class="tickets-pendientes panel-sucursal" role="tabpanel"></div>
+        </section>
+        <section class="hoja cortes-sucursales" aria-labelledby="cortes-sucursales-titulo">
+          <header class="hoja-titulo"><div><h2 id="cortes-sucursales-titulo">Cortes por sucursal</h2></div></header>
+          <div id="lista-sucursales" class="tarjetas-sucursales"></div>
+        </section>
       </section>
     </main>
   </div>

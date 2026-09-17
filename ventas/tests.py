@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.auth.hashers import make_password
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
@@ -58,6 +59,7 @@ from .admin_services import (
 )
 from .models import (
     Cliente,
+    ConfiguracionSucursal,
     ConsecutivoFolio,
     CorteCaja,
     EventoOutbox,
@@ -107,6 +109,11 @@ class FlujoPOSTests(TestCase):
             verbosity=0,
         )
         call_command("cargar_datos_iniciales", verbosity=0)
+        # La suite histórica ejercita una sucursal que ya rotó su clave maestra.
+        # Las pruebas específicas de aprovisionamiento cubren el valor inicial 0000.
+        configuracion = ConfiguracionSucursal.objects.get(sucursal__clave="ARBOLEDAS")
+        configuracion.clave_administrador = make_password("1212")
+        configuracion.save(update_fields=["clave_administrador", "actualizado_en"])
         rol = Rol.objects.get(sucursal__clave="ARBOLEDAS", tipo=Rol.Tipo.ENCARGADO)
         cls.operador_pruebas = UsuarioPOS(
             sucursal=rol.sucursal,
@@ -212,8 +219,8 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(Producto.objects.filter(sucursal=self.sucursal, activo=True).count(), 47)
         self.assertEqual(self.producto.precio_actual().importe, Decimal("25.00"))
         self.assertEqual(Mesa.objects.filter(sucursal=self.sucursal, canal="comedor").count(), 24)
-        self.assertEqual(Mesa.objects.filter(sucursal=self.sucursal, canal="recoger").count(), 12)
-        self.assertEqual(Mesa.objects.filter(sucursal=self.sucursal, canal="llevar").count(), 12)
+        self.assertEqual(Mesa.objects.filter(sucursal=self.sucursal, canal="recoger").count(), 40)
+        self.assertEqual(Mesa.objects.filter(sucursal=self.sucursal, canal="llevar").count(), 40)
         self.assertEqual(Mesa.objects.filter(sucursal=self.sucursal, canal="domicilio").count(), 100)
         self.assertEqual(SucursalPedido.objects.filter(sucursal=self.sucursal, activa=True).count(), 10)
         self.assertEqual(Mesa.objects.filter(sucursal=self.sucursal, canal="sucursales", activa=True).count(), 240)
@@ -1717,6 +1724,7 @@ class FlujoPOSTests(TestCase):
         self.assertContains(respuesta, 'class="marca-t-inicial">T</span>ocayos')
         self.assertContains(respuesta, '<sup class="marca-registro" aria-hidden="true">®</sup>')
         self.assertContains(respuesta, 'id="comentario"')
+        self.assertEqual(ASSET_VERSION, "0.4.0-dev.3")
         self.assertContains(respuesta, f"app.css?v={ASSET_VERSION}")
         self.assertContains(respuesta, f"brand-pos.css?v={ASSET_VERSION}")
         self.assertContains(respuesta, f"app.js?v={ASSET_VERSION}")
@@ -1737,6 +1745,21 @@ class FlujoPOSTests(TestCase):
         worker = self.client.get("/service-worker.js")
         self.assertEqual(worker.headers["Cache-Control"], "no-cache")
         self.assertContains(worker, f"tocayos-pos-{ASSET_VERSION}")
+        self.assertContains(worker, "self.skipWaiting()")
+        self.assertContains(worker, "self.clients.claim()")
+        for recurso in (
+            "app.css",
+            "brand-pos.css",
+            "app.js",
+            "admin.css",
+            "admin.js",
+        ):
+            with self.subTest(recurso=recurso):
+                self.assertContains(
+                    worker,
+                    f"/static/ventas/{recurso}?v={ASSET_VERSION}",
+                )
+        self.assertContains(worker, "keys.filter(key => key !== CACHE)")
         self.assertContains(worker, "Montserrat-Variable.woff2")
         self.assertContains(worker, "BebasNeue-Regular.woff2")
 
@@ -1789,7 +1812,7 @@ class FlujoPOSTests(TestCase):
             'const operador = estado.operador?.nombre?.trim() || ""',
             "nombre.textContent = operador",
             "contenedor.hidden = !operador",
-            "estado.operador = datos.operador;\n      renderOperadorActual();",
+            "estado.operador = datos.operador;\n        renderOperadorActual();",
             "estado.operador = null;\n    renderOperadorActual();",
         ):
             with self.subTest(contrato=contrato):
@@ -1962,6 +1985,40 @@ class FlujoPOSTests(TestCase):
         self.assertEqual(conceptos[0]["cantidad"], Decimal("7"))
         self.assertEqual(conceptos[0]["importe"], Decimal("160.00"))
         self.assertEqual(conceptos[0]["precio_unitario"].quantize(Decimal("0.01")), Decimal("22.86"))
+
+    def test_ticket_total_omite_preparacion_personal_y_comanda_la_conserva(self):
+        ticket, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="MESA-20"))
+        partida = agregar_partida(ticket, self.producto, comensal=1, cantidad=Decimal("2"))
+        alternar_modificador(ticket, 1, "S/CEB", "SIN CEBOLLA PERSONAL")
+
+        with patch.object(ImageDraw.ImageDraw, "text", autospec=True) as escribir_cuenta:
+            render_cuenta(ticket)
+        textos_cuenta = [
+            str(llamada.args[2])
+            for llamada in escribir_cuenta.call_args_list
+            if len(llamada.args) > 2
+        ]
+        contenido_cuenta = " | ".join(textos_cuenta)
+        palabras_cuenta = set(contenido_cuenta.replace("|", " ").split())
+        palabras_base = set(partida.producto.nombre.upper().split())
+        self.assertTrue(palabras_base.issubset(palabras_cuenta))
+        for preparacion in (
+            set(partida.nombre_producto.upper().split()) - palabras_base
+        ):
+            self.assertNotIn(preparacion, palabras_cuenta)
+        self.assertIn("2", textos_cuenta)
+        self.assertIn(f"${partida.precio_unitario:,.2f}", textos_cuenta)
+        self.assertIn(f"${partida.importe:,.2f}", textos_cuenta)
+        self.assertNotIn("SIN CEBOLLA PERSONAL", contenido_cuenta)
+
+        with patch.object(ImageDraw.ImageDraw, "text", autospec=True) as escribir_comanda:
+            render_comanda(ticket, "cocina")
+        contenido_comanda = " | ".join(
+            str(llamada.args[2])
+            for llamada in escribir_comanda.call_args_list
+            if len(llamada.args) > 2
+        )
+        self.assertIn("S/CEB", contenido_comanda)
 
     def test_comanda_reserva_franja_de_preparacion_aunque_este_vacia(self):
         sin_comentario, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="MESA-21"))
@@ -2531,11 +2588,16 @@ class FlujoPOSTests(TestCase):
             Decimal(corte.totales_canales["sucursales"]),
             partida.importe,
         )
-        self.assertEqual(reporte.datos["total_ventas"], str(partida.importe))
+        self.assertEqual(reporte.datos["total_ventas"], "0.00")
+        self.assertEqual(
+            reporte.datos["totales_sucursales"],
+            {posicion.cliente_sucursal.nombre: str(partida.importe)},
+        )
         with patch.object(ImageDraw.ImageDraw, "text", autospec=True) as escribir:
             render_reporte_administrativo(reporte)
         textos = [llamada.args[2] for llamada in escribir.call_args_list if len(llamada.args) > 2]
-        self.assertIn("SUCURSALES", textos)
+        self.assertIn("PEDIDOS POR SUCURSAL", textos)
+        self.assertIn(posicion.cliente_sucursal.nombre.upper(), textos)
 
     def test_inicio_turno_vacio_y_primer_pedido_permanecen_estables_tras_cancelar(self):
         fin = timezone.make_aware(datetime(2026, 9, 15, 8, 0))
@@ -2671,7 +2733,7 @@ class FlujoPOSTests(TestCase):
         )
         self.assertEqual(edicion.status_code, 200)
         movimiento = MovimientoCaja.objects.get(pk=movimiento_id)
-        self.assertEqual(movimiento.tipo, MovimientoCaja.Tipo.SALIDA)
+        self.assertEqual(movimiento.tipo, MovimientoCaja.Tipo.GASTO)
         self.assertEqual(movimiento.concepto, "Compra urgente")
         self.assertEqual(movimiento.importe, Decimal("45.50"))
         eliminacion = self.client.delete(f"/api/administrador/movimientos/{movimiento_id}/")
@@ -2836,6 +2898,10 @@ class SeguridadPOSTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.sucursal = Sucursal.objects.create(clave="ARBOLEDAS", nombre="Arboledas")
+        ConfiguracionSucursal.objects.create(
+            sucursal=cls.sucursal,
+            clave_administrador=make_password("2468"),
+        )
         cls.user = get_user_model().objects.create_user(
             username="operador-seguridad",
             password="Clave-prueba-segura-2026",
@@ -2922,6 +2988,144 @@ class SeguridadPOSTests(TestCase):
         self.assertEqual(respuesta.status_code, 200)
         ticket = Ticket.objects.get(pk=respuesta.json()["ticket"]["id"])
         self.assertEqual(ticket.atendio, self.perfil)
+
+    def test_throttle_operador_usa_ip_real_y_exito_limpia_contador(self):
+        self.client.force_login(self.user)
+        ip = "192.0.2.50"
+
+        for _ in range(2):
+            fallido = self.client.post(
+                "/api/operador/identificar/",
+                data=json.dumps({"clave": "0000"}),
+                content_type="application/json",
+                REMOTE_ADDR=ip,
+            )
+            self.assertEqual(fallido.status_code, 400)
+
+        correcto = self.client.post(
+            "/api/operador/identificar/",
+            data=json.dumps({"clave": "1234"}),
+            content_type="application/json",
+            REMOTE_ADDR="[::ffff:192.0.2.50]",
+        )
+        self.assertEqual(correcto.status_code, 200)
+
+        for indice in range(4):
+            fallido = self.client.post(
+                "/api/operador/identificar/",
+                data=json.dumps({"clave": "0000"}),
+                content_type="application/json",
+                REMOTE_ADDR=ip,
+                HTTP_X_FORWARDED_FOR=f"198.51.100.{indice + 1}",
+            )
+            self.assertEqual(fallido.status_code, 400)
+
+        quinto_fallo = self.client.post(
+            "/api/operador/identificar/",
+            data=json.dumps({"clave": "0000"}),
+            content_type="application/json",
+            REMOTE_ADDR=ip,
+            HTTP_X_FORWARDED_FOR="203.0.113.199",
+        )
+        self.assertEqual(quinto_fallo.status_code, 429)
+        self.assertEqual(quinto_fallo.headers["Retry-After"], "60")
+        bloqueado = self.client.post(
+            "/api/operador/identificar/",
+            data=json.dumps({"clave": "1234"}),
+            content_type="application/json",
+            REMOTE_ADDR=ip,
+            HTTP_X_FORWARDED_FOR="203.0.113.200",
+        )
+        self.assertEqual(bloqueado.status_code, 429)
+
+        otra_terminal = self.client.post(
+            "/api/operador/identificar/",
+            data=json.dumps({"clave": "1234"}),
+            content_type="application/json",
+            REMOTE_ADDR="192.0.2.51",
+        )
+        self.assertEqual(otra_terminal.status_code, 200)
+        claves_cache = " ".join(str(clave) for clave in cache._cache.keys())
+        self.assertNotIn(ip, claves_cache)
+        self.assertNotIn("0000", claves_cache)
+
+    def test_throttle_admin_es_independiente_por_proposito_sucursal_e_ip(self):
+        self.client.force_login(self.user)
+        ip_bloqueada = "2001:db8::10"
+
+        for _ in range(4):
+            fallido = self.client.post(
+                "/api/administrador/acceso/",
+                data=json.dumps({"clave_administrador": "0000"}),
+                content_type="application/json",
+                REMOTE_ADDR=ip_bloqueada,
+            )
+            self.assertEqual(fallido.status_code, 400)
+
+        quinto_fallo = self.client.post(
+            "/api/administrador/acceso/",
+            data=json.dumps({"clave_administrador": "0000"}),
+            content_type="application/json",
+            REMOTE_ADDR=ip_bloqueada,
+        )
+        self.assertEqual(quinto_fallo.status_code, 429)
+        self.assertEqual(quinto_fallo.headers["Retry-After"], "60")
+        bloqueado = self.client.post(
+            "/api/administrador/acceso/",
+            data=json.dumps({"clave_administrador": "2468"}),
+            content_type="application/json",
+            REMOTE_ADDR=ip_bloqueada,
+        )
+        self.assertEqual(bloqueado.status_code, 429)
+
+        operador_mismo_origen = self.client.post(
+            "/api/operador/identificar/",
+            data=json.dumps({"clave": "1234"}),
+            content_type="application/json",
+            REMOTE_ADDR=ip_bloqueada,
+        )
+        self.assertEqual(operador_mismo_origen.status_code, 200)
+
+        ip_reinicio = "2001:db8::11"
+        for _ in range(2):
+            fallido = self.client.post(
+                "/api/administrador/acceso/",
+                data=json.dumps({"clave_administrador": "0000"}),
+                content_type="application/json",
+                REMOTE_ADDR=ip_reinicio,
+            )
+            self.assertEqual(fallido.status_code, 400)
+        correcto = self.client.post(
+            "/api/administrador/acceso/",
+            data=json.dumps({"clave_administrador": "2468"}),
+            content_type="application/json",
+            REMOTE_ADDR=ip_reinicio,
+        )
+        self.assertEqual(correcto.status_code, 200)
+
+        for _ in range(4):
+            fallido = self.client.post(
+                "/api/administrador/acceso/",
+                data=json.dumps({"clave_administrador": "0000"}),
+                content_type="application/json",
+                REMOTE_ADDR=ip_reinicio,
+            )
+            self.assertEqual(fallido.status_code, 400)
+        quinto_tras_reinicio = self.client.post(
+            "/api/administrador/acceso/",
+            data=json.dumps({"clave_administrador": "0000"}),
+            content_type="application/json",
+            REMOTE_ADDR=ip_reinicio,
+        )
+        self.assertEqual(quinto_tras_reinicio.status_code, 429)
+
+        otra_ip = self.client.post(
+            "/api/administrador/acceso/",
+            data=json.dumps({"clave_administrador": "2468"}),
+            content_type="application/json",
+            REMOTE_ADDR="2001:db8::12",
+        )
+        self.assertEqual(otra_ip.status_code, 200)
 
     def test_agregar_ticket_independiente_exige_sesion_autenticada(self):
         origen_mesa = Mesa.objects.create(

@@ -74,6 +74,162 @@ Assert-True ($windowsPowerShell -match '(?i)\\WindowsPowerShell\\v1\.0\\powershe
 Assert-True (Test-AllowedHost "[::1]") "Se rechazó un host IPv6 válido entre corchetes."
 Assert-True (-not (Test-AllowedHost "::1")) "Se aceptó un host IPv6 sin el formato válido para DJANGO_ALLOWED_HOSTS."
 Assert-True (-not (Test-AllowedHost "localhost:8000")) "Se aceptó un host con puerto incrustado."
+Assert-VpsConsolidationConfiguration -Url "" -Token ""
+Assert-VpsConsolidationConfiguration -Url "https://vps.example/api/consolidaciones" -Token "token-prueba"
+foreach ($casoVpsInvalido in @(
+    @{ Url = "https://vps.example/api"; Token = "" },
+    @{ Url = ""; Token = "token-prueba" },
+    @{ Url = "http://vps.example/api"; Token = "token-prueba" },
+    @{ Url = "/api/consolidaciones"; Token = "token-prueba" },
+    @{ Url = "https://usuario:secreto@vps.example/api"; Token = "token-prueba" }
+)) {
+    $falloVps = $false
+    try {
+        Assert-VpsConsolidationConfiguration `
+            -Url $casoVpsInvalido.Url `
+            -Token $casoVpsInvalido.Token
+    }
+    catch { $falloVps = $true }
+    Assert-True $falloVps "Se aceptó una configuración VPS incompleta o insegura."
+}
+function New-SqliteScheduledTaskFixture {
+    param(
+        [ValidateSet("Backup", "Purge")][string]$Kind,
+        [string]$ProjectRoot,
+        [string]$PythonPath,
+        [string]$DatabasePath,
+        [ValidatePattern("^(?:[01]\d|2[0-3]):[0-5]\d$")][string]$DailyTime = "03:15",
+        [ValidateRange(1, 3650)][int]$RetentionDays = 30
+    )
+
+    $arguments = Get-SqliteBackupTaskArguments `
+        -ScriptPath (Join-Path $ProjectRoot "respaldar-db-sqlite.ps1") `
+        -PythonPath $PythonPath `
+        -DatabasePath $DatabasePath `
+        -BackupRoot (Join-Path $ProjectRoot "backups") `
+        -LogPath (Join-Path $ProjectRoot "logs\sqlite-backup.log") `
+        -RetentionDays $RetentionDays
+    if ($Kind -eq "Purge") { $arguments += " -OnlyIfPurgePending" }
+    $trigger = if ($Kind -eq "Backup") {
+        [pscustomobject]@{
+            CimClass = [pscustomobject]@{ CimClassName = "MSFT_TaskDailyTrigger" }
+            Enabled = $true
+            DaysInterval = 1
+            StartBoundary = "2026-09-17T${DailyTime}:00-06:00"
+        }
+    }
+    else {
+        [pscustomobject]@{
+            CimClass = [pscustomobject]@{ CimClassName = "MSFT_TaskTimeTrigger" }
+            Enabled = $true
+            Repetition = [pscustomobject]@{ Interval = "PT5M" }
+        }
+    }
+    return [pscustomobject]@{
+        Principal = [pscustomobject]@{ UserId = "SYSTEM"; RunLevel = "Highest" }
+        State = "Ready"
+        Settings = [pscustomobject]@{
+            Enabled = $true
+            StartWhenAvailable = $true
+            MultipleInstances = "IgnoreNew"
+            ExecutionTimeLimit = "PT1H"
+        }
+        Actions = @([pscustomobject]@{
+            Execute = Get-WindowsPowerShellPath
+            WorkingDirectory = $ProjectRoot
+            Arguments = $arguments
+        })
+        Triggers = @($trigger)
+    }
+}
+
+$taskFixtureRoot = Join-Path ([IO.Path]::GetTempPath()) "tocayos-task-config-fixture"
+$taskFixturePython = Join-Path $taskFixtureRoot ".venv\Scripts\python.exe"
+$taskFixtureDatabase = Join-Path $taskFixtureRoot "runtime\db.sqlite3"
+foreach ($taskCase in @(
+    @{ Time = "03:15"; Retention = 30 },
+    @{ Time = "04:47"; Retention = 91 }
+)) {
+    $backupFixture = New-SqliteScheduledTaskFixture `
+        -Kind Backup `
+        -ProjectRoot $taskFixtureRoot `
+        -PythonPath $taskFixturePython `
+        -DatabasePath $taskFixtureDatabase `
+        -DailyTime $taskCase.Time `
+        -RetentionDays $taskCase.Retention
+    $purgeFixture = New-SqliteScheduledTaskFixture `
+        -Kind Purge `
+        -ProjectRoot $taskFixtureRoot `
+        -PythonPath $taskFixturePython `
+        -DatabasePath $taskFixtureDatabase `
+        -RetentionDays $taskCase.Retention
+    $taskConfig = Get-SqliteTaskConfigurationFromTasks `
+        -BackupTask $backupFixture `
+        -PurgeTask $purgeFixture `
+        -ProjectRoot $taskFixtureRoot `
+        -PythonPath $taskFixturePython `
+        -DatabasePath $taskFixtureDatabase
+    Assert-True $taskConfig.Configured "No se detectó la tarea existente."
+    Assert-True ($taskConfig.DailyTime -eq $taskCase.Time) "No se preservó la hora diaria existente."
+    Assert-True ($taskConfig.RetentionDays -eq $taskCase.Retention) "No se preservó la retención existente."
+    Assert-True $taskConfig.PurgeConfigured "No se conservó el contrato de purga existente."
+}
+
+$legacyBackup = New-SqliteScheduledTaskFixture `
+    -Kind Backup `
+    -ProjectRoot $taskFixtureRoot `
+    -PythonPath $taskFixturePython `
+    -DatabasePath $taskFixtureDatabase `
+    -DailyTime "05:20" `
+    -RetentionDays 45
+$legacyConfig = Get-SqliteTaskConfigurationFromTasks `
+    -BackupTask $legacyBackup `
+    -PurgeTask $null `
+    -ProjectRoot $taskFixtureRoot `
+    -PythonPath $taskFixturePython `
+    -DatabasePath $taskFixtureDatabase
+Assert-True ($legacyConfig.DailyTime -eq "05:20" -and $legacyConfig.RetentionDays -eq 45) "No se preservó la tarea heredada sin purga."
+Assert-True (-not $legacyConfig.PurgeConfigured) "Una tarea de purga ausente se informó como existente."
+$invalidPurge = New-SqliteScheduledTaskFixture `
+    -Kind Purge `
+    -ProjectRoot $taskFixtureRoot `
+    -PythonPath $taskFixturePython `
+    -DatabasePath $taskFixtureDatabase
+$invalidPurge.Triggers[0].Repetition.Interval = "PT10M"
+$backupDefault = New-SqliteScheduledTaskFixture `
+    -Kind Backup `
+    -ProjectRoot $taskFixtureRoot `
+    -PythonPath $taskFixturePython `
+    -DatabasePath $taskFixtureDatabase
+$invalidPurgeRejected = $false
+try {
+    Get-SqliteTaskConfigurationFromTasks `
+        -BackupTask $backupDefault `
+        -PurgeTask $invalidPurge `
+        -ProjectRoot $taskFixtureRoot `
+        -PythonPath $taskFixturePython `
+        -DatabasePath $taskFixtureDatabase | Out-Null
+}
+catch { $invalidPurgeRejected = $true }
+Assert-True $invalidPurgeRejected "Se aceptó una tarea de purga con intervalo modificado."
+
+$invalidAction = New-SqliteScheduledTaskFixture `
+    -Kind Purge `
+    -ProjectRoot $taskFixtureRoot `
+    -PythonPath $taskFixturePython `
+    -DatabasePath $taskFixtureDatabase
+$invalidAction.Actions[0].Arguments += " -ArgumentoNoAdministrado"
+$invalidActionRejected = $false
+try {
+    Get-SqliteTaskConfigurationFromTasks `
+        -BackupTask $backupDefault `
+        -PurgeTask $invalidAction `
+        -ProjectRoot $taskFixtureRoot `
+        -PythonPath $taskFixturePython `
+        -DatabasePath $taskFixtureDatabase | Out-Null
+}
+catch { $invalidActionRejected = $true }
+Assert-True $invalidActionRejected "Se aceptó una tarea de purga con acción modificada."
 & {
     function Test-MachinePythonPath { param([string]$Path) return $false }
     $failed = $false
@@ -102,6 +258,11 @@ Assert-ComesBefore '$SucursalClave = ConvertTo-SucursalClave' 'Stop-Service -Nam
 Assert-ComesBefore '$envHashOriginal = (Get-FileHash' 'Stop-Service -Name $nombreServicio' "Se detiene antes de preservar el hash de .env."
 Assert-ComesBefore 'Assert-ServiceBelongsToProject -ServiceName $nombreServicio' 'Stop-Service -Name $nombreServicio' "Se detiene un servicio sin validar su pertenencia."
 Assert-ComesBefore '$dbEnginePreflight = ConvertFrom-DotEnvDatabaseEngine' 'Stop-Service -Name $nombreServicio' "Se detiene antes de validar DB_ENGINE."
+Assert-ComesBefore 'Get-ExistingSqliteTaskConfiguration' 'Stop-Service -Name $nombreServicio' "Se detiene antes de preservar la configuración de tareas."
+Assert-True ($main.Contains('$BackupTime = [string]$taskConfiguration.DailyTime')) "Actualizar no conserva la hora diaria existente."
+Assert-True ($main.Contains('$BackupRetentionDays = [int]$taskConfiguration.RetentionDays')) "Actualizar no conserva la retención existente."
+Assert-True (-not $main.Contains('$BackupRetentionDays = 3650')) "Actualizar todavía reemplaza la retención operativa por la del respaldo de migración."
+Assert-True ($main.Contains('$retencionRespaldoPreMigracion = if ($Modo -eq "Actualizar") { 3650 }')) "El respaldo de migración perdió su retención protectora independiente."
 Assert-ComesBefore '$dbEnginePreflight = ConvertFrom-DotEnvDatabaseEngine' '$sqliteConfigurada = Get-DotEnvValue' "Se interpreta SQLite antes de validar DB_ENGINE."
 Assert-ComesBefore 'Set-CanonicalProcessEnvironment -Path $entorno' 'from personas.models import Sucursal' "La identidad se consulta con un entorno heredado."
 Assert-ComesBefore 'Invoke-SqliteBackup -PythonPath $python' '& $python manage.py migrate' "Se migra antes del respaldo verificable."
@@ -124,6 +285,10 @@ $reparacionParametro = @($ast.ParamBlock.Parameters | Where-Object {
     $_.Name.VariablePath.UserPath -eq "RepairPermissions"
 })[0]
 Assert-True ($reparacionParametro.Extent.Text.Contains('ParameterSetName = "Reparacion"')) "La reparación no está separada de las operaciones."
+$vpsTimeoutParametro = @($ast.ParamBlock.Parameters | Where-Object {
+    $_.Name.VariablePath.UserPath -eq "VpsConsolidacionTimeout"
+})[0]
+Assert-True ($vpsTimeoutParametro.Extent.Text.Contains('ValidateRange(1, 60)')) "El timeout VPS no está limitado a 1..60."
 
 $instalarTexto = $astsSeparados["Instalar"].Extent.Text
 $actualizarTexto = $astsSeparados["Actualizar"].Extent.Text
@@ -136,11 +301,22 @@ Assert-True ($instalarTexto.Contains('Modo = "Instalar"')) "El wrapper de instal
 Assert-True ($instalarTexto.Contains('[Parameter(Mandatory = $true)][string]$AllowedHosts')) "Instalar no exige hosts explícitos."
 Assert-True ($instalarTexto.Contains('[ValidateSet("archivo", "tcp")][string]$PrintBackend = "archivo"')) "Instalar no usa impresión segura por defecto."
 Assert-True ($instalarTexto.Contains('PrinterCajaHost = $PrinterCajaHost')) "Instalar no transmite la configuración de impresoras."
+Assert-True ($instalarTexto.Contains('VpsConsolidacionUrl = $VpsConsolidacionUrl')) "Instalar no transmite la URL de consolidación."
+Assert-True ($instalarTexto.Contains('VpsConsolidacionToken = $VpsConsolidacionToken')) "Instalar no transmite el token de consolidación."
+Assert-True ($instalarTexto.Contains('VpsConsolidacionTimeout = $VpsConsolidacionTimeout')) "Instalar no transmite el timeout de consolidación."
+Assert-True ($main.Contains('manage.py inicializar_operacion_sucursal')) "El instalador omite el bootstrap neutral de posiciones."
+Assert-ComesBefore '"manage.py", "aprovisionar_sucursal"' 'manage.py inicializar_operacion_sucursal' "La identidad debe aprovisionarse antes de inicializar posiciones."
+Assert-ComesBefore 'manage.py inicializar_operacion_sucursal' 'manage.py cargar_datos_iniciales' "El bootstrap neutral debe ejecutarse antes de la semilla histórica opcional."
 Assert-True ($main.Contains('manage.py crear_operador_pos --crear-perfil-inicial')) "El instalador omite el perfil POS inicial cuando la base está vacía."
 Assert-True ($main.Contains('configurar_modulos_sucursal')) "El instalador no persiste la selección inicial de módulos."
 Assert-True ($instalarTexto.Contains('ModulosOpcionales')) "El wrapper no expone la selección de módulos por sucursal."
 Assert-True ($actualizarTexto.Contains('-Modo Actualizar')) "El wrapper de actualización no declara su modo."
-foreach ($opcionProhibida in @("SucursalClave", "SucursalNombre", "InicializarDatosArboledas", "AllowedHosts", "SecretKey", "PrintBackend", "PrinterCajaHost", "PrinterCocinaHost", "PrinterBarraHost", "PrinterPort")) {
+foreach ($opcionProhibida in @(
+    "SucursalClave", "SucursalNombre", "InicializarDatosArboledas", "AllowedHosts",
+    "SecretKey", "PrintBackend", "PrinterCajaHost", "PrinterCocinaHost",
+    "PrinterBarraHost", "PrinterPort", "VpsConsolidacionUrl",
+    "VpsConsolidacionToken", "VpsConsolidacionTimeout"
+)) {
     Assert-True (-not $actualizarTexto.Contains('$' + $opcionProhibida)) "Actualizar expone $opcionProhibida."
 }
 Assert-True ($aprovisionarTexto.Contains('$managePy, "aprovisionar_sucursal"')) "El wrapper no usa la ruta absoluta del comando de aprovisionamiento."
@@ -171,6 +347,8 @@ Assert-True ($verificadorTexto.Contains('$optionalEnvironmentKeys')) "El verific
 Assert-True ($verificadorTexto.Contains('$printBackend =')) "El verificador no valida el backend de impresión."
 Assert-True ($verificadorTexto.Contains('PRINT_BACKEND=tcp exige tres hosts')) "El verificador no exige las impresoras concretas del backend TCP."
 Assert-True ($verificadorTexto.Contains('$printerPort = ConvertFrom-DotEnvInteger')) "El verificador no valida el puerto de impresora."
+Assert-True ($verificadorTexto.Contains('$vpsConsolidacionTimeout = ConvertFrom-DotEnvInteger')) "El verificador no valida el timeout VPS."
+Assert-True ($verificadorTexto.Contains('Assert-VpsConsolidationConfiguration')) "El verificador no valida URL/token VPS juntos."
 Assert-True ($verificadorTexto.Contains('PythonClass')) "El verificador no acredita la clase Python registrada."
 Assert-True ($verificadorTexto.Contains('$expectedFailureActions')) "El verificador no acredita la política de recuperación del servicio."
 Assert-True ($verificadorTexto.Contains('-ErrorAction SilentlyContinue')) "El verificador exige componentes que pueden omitirse expresamente."
@@ -180,6 +358,12 @@ Assert-True ($verificadorTexto.Contains('if (-not (Test-AllowedHost -Value $Heal
 Assert-True ($verificadorTexto.Contains('Test-SamePath $action.Execute $expectedPowerShell')) "El verificador no acredita la acción de la tarea de respaldo."
 Assert-True ($verificadorTexto.Contains('$task.Settings.StartWhenAvailable')) "El verificador no acredita los ajustes de la tarea de respaldo."
 Assert-True ($verificadorTexto.Contains('MSFT_TaskDailyTrigger')) "El verificador no acredita el disparador diario."
+Assert-True ($main.Contains('LosTocayosPOS-PurgasFisicas')) "El instalador no registra la tarea de purgas físicas."
+Assert-True ($ast.Extent.Text.Contains('-RepetitionInterval (New-TimeSpan -Minutes 5)')) "La purga física no tiene repetición de cinco minutos."
+Assert-True ($ast.Extent.Text.Contains('$argumentos + " -OnlyIfPurgePending"')) "La tarea frecuente no usa el modo condicional."
+Assert-True ($verificadorTexto.Contains('MSFT_TaskTimeTrigger')) "El verificador no acredita el disparador frecuente."
+Assert-True ($verificadorTexto.Contains('Repetition.Interval -ne "PT5M"')) "El verificador no exige el intervalo de cinco minutos."
+Assert-True ($verificadorTexto.Contains('$purgeTask.Principal.UserId')) "El verificador no acredita SYSTEM para purgas."
 Assert-True ($verificadorTexto.Contains('logs\sqlite-backup.log')) "El verificador espera un log distinto al que registra el instalador."
 Assert-True ($verificadorTexto.Contains('if ($https)')) "El verificador no distingue una regla residual en HTTPS."
 Assert-True ($verificadorTexto.Contains('elseif ($listenAddress -eq "::")')) "El verificador sondea una escucha IPv6 mediante IPv4."
@@ -209,6 +393,10 @@ Assert-True ($respaldoTexto.IndexOf('$pythonExitCode = $LASTEXITCODE') -lt $resp
 Assert-True (($respaldoTexto.Split([string[]]@('Protect-BackupFiles -Path'), [StringSplitOptions]::None).Count - 1) -ge 2) "El respaldo no endurece antes y después de publicar."
 Assert-True ($respaldoTexto.Contains('$expectedShaSidecar')) "El respaldo no valida el contenido del sidecar SHA-256."
 Assert-True ($respaldoTexto.Contains('$metadata.restore_check.integrity_check')) "El respaldo no valida el sidecar JSON de restauración."
+Assert-True ($respaldoTexto.Contains('[switch]$OnlyIfPurgePending')) "El wrapper no expone el modo condicional acotado."
+Assert-True ($respaldoTexto.Contains('"--request-root"')) "El wrapper no transmite la raíz fija de solicitudes."
+Assert-True ($respaldoTexto.Contains('"--media-root"')) "El wrapper no transmite MEDIA_ROOT a la herramienta privilegiada."
+Assert-True ($respaldoTexto.Contains('"--process-pending-only"')) "La tarea frecuente no preprocesa solicitudes antes de respaldar."
 Assert-True (-not $diagnosticoTexto.Contains('if (-not $env:PRINT_BACKEND)')) "La impresión de diagnóstico sólo cambia si falta la configuración."
 Assert-True ($diagnosticoTexto.IndexOf('Set-CanonicalProcessEnvironment -Path $entorno') -lt $diagnosticoTexto.IndexOf('$env:PRINT_BACKEND = "archivo"')) "El .env TCP puede volver a activar impresoras tras aislar el diagnóstico."
 Assert-True ($diagnosticoTexto.Contains('from herramientas.host_servicio_windows import comprobar_host')) "El diagnóstico no comprueba el host de servicio."
@@ -219,6 +407,10 @@ Assert-True ($main.Contains('$PrintBackend -eq "tcp" -and -not (Test-AllowedHost
 Assert-ComesBefore '& $python manage.py verificar_identidad_local' '$migracionIniciada = $true' "Se marca una migración antes de comprobar la identidad."
 Assert-ComesBefore '& $python manage.py verificar_identidad_local' '& $python manage.py migrate' "Se migra antes de comprobar la identidad de una base existente."
 Assert-True ($ast.Extent.Text.Contains('ALLOW_INSECURE_HTTP_LAN$')) "El saneamiento no limpia ALLOW_INSECURE_HTTP_LAN."
+Assert-True ($ast.Extent.Text.Contains('VPS_CONSOLIDACION_')) "El saneamiento no limpia variables VPS heredadas."
+Assert-True ($main.Contains('Set-DotEnvValue -Path $entorno -Name "VPS_CONSOLIDACION_URL"')) "La instalación no persiste la URL VPS."
+Assert-True ($main.Contains('Set-DotEnvValue -Path $entorno -Name "VPS_CONSOLIDACION_TOKEN"')) "La instalación no persiste el token VPS."
+Assert-True ($main.Contains('Set-DotEnvValue -Path $entorno -Name "VPS_CONSOLIDACION_TIMEOUT"')) "La instalación no persiste el timeout VPS."
 Assert-True (($main.Split([string[]]@('Set-CanonicalProcessEnvironment -Path $entorno'), [StringSplitOptions]::None).Count - 1) -ge 2) "La instalación no recarga SQLITE_PATH después de escribirlo."
 Assert-True ($main.Contains('Test-WheelhouseCompleteness')) "No se valida la cobertura offline del lock antes de detener."
 Assert-True ($main.IndexOf('$arranqueIntentadoPorScript = $true') -lt $main.IndexOf('Start-Service -Name $nombreServicio')) "No se registra el intento antes de arrancar."
@@ -433,6 +625,7 @@ $archivosRelease = @(
     "manage.py", "servicio_windows.py", "pos/settings.py",
     "personas/identidad.py",
     "personas/management/commands/aprovisionar_sucursal.py",
+    "personas/management/commands/inicializar_operacion_sucursal.py",
     "personas/management/commands/verificar_identidad_local.py",
     "herramientas/validar_despliegue.py", "certs/prod-ca-2021.crt",
     "datos/Listado-Productos.xlsx",
@@ -655,6 +848,13 @@ if (-not $SkipAcl) {
     $secondArtifacts = @(Get-ChildItem -LiteralPath $backupFixtureDirectory -File | Where-Object { $_.Name -cmatch $backupPattern })
     Assert-True ($secondArtifacts.Count -eq 9) "La segunda ejecucion no agrego un unico triplete."
     foreach ($item in $secondArtifacts) { Assert-PrivateBackupFileAcl -Path $item.FullName }
+
+    $idleOutput = @(& $windowsPowerShell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $backupWrapper -Python $machinePython -DatabasePath $backupDatabase -BackupRoot $backupFixtureDirectory -LogPath $backupFixtureLog -RetentionDays 30 -LockTimeoutSeconds 30 -OnlyIfPurgePending)
+    Assert-True ($LASTEXITCODE -eq 0) "El modo frecuente sin solicitudes no finalizó correctamente."
+    Assert-True ($idleOutput.Count -eq 1) "El modo frecuente sin solicitudes devolvió salida ambigua."
+    Assert-True (($idleOutput[0] | ConvertFrom-Json).status -eq "sin_solicitudes_pendientes") "El modo frecuente no informó inactividad."
+    $idleArtifacts = @(Get-ChildItem -LiteralPath $backupFixtureDirectory -File | Where-Object { $_.Name -cmatch $backupPattern })
+    Assert-True ($idleArtifacts.Count -eq $secondArtifacts.Count) "El modo frecuente creó un respaldo sin solicitudes."
 
     $failurePrior = Join-Path $backupFixtureDirectory "db-20990101-010102.sqlite3"
     Copy-Item -LiteralPath $backupDatabase -Destination $failurePrior

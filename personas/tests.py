@@ -7,6 +7,7 @@ from zipfile import BadZipFile
 
 from catalogo.models import Categoria, Precio, Producto
 from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth.hashers import make_password
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -14,7 +15,13 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from personas.identidad import normalizar_clave_sucursal, normalizar_nombre_sucursal
 from personas.models import ModuloSucursal, Rol, Sucursal, UsuarioPOS
 from personas.modulos import MODULOS_NUCLEO, configurar_modulos
-from ventas.models import Mesa, PrecioProductoSucursal, ProductoSucursal, SucursalPedido
+from ventas.models import (
+    ConfiguracionSucursal,
+    Mesa,
+    PrecioProductoSucursal,
+    ProductoSucursal,
+    SucursalPedido,
+)
 
 
 class NormalizacionIdentidadTests(SimpleTestCase):
@@ -55,6 +62,7 @@ class AprovisionarSucursalTests(TestCase):
         self.assertTrue(sucursal.activa)
         self.assertEqual(sucursal.roles.count(), 0)
         self.assertEqual(sucursal.usuarios_pos.count(), 0)
+        self.assertEqual(sucursal.mesas.count(), 0)
         self.assertIn("Sucursal aprovisionada", salida)
 
     def test_repetir_el_mismo_aprovisionamiento_no_modifica_la_sucursal(self):
@@ -133,6 +141,59 @@ class AprovisionarSucursalTests(TestCase):
             "SELECT pg_advisory_xact_lock(%s)", [2026091101]
         )
 
+
+@override_settings(SUCURSAL_CLAVE="NORTE_2")
+class InicializarOperacionSucursalTests(TestCase):
+    def setUp(self):
+        call_command(
+            "aprovisionar_sucursal",
+            clave="NORTE_2",
+            nombre="Sucursal Norte",
+            verbosity=0,
+        )
+        self.sucursal = Sucursal.objects.get()
+
+    def test_crea_solo_posiciones_neutras_y_es_idempotente(self):
+        call_command("inicializar_operacion_sucursal", verbosity=0)
+        ids_primera = set(Mesa.objects.values_list("id", flat=True))
+
+        self.assertEqual(Sucursal.objects.count(), 1)
+        self.assertEqual(
+            {
+                canal: Mesa.objects.filter(
+                    sucursal=self.sucursal,
+                    canal=canal,
+                    activa=True,
+                    cliente_sucursal__isnull=True,
+                ).count()
+                for canal in (
+                    Mesa.Canal.COMEDOR,
+                    Mesa.Canal.DOMICILIO,
+                    Mesa.Canal.LLEVAR,
+                    Mesa.Canal.RECOGER,
+                )
+            },
+            {
+                Mesa.Canal.COMEDOR: 24,
+                Mesa.Canal.DOMICILIO: 100,
+                Mesa.Canal.LLEVAR: 40,
+                Mesa.Canal.RECOGER: 40,
+            },
+        )
+        self.assertFalse(Rol.objects.exists())
+        self.assertFalse(Categoria.objects.exists())
+        self.assertFalse(Producto.objects.exists())
+        self.assertFalse(SucursalPedido.objects.exists())
+
+        call_command("inicializar_operacion_sucursal", verbosity=0)
+        self.assertEqual(Mesa.objects.count(), 204)
+        self.assertEqual(set(Mesa.objects.values_list("id", flat=True)), ids_primera)
+
+    def test_exige_identidad_previamente_aprovisionada(self):
+        with override_settings(SUCURSAL_CLAVE="SUR"), self.assertRaisesMessage(
+            CommandError, "no está aprovisionada"
+        ):
+            call_command("inicializar_operacion_sucursal", verbosity=0)
 
 class CargaHistoricaSucursalTests(TestCase):
     @override_settings(SUCURSAL_CLAVE="ARBOLEDAS")
@@ -306,3 +367,26 @@ class CrearOperadorInicialTests(TestCase):
         with self.assertRaisesMessage(CommandError, "No hay un perfil POS libre"):
             call_command("crear_operador_pos", username="operador", verbosity=0)
         self.assertFalse(UsuarioPOS.objects.exists())
+
+    @patch(
+        "personas.management.commands.crear_operador_pos.getpass",
+        side_effect=["ClaveOperativa!2026", "ClaveOperativa!2026"],
+    )
+    def test_rechaza_pin_igual_a_clave_maestra_inicial(self, _getpass):
+        ConfiguracionSucursal.objects.create(
+            sucursal=self.sucursal,
+            clave_administrador=make_password("0000"),
+        )
+
+        with self.assertRaisesMessage(CommandError, "clave maestra"):
+            call_command(
+                "crear_operador_pos",
+                username="operador",
+                nombre="Caja principal",
+                pin="0000",
+                crear_perfil_inicial=True,
+                verbosity=0,
+            )
+
+        self.assertFalse(UsuarioPOS.objects.exists())
+        self.assertFalse(get_user_model().objects.filter(username="operador").exists())

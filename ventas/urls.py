@@ -75,6 +75,16 @@ urlpatterns = [
         name="api_admin_programar_ticket",
     ),
     path(
+        "api/administrador/tickets/<uuid:ticket_id>/editar-programado/",
+        views.api_admin_editar_programado,
+        name="api_admin_editar_programado",
+    ),
+    path(
+        "api/administrador/tickets/<uuid:ticket_id>/desprogramar/",
+        views.api_admin_desprogramar_ticket,
+        name="api_admin_desprogramar_ticket",
+    ),
+    path(
         "api/administrador/tickets/<uuid:ticket_id>/reasignar/",
         views.api_admin_reasignar_ticket,
         name="api_admin_reasignar_ticket",
@@ -98,8 +108,17 @@ urlpatterns = [
         "api/administrador/reportes/parcial/",
         views.api_admin_reporte_parcial,
         name="api_admin_reporte_parcial",
+    ),    path(
+        "api/administrador/reportes/<uuid:reporte_id>/reimprimir/",
+        views.api_admin_reimprimir_reporte,
+        name="api_admin_reimprimir_reporte",
     ),
     path("api/administrador/movimientos/", views.api_admin_movimientos, name="api_admin_movimientos"),
+    path(
+        "api/administrador/control-efectivo/",
+        views.api_admin_control_efectivo,
+        name="api_admin_control_efectivo",
+    ),
     path(
         "api/administrador/movimientos/<uuid:movimiento_id>/",
         views.api_admin_movimiento,
@@ -114,6 +133,11 @@ urlpatterns = [
         "api/administrador/folios/reiniciar/",
         views.api_admin_reiniciar_folios,
         name="api_admin_reiniciar_folios",
+    ),
+    path(
+        "api/administrador/consolidacion-mensual/",
+        views.api_admin_consolidacion_mensual,
+        name="api_admin_consolidacion_mensual",
     ),
     path("api/administrador/corte-caja/", views.api_admin_corte_caja, name="api_admin_corte_caja"),
     path(

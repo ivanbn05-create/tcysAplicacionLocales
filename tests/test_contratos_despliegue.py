@@ -116,15 +116,26 @@ class ContratosDespliegueTests(unittest.TestCase):
         self.assertIn("PRINT_BACKEND=archivo", lineas)
         for nombre in ("PRINTER_CAJA_HOST", "PRINTER_COCINA_HOST", "PRINTER_BARRA_HOST"):
             self.assertIn(f"{nombre}=", lineas)
+        self.assertIn("VPS_CONSOLIDACION_URL=", lineas)
+        self.assertIn("VPS_CONSOLIDACION_TOKEN=", lineas)
+        self.assertIn("VPS_CONSOLIDACION_TIMEOUT=10", lineas)
 
-    def _importar_settings(self, clave, *, db_engine="sqlite", expresion="s.SUCURSAL_CLAVE"):
+    def _importar_settings(
+        self,
+        clave,
+        *,
+        db_engine="sqlite",
+        expresion="s.SUCURSAL_CLAVE",
+        extra_env=None,
+    ):
         entorno = {
             nombre: valor
             for nombre, valor in os.environ.items()
             if not nombre.startswith(
                 (
                     "DJANGO_", "WAITRESS_", "POSTGRES_", "POS_", "PRINT_",
-                    "PRINTER_", "PEDIDOS_SUCURSALES_", "THERMAL_",
+                    "PRINTER_", "PEDIDOS_SUCURSALES_", "VPS_CONSOLIDACION_",
+                    "THERMAL_",
                 )
             )
             and nombre not in {"DB_ENGINE", "SQLITE_PATH", "SUCURSAL_CLAVE"}
@@ -141,6 +152,8 @@ class ContratosDespliegueTests(unittest.TestCase):
                 "PRINT_BACKEND": "archivo",
             }
         )
+        if extra_env:
+            entorno.update(extra_env)
         codigo = (
             "import sys; "
             f"sys.path.insert(0, {str(RAIZ)!r}); "
@@ -179,6 +192,66 @@ class ContratosDespliegueTests(unittest.TestCase):
         )
         self.assertEqual(heredado.returncode, 0, heredado.stderr)
         self.assertEqual(heredado.stdout.strip(), "django.db.backends.sqlite3")
+
+    def test_settings_valida_consolidacion_vps_opcional(self):
+        desactivada = self._importar_settings(
+            "NORTE",
+            expresion="(bool(s.VPS_CONSOLIDACION_URL), bool(s.VPS_CONSOLIDACION_TOKEN), s.VPS_CONSOLIDACION_TIMEOUT)",
+        )
+        self.assertEqual(desactivada.returncode, 0, desactivada.stderr)
+        self.assertEqual(desactivada.stdout.strip(), "(False, False, 10)")
+
+        valida = self._importar_settings(
+            "NORTE",
+            expresion="(bool(s.VPS_CONSOLIDACION_URL), bool(s.VPS_CONSOLIDACION_TOKEN), s.VPS_CONSOLIDACION_TIMEOUT)",
+            extra_env={
+                "VPS_CONSOLIDACION_URL": "https://vps.example/api/consolidaciones",
+                "VPS_CONSOLIDACION_TOKEN": "token-de-prueba",
+                "VPS_CONSOLIDACION_TIMEOUT": "60",
+            },
+        )
+        self.assertEqual(valida.returncode, 0, valida.stderr)
+        self.assertEqual(valida.stdout.strip(), "(True, True, 60)")
+
+        casos_invalidos = (
+            (
+                {"VPS_CONSOLIDACION_URL": "https://vps.example/api", "VPS_CONSOLIDACION_TOKEN": ""},
+                "deben configurarse juntos",
+            ),
+            (
+                {"VPS_CONSOLIDACION_URL": "", "VPS_CONSOLIDACION_TOKEN": "token-de-prueba"},
+                "deben configurarse juntos",
+            ),
+            (
+                {"VPS_CONSOLIDACION_URL": "http://vps.example/api", "VPS_CONSOLIDACION_TOKEN": "token-de-prueba"},
+                "URL HTTPS absoluta",
+            ),
+            (
+                {"VPS_CONSOLIDACION_URL": "/api/consolidaciones", "VPS_CONSOLIDACION_TOKEN": "token-de-prueba"},
+                "URL HTTPS absoluta",
+            ),
+            (
+                {"VPS_CONSOLIDACION_URL": "https://usuario:secreto@vps.example/api", "VPS_CONSOLIDACION_TOKEN": "token-de-prueba"},
+                "sin credenciales embebidas",
+            ),
+            (
+                {"VPS_CONSOLIDACION_TIMEOUT": "0"},
+                "entero entre 1 y 60",
+            ),
+            (
+                {"VPS_CONSOLIDACION_TIMEOUT": "61"},
+                "entero entre 1 y 60",
+            ),
+            (
+                {"VPS_CONSOLIDACION_TIMEOUT": "1.5"},
+                "entero entre 1 y 60",
+            ),
+        )
+        for variables, mensaje in casos_invalidos:
+            with self.subTest(variables=tuple(sorted(variables))):
+                resultado = self._importar_settings("NORTE", extra_env=variables)
+                self.assertNotEqual(resultado.returncode, 0)
+                self.assertIn(mensaje, resultado.stderr)
 
 
 if __name__ == "__main__":
