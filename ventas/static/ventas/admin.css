@@ -141,7 +141,7 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
   height: calc(100vh - 64px);
   padding: 24px 0 18px;
   display: grid;
-  grid-template-rows: repeat(8, auto) 1fr auto;
+  grid-template-rows: repeat(8, auto) 1fr;
   align-content: start;
   color: rgba(255,255,255,.82);
   background: var(--riel);
@@ -165,16 +165,6 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .rail-item:hover { color: #fff; background: #303033; }
 .rail-item.activo { color: #111; background: var(--amarillo); }
 .rail-item.activo svg { stroke-width: 2.2; }
-.rail-ayuda {
-  margin: 18px 15px 0;
-  padding: 13px;
-  align-self: end;
-  display: grid;
-  gap: 5px;
-  border: 1px dashed rgba(255,255,255,.3);
-}
-.rail-ayuda strong { color: var(--amarillo); font-size: .68rem; text-transform: uppercase; }
-.rail-ayuda span { color: rgba(255,255,255,.6); font-size: .64rem; line-height: 1.45; }
 
 .admin-main { min-width: 0; padding: clamp(22px, 3vw, 42px); }
 .admin-main[aria-busy="true"] { cursor: progress; }
@@ -228,7 +218,6 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
   border-top: 5px solid var(--amarillo);
 }
 .hoja-fija { position: sticky; top: 90px; }
-.hoja-operaciones { margin-top: 18px; }
 .hoja-titulo {
   min-height: 44px;
   margin: -5px -3px 14px;
@@ -240,13 +229,6 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
   border-bottom: 2px solid var(--carbon);
 }
 .hoja-titulo > div { min-width: 0; display: flex; align-items: center; gap: 9px; }
-.hoja-titulo span {
-  min-width: 30px;
-  color: var(--rojo);
-  font-family: "Bebas Neue Tocayos", sans-serif;
-  font-size: 1.42rem;
-  text-align: center;
-}
 .hoja-titulo h2, .formulario-clave h3 {
   margin: 0;
   font-family: "Bebas Neue Tocayos", sans-serif;
@@ -343,30 +325,6 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .franja-totales .total-general span { color: rgba(0,0,0,.65); }
 .franja-totales + .dos-columnas { margin-top: 18px; }
 
-.pista-herramientas {
-  margin-top: 18px;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  border: 2px solid var(--carbon);
-  background: #fff;
-}
-.pista-herramientas button {
-  min-width: 0;
-  min-height: 58px;
-  padding: 10px 13px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border: 0;
-  border-right: 1px solid var(--borde);
-  color: var(--carbon);
-  background: transparent;
-  text-align: left;
-}
-.pista-herramientas button:last-child { border-right: 0; }
-.pista-herramientas button:hover { background: var(--amarillo-suave); }
-.pista-herramientas span { color: var(--rojo); font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.3rem; }
-.pista-herramientas strong { overflow: hidden; font-size: .65rem; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
 
 .boton {
   min-height: 44px;
@@ -406,8 +364,8 @@ input:focus, select:focus { border-color: var(--carbon); }
 .casilla input { width: 22px; min-height: 22px; accent-color: var(--verde); }
 .ayuda-campo, .formulario-admin > p { margin: -4px 0 0; color: var(--muted); font-size: .65rem; line-height: 1.45; }
 
-.lista-personal, .lista-domicilios, .lista-movimientos, .tabla-operaciones { display: grid; gap: 8px; }
-.fila-persona, .fila-movimiento, .fila-domicilio, .fila-operacion {
+.lista-personal, .lista-domicilios, .lista-movimientos { display: grid; gap: 8px; }
+.fila-persona, .fila-movimiento, .fila-domicilio {
   min-width: 0;
   min-height: 64px;
   padding: 10px;
@@ -421,13 +379,17 @@ input:focus, select:focus { border-color: var(--carbon); }
 .fila-persona.inactivo { background: #f2f0eb; opacity: .72; }
 .fila-persona div, .fila-domicilio div { min-width: 0; display: grid; gap: 2px; }
 .fila-persona strong, .fila-domicilio strong { overflow: hidden; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
-.fila-persona span, .fila-domicilio span, .fila-operacion small { color: var(--muted); font-size: .62rem; }
+.fila-persona span, .fila-domicilio span { color: var(--muted); font-size: .62rem; }
 .estado-chip { padding: 4px 7px; color: var(--verde-oscuro) !important; border: 1px solid currentColor; font-weight: 900; text-transform: uppercase; }
 .fila-domicilio { grid-template-columns: minmax(180px, 1fr) auto minmax(180px, .7fr) auto; }
 .fila-domicilio.asignado { border-color: #8f8611; background: #fffef0; }
 .fila-domicilio .total-fila { color: var(--carbon); font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.3rem; font-weight: 400; }
-.fila-operacion { grid-template-columns: minmax(135px, 1fr) minmax(160px, 1fr) minmax(120px, .65fr) auto; }
-.grupo-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.asignacion-control { min-width: 210px; display: grid; gap: 4px; }
+.asignacion-control label { display: grid; gap: 4px; color: var(--muted); font-size: .58rem; font-weight: 850; text-transform: uppercase; }
+.estado-asignacion { min-height: 16px; color: var(--muted); font-size: .58rem !important; font-weight: 800; }
+.asignacion-control.guardando .estado-asignacion { color: #705d00; }
+.asignacion-control.guardado .estado-asignacion { color: var(--verde-oscuro); }
+.asignacion-control.error .estado-asignacion { color: var(--rojo); }
 .fila-movimiento { grid-template-columns: auto minmax(0, 1fr) auto auto; }
 .fila-movimiento > b:first-child { color: var(--verde-oscuro); }
 .fila-movimiento.salida > b:first-child { color: var(--rojo); }
@@ -530,7 +492,9 @@ input:focus, select:focus { border-color: var(--carbon); }
 .pedido-ficha dl div:last-child { border-bottom: 0; }
 .pedido-ficha dt { color: var(--muted); font-size: .57rem; font-weight: 850; text-transform: uppercase; }
 .pedido-ficha dd { margin: 0; overflow-wrap: anywhere; font-size: .68rem; font-weight: 750; }
-.pedido-ficha-acciones { display: grid; }
+.pedido-ficha-acciones { display: grid; gap: 12px; }
+.pedido-descuento { display: grid; gap: 5px; color: var(--muted); font-size: .6rem; font-weight: 850; text-transform: uppercase; }
+.pedido-descuento span { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
 .aviso-mover { margin: 0 0 12px; padding: 11px 13px; color: #fff; background: var(--verde-oscuro); font-size: .7rem; font-weight: 800; }
 .barra-lote {
   position: sticky;
@@ -622,11 +586,9 @@ dialog::backdrop { background: rgba(20,20,20,.72); }
   .admin-rail { padding-top: 15px; }
   .rail-item { min-height: 62px; padding: 8px; grid-template-columns: 1fr; justify-items: center; gap: 3px; text-align: center; }
   .rail-item span { font-size: .56rem; line-height: 1.1; }
-  .rail-ayuda { display: none; }
   .bandeja-grid { grid-template-columns: minmax(0, 1.65fr) minmax(250px, 1fr); }
   .fila-domicilio { grid-template-columns: minmax(140px, 1fr) auto; }
   .fila-domicilio .asignacion-control { grid-column: 1 / -1; }
-  .fila-operacion { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 760px) {
@@ -670,11 +632,7 @@ dialog::backdrop { background: rgba(20,20,20,.72); }
   .ticket-pendiente { min-height: 140px; }
   .franja-totales { grid-template-columns: repeat(2, 1fr); }
   .franja-totales .total-general { grid-column: 1 / -1; }
-  .pista-herramientas { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .pista-herramientas button { border-bottom: 1px solid var(--borde); }
-  .pista-herramientas button:nth-child(2n) { border-right: 0; }
-  .pista-herramientas button:nth-last-child(-n + 2) { border-bottom: 0; }
-  .fila-domicilio, .fila-operacion { grid-template-columns: 1fr; }
+  .fila-domicilio { grid-template-columns: 1fr; }
   .fila-movimiento { grid-template-columns: auto minmax(0, 1fr) auto; }
   .movimiento-acciones { grid-column: 1 / -1; justify-content: stretch; }
   .movimiento-acciones .boton { flex: 1; }

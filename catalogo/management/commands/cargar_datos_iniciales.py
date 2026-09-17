@@ -65,7 +65,7 @@ MENU = [
     ("SPRITE", "Sprite", "Bebidas", "SPRT", "30.00", "barra"),
     ("SPRITESA", "Sprite sin azúcar", "Bebidas", "SPRT/SA", "30.00", "barra"),
     ("SIDRAL", "Sidral", "Bebidas", "SDRL", "30.00", "barra"),
-    ("AM", "Agua mineral", "Bebidas", "AM", "30.00", "barra"),
+    ("AM", "Agua mineral", "Bebidas", "Topo", "32.00", "barra"),
     ("FLCAJ", "Flan de cajeta", "Postre", "FL CAJ", "40.00", "barra"),
     ("FLCAR", "Flan de caramelo", "Postre", "FL CAR", "40.00", "barra"),
     ("JERICALLA", "Jericalla", "Postre", "JER", "40.00", "barra"),

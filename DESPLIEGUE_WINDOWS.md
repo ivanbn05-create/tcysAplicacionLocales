@@ -2,8 +2,8 @@
 
 ## Alcance y límites actuales
 
-Guía del servidor Edge Windows actual, revisada el 2026-09-13 después de la
-recuperación de servicio iniciada el 2026-08-30. En el equipo de desarrollo se
+Guía del servidor Edge Windows actual, revisada el 2026-09-15 después de una
+instalación limpia A y una actualización real A→B en laboratorio. En el equipo de desarrollo se
 verificaron Windows PowerShell 5.1, Python 3.13.14 de 64 bits instalado para
 todos los usuarios y HTTP LAN en el puerto 8000. Esta línea de releases fija
 exactamente la versión mayor/menor Python 3.13: se admite una revisión `3.13.x`
@@ -50,6 +50,8 @@ La arquitectura futura y las decisiones vigentes de distribución están en
 Este archivo sigue siendo exclusivamente el runbook del **servidor Edge Windows
 actual** y tiene precedencia para toda operación, diagnóstico o recuperación de
 esa instalación. No describe ni instala el backend central de Hostinger KVM 2.
+El flujo de desarrollo, soporte por sucursal y clientes instalables se documenta
+en [FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md](FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md).
 
 ## Estado consolidado del instalador al 2026-09-14
 
@@ -63,7 +65,7 @@ esa instalación. No describe ni instala el backend central de Hostinger KVM 2.
 | Red y seguridad | Firewall privado, hosts explícitos, opción HTTPS y rechazo de configuraciones inseguras implícitas | Firma del publicador y canal de actualización |
 | Identidad | Clave/nombre obligatorios en instalación; adopción idempotente de instalaciones antiguas; sin fallback de producción | Enrolamiento autorizado por el VPS mediante código de un solo uso o archivo firmado |
 | Catálogo | La actualización nunca carga semilla; Arboledas sólo puede solicitarla explícitamente en instalación | Paquete inicial versionado, validado y específico por sucursal |
-| Módulos | Código común reutilizable | No existe selección, configuración ni validación de módulos por sucursal |
+| Módulos | Candidata B con `Modulo`/`ModuloSucursal`, núcleo/opcionales, dependencias y defensa en UI/API/tareas | Aceptar lista definitiva, probar instalación limpia B y enrolamiento futuro desde VPS |
 | Release | ZIP reproducible; manifiesto v2 para `cp313/win_amd64`; pins exactos; wheelhouse offline resuelto sin fuentes externas; WHEEL/RECORD/CRC validados; CA pública y puente histórico de Arboledas temporal; excluye secretos, estado, árboles dirty y cualquier módulo no declarado | Firma, construcción atestada en CI, bundle de catálogo por sucursal e integración del paquete con el actualizador |
 
 ### Backlog obligatorio del instalador y actualizador
@@ -77,10 +79,10 @@ esa instalación. No describe ni instala el backend central de Hostinger KVM 2.
    todavía no acredita quién autorizó la sucursal.
 4. Convertir la carga inicial de catálogo en un paquete explícito, versionado y
    específico por sucursal. La semilla histórica de Arboledas no es genérica.
-5. Aprovisionar por separado módulos y credenciales. Red, respaldo e impresoras
-   ya tienen parámetros de alta separados; falta modelar módulos mínimos y
-   validar dispositivos. La selección pertenece al servidor Edge, no al
-   instalador del cliente ligero.
+5. Terminar el aprovisionamiento de módulos y credenciales. La candidata B ya
+   modela módulos mínimos/opcionales y solicita un primer operador; faltan
+   aceptación funcional, enrolamiento autorizado y validación de dispositivos.
+   La selección pertenece al servidor Edge, no al instalador del cliente ligero.
 6. Preparar la release en staging antes de detener el servicio, verificar su firma
    y manifiesto, hacer un cambio atómico y conservar rollback compatible. Los
    respaldos previos ya existen, pero no equivalen a rollback automático.
@@ -418,10 +420,13 @@ eliminan esos directorios automaticamente y Git los ignora.
 ### Cuentas de acceso
 
 Las cuentas sólo se revisan durante la instalación inicial. Si no hay
-superusuario, se solicita crearlo para mantener Django en `/admin/`. La cuenta
-operativa sólo puede crearse si ya existe un perfil POS activo y disponible en la
-sucursal. Una instalación sin paquete de catálogo/roles/perfiles puede terminar
-correctamente, pero todavía no está lista para cobrar.
+superusuario, se solicita crearlo para mantener Django en `/admin/`. En la
+candidata B, si no existe ningún perfil operativo, el instalador crea de forma
+interactiva el rol Encargado, el primer perfil POS, un PIN de cuatro dígitos y la
+cuenta no administrativa asociada. No se crean credenciales predeterminadas. La
+actualización nunca crea ni cambia cuentas. En la instalación de laboratorio se
+confirmaron después un perfil POS activo y una cuenta operativa activa; falta la
+aceptación manual del ingreso y el PIN.
 
 La contraseña web de una cuenta operativa es distinta del PIN de cuatro números
 del personal. Elegir contraseñas diferentes y largas (al menos 12 caracteres
@@ -603,9 +608,9 @@ Cambiar productos/precios desde la aplicacion modifica la base local, no Git.
 La estrategia vigente es un repositorio común, releases versionadas y datos y
 configuración propios por sucursal. Menús distintos no requieren ramas
 permanentes. Ya existen operaciones separadas y la actualización omite toda carga
-de catálogo, pero todavía no descarga/verifica/activa la release ni selecciona
-módulos. La consolidación diaria en el futuro VPS tampoco forma parte de estos
-scripts.
+de catálogo. La candidata B selecciona módulos localmente, pero todavía no
+descarga/verifica/activa por sí sola el ZIP ni recibe entitlements del VPS. La
+consolidación futura tampoco forma parte de estos scripts.
 
 Antes de distribuir a otra sucursal: generar y verificar el paquete completo,
 definir su identidad y preparar un catálogo inicial sin sobrescrituras. Antes de

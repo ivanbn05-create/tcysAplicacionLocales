@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from catalogo.models import Producto
 from personas.models import Sucursal, UsuarioPOS
+from personas.modulos import modulo_habilitado
 
 from .models import (
     ConsecutivoFolio,
@@ -16,6 +17,7 @@ from .models import (
     ModificadorTicket,
     Partida,
     ProductoSucursal,
+    SolicitudRepeticionTicket,
     Ticket,
 )
 from .normalizacion import normalizar_telefono
@@ -69,6 +71,7 @@ TICKET_LOCK_FIELDS = [
     "bloqueo_expira_en",
 ]
 _ATENDIO_AUTOMATICO = object()
+CANTIDAD_MAXIMA_POS = Decimal("9999")
 
 
 def validar_comanda_editable(ticket):
@@ -477,7 +480,10 @@ def _reasignar_componentes_promocion(ticket):
             consolidadas[clave] = partida
             continue
         principal = consolidadas[clave]
-        principal.cantidad += partida.cantidad
+        cantidad_acumulada = principal.cantidad + partida.cantidad
+        if cantidad_acumulada > CANTIDAD_MAXIMA_POS:
+            raise ErrorVenta("La cantidad acumulada no puede superar 9999.")
+        principal.cantidad = cantidad_acumulada
         principal.save(update_fields=["cantidad"])
         partida.delete()
 
@@ -656,8 +662,8 @@ def agregar_partida(
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     validar_comanda_editable(ticket)
     cantidad = Decimal(str(cantidad))
-    if cantidad != cantidad.to_integral_value() or not 1 <= cantidad <= 99:
-        raise ErrorVenta("La cantidad debe ser un entero entre 1 y 99.")
+    if cantidad != cantidad.to_integral_value() or not 1 <= cantidad <= CANTIDAD_MAXIMA_POS:
+        raise ErrorVenta("La cantidad debe ser un entero entre 1 y 9999.")
     precio = producto.precio_actual()
     if not producto.activo or not precio:
         raise ErrorVenta("El producto no tiene un precio activo.")
@@ -794,8 +800,8 @@ def actualizar_partida(partida, cantidad, termino=None, validar_componente=True)
         guardar_ticket(ticket, [])
         _evento(ticket, "ticket.partida_eliminada", {"partida_id": partida_id})
         return None
-    if cantidad != cantidad.to_integral_value() or cantidad > 99:
-        raise ErrorVenta("La cantidad debe ser un entero entre 1 y 99.")
+    if cantidad != cantidad.to_integral_value() or cantidad > CANTIDAD_MAXIMA_POS:
+        raise ErrorVenta("La cantidad debe ser un entero entre 1 y 9999.")
     partida.cantidad = cantidad
     campos = ["cantidad"]
     if termino is not None:
@@ -846,8 +852,8 @@ def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar
         _evento(ticket, "ticket.partidas_eliminadas", {"partida_ids": ids})
         return None
     cantidad = Decimal(str(cantidad))
-    if cantidad != cantidad.to_integral_value() or not 1 <= cantidad <= 99:
-        raise ErrorVenta("La cantidad debe ser un entero entre 1 y 99.")
+    if cantidad != cantidad.to_integral_value() or not 1 <= cantidad <= CANTIDAD_MAXIMA_POS:
+        raise ErrorVenta("La cantidad debe ser un entero entre 1 y 9999.")
     duplicadas_destino = []
     if termino is not None and termino != principal.termino:
         termino_destino, _, _ = _datos_termino(principal.producto, termino)
@@ -863,8 +869,8 @@ def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar
             .exclude(id__in=[partida.id for partida in partidas])
         )
         cantidad += sum((partida.cantidad for partida in duplicadas_destino), Decimal("0"))
-        if cantidad > 99:
-            raise ErrorVenta("La cantidad acumulada no puede superar 99.")
+        if cantidad > CANTIDAD_MAXIMA_POS:
+            raise ErrorVenta("La cantidad acumulada no puede superar 9999.")
     duplicadas = partidas[1:] + duplicadas_destino
     if principal.promocion_aplicada_id:
         precio = principal.producto.precio_actual()
@@ -978,8 +984,8 @@ def asegurar_modificador(ticket, comensales, codigo, nombre):
 @transaction.atomic
 def agregar_comanda(ticket):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
-    if ticket.canal == Mesa.Canal.SUCURSALES:
-        raise ErrorVenta("Los pedidos de sucursal no admiten comandas adicionales.")
+    if ticket.canal not in {Mesa.Canal.COMEDOR, Mesa.Canal.LLEVAR}:
+        raise ErrorVenta("Este canal requiere crear un pedido independiente.")
     if ticket.estado != Ticket.Estado.PROCESADO or ticket.comanda_en_edicion:
         raise ErrorVenta("Primero procesa la comanda actual.")
     if ticket.liquidaciones_repartidor.exists() or ticket.cortes_caja.exists():
@@ -1000,6 +1006,97 @@ def agregar_comanda(ticket):
         {"comanda_numero": ticket.comanda_actual},
     )
     return ticket
+
+
+@transaction.atomic
+def crear_ticket_repetido(ticket, clave_idempotencia, atendio=None):
+    """Crea un pedido vacío del mismo cliente sin copiar estado transaccional."""
+
+    ticket = (
+        Ticket.objects.select_for_update()
+        .select_related("mesa", "cliente", "telefono_cliente", "domicilio_cliente", "atendio")
+        .get(pk=ticket.pk)
+    )
+    if ticket.canal not in {Mesa.Canal.DOMICILIO, Mesa.Canal.RECOGER}:
+        raise ErrorVenta("Este canal agrega una comanda al pedido actual.")
+
+    clave = str(clave_idempotencia or "").strip()
+    if not 16 <= len(clave) <= 128 or any(ord(caracter) < 32 for caracter in clave):
+        raise ErrorVenta("La clave idempotente del nuevo pedido no es válida.")
+    existente = (
+        SolicitudRepeticionTicket.objects.select_related("ticket_nuevo")
+        .filter(ticket_origen=ticket, clave_idempotencia=clave)
+        .first()
+    )
+    if existente:
+        return existente.ticket_nuevo, False
+
+    if ticket.canal == Mesa.Canal.DOMICILIO and not modulo_habilitado(ticket.sucursal, "domicilios"):
+        raise ErrorVenta("El módulo de domicilios no está habilitado en esta sucursal.")
+    if ticket.estado != Ticket.Estado.PROCESADO or ticket.comanda_en_edicion:
+        raise ErrorVenta("Primero procesa el pedido actual.")
+    if ticket.cortes_caja.exists() or ticket.liquidaciones_repartidor.exists():
+        raise ErrorVenta("El pedido ya pertenece a un cierre.")
+
+    posiciones = list(
+        Mesa.objects.select_for_update()
+        .filter(sucursal=ticket.sucursal, canal=ticket.canal, activa=True)
+        .order_by("orden", "nombre")
+    )
+    ocupadas = set(
+        Ticket.objects.filter(mesa__in=posiciones, estado__in=ESTADOS_ACTIVOS).values_list(
+            "mesa_id", flat=True
+        )
+    )
+    posicion = next((mesa for mesa in posiciones if mesa.id not in ocupadas), None)
+    if posicion is None:
+        raise ErrorVenta(
+            f"No hay posiciones de {Mesa.Canal(ticket.canal).label.lower()} disponibles."
+        )
+
+    operador = atendio if atendio is not None else ticket.atendio
+    nuevo, creado = abrir_ticket(posicion, atendio=operador)
+    if not creado:
+        raise ErrorVenta("La posición seleccionada dejó de estar disponible.")
+
+    campos = []
+    if ticket.canal == Mesa.Canal.DOMICILIO:
+        for campo in (
+            "cliente",
+            "telefono_cliente",
+            "domicilio_cliente",
+            "cliente_nombre",
+            "cliente_telefono",
+            "cliente_domicilio",
+            "cliente_referencia",
+            "contacto_pedido_nombre",
+            "contacto_pedido_telefono",
+        ):
+            setattr(nuevo, campo, getattr(ticket, campo))
+            campos.append(campo)
+    else:
+        nuevo.cliente_nombre = ticket.cliente_nombre
+        nuevo.cliente_telefono = ticket.cliente_telefono
+        campos.extend(["cliente_nombre", "cliente_telefono"])
+    guardar_ticket(nuevo, campos)
+
+    SolicitudRepeticionTicket.objects.create(
+        sucursal=ticket.sucursal,
+        ticket_origen=ticket,
+        ticket_nuevo=nuevo,
+        clave_idempotencia=clave,
+    )
+    _evento(
+        ticket,
+        "ticket.repeticion_solicitada",
+        {"ticket_nuevo_id": str(nuevo.id), "clave_idempotencia": clave},
+    )
+    _evento(
+        nuevo,
+        "ticket.creado_por_repeticion",
+        {"ticket_origen_id": str(ticket.id)},
+    )
+    return nuevo, True
 
 
 @transaction.atomic

@@ -156,7 +156,9 @@ button.comanda-etiqueta { width: 100%; }
 .comanda-numero.activo, .comanda-comentario.activo { color: #fff; background: var(--rojo); }
 .comanda-global { grid-column: 1 / -1; min-height: 42px !important; color: var(--carbon) !important; background: var(--amarillo-suave) !important; font-weight: 800; }
 .comanda-comentario { font-size: .66rem; font-weight: 800; overflow-wrap: anywhere; }
-.cantidad-celda { font-size: 1.08rem; font-weight: 900; }
+.cantidad-celda { font-size: 1.08rem; font-weight: 900; font-variant-numeric: tabular-nums; }
+.cantidad-celda.cantidad-tres-digitos { font-size: .9rem; letter-spacing: -.025em; }
+.cantidad-celda.cantidad-cuatro-digitos { font-size: .74rem; letter-spacing: -.045em; }
 .cantidad-celda.seleccionada { box-shadow: inset 0 0 0 3px var(--amarillo); background: #fffde0; }
 .comanda-vacio { grid-column: 1 / -1; min-height: 62px !important; padding: 12px !important; color: var(--muted) !important; }
 .comanda-bebidas { width: 100%; min-height: 38px; margin-top: 5px; padding: 6px 8px; display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 5px 9px; border: 1px dashed #777; color: #111; background: #fff; text-align: left; }
@@ -201,8 +203,12 @@ dialog::backdrop { background: rgba(6,22,36,.68); backdrop-filter: blur(4px); }
 .grupo-formulario { display: grid; gap: 9px; padding: 13px; border: 1px solid var(--borde); border-radius: 13px; background: #f8f6ef; }
 .filas-cliente { display: grid; gap: 8px; }
 .fila-telefono, .fila-domicilio { position: relative; display: grid; gap: 8px; padding: 10px 42px 10px 10px; border: 1px solid #ded9cc; border-radius: 10px; background: #fff; }
-.fila-telefono { grid-template-columns: minmax(100px, .38fr) minmax(190px, 1fr); }
-.fila-domicilio { grid-template-columns: minmax(150px, 1.4fr) minmax(80px, .55fr) minmax(80px, .55fr); }
+.fila-telefono { grid-template-columns: minmax(0, 1fr); }
+.fila-domicilio { grid-template-columns: minmax(110px, 1fr) minmax(110px, 1fr) minmax(90px, .75fr); }
+.fila-domicilio .domicilio-calle-campo { grid-column: 1 / -1; }
+.fila-domicilio .domicilio-exterior-campo { grid-column: 1; }
+.fila-domicilio .domicilio-interior-campo { grid-column: 2; }
+.fila-domicilio .domicilio-cp-campo { grid-column: 3; }
 .fila-domicilio .domicilio-colonia { grid-column: 1 / 2; }
 .fila-domicilio .domicilio-municipio { grid-column: 2 / 4; }
 .fila-domicilio .domicilio-referencia { grid-column: 1 / -1; }
@@ -310,7 +316,7 @@ legend { margin-bottom: 8px; color: var(--muted); font-size: .75rem; font-weight
   .modo-tableta .ticket-top { min-height: 42px; }
   .cliente-formulario { padding: 22px 14px 14px; }
   .fila-telefono, .fila-domicilio { grid-template-columns: 1fr; }
-  .fila-domicilio .domicilio-colonia, .fila-domicilio .domicilio-municipio, .fila-domicilio .domicilio-referencia { grid-column: 1; }
+  .fila-domicilio .domicilio-calle-campo, .fila-domicilio .domicilio-exterior-campo, .fila-domicilio .domicilio-interior-campo, .fila-domicilio .domicilio-cp-campo, .fila-domicilio .domicilio-colonia, .fila-domicilio .domicilio-municipio, .fila-domicilio .domicilio-referencia { grid-column: 1; }
 }
 
 /* Operación compacta: 100 % de zoom es la escala de trabajo prevista. */
@@ -607,6 +613,14 @@ body {
 .interruptor-terminal:hover input:checked + span { color: #fff; border-color: var(--rojo); background: var(--rojo); box-shadow: 0 0 0 3px rgba(228, 37, 34, .16); }
 
 .comanda-cliente-directo { display: block; padding: 4px 6px; border: 1px solid #111; text-align: center; text-transform: uppercase; }
+.comanda-cliente-llevar { width: min(290px, 72%); justify-self: end; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 7px; color: #111; font-size: .6rem; font-weight: 900; text-transform: uppercase; }
+.comanda-cliente-llevar input { min-width: 0; min-height: 36px; padding: 5px 7px; border: 1px solid #111; border-radius: 0; color: #111; background: #fff; font: 800 .75rem/1.2 Arial, sans-serif; text-transform: none; }
+.comanda-cliente-llevar input:disabled { color: #333; background: #f1f0ec; opacity: 1; }
+.comanda-cliente-llevar small { grid-column: 1 / -1; justify-self: end; color: #555; font: 700 .54rem/1.2 "Montserrat Tocayos", Montserrat, sans-serif; letter-spacing: 0; text-transform: none; }
+.comanda-cliente-llevar small.guardado { color: var(--verde-oscuro); }
+.comanda-cliente-llevar small.pendiente, .comanda-cliente-llevar small.guardando { color: #705d00; }
+.comanda-cliente-llevar small.error { color: var(--rojo); }
+.comanda-cliente-llevar input[aria-invalid="true"] { border-color: var(--rojo); box-shadow: 0 0 0 3px rgba(228,37,34,.12); }
 .comanda-matriz-nombres { display: grid; grid-template-columns: minmax(92px, 1.05fr) repeat(4, minmax(52px, 1fr)); border-top: 2px solid #111; border-left: 1px solid #111; }
 .comanda-matriz-nombres > * { min-width: 0; min-height: 45px; padding: 4px; display: grid; place-items: center; border: 0; border-right: 1px solid #111; border-bottom: 1px solid #111; color: #111; background: #fff; font-size: .69rem; }
 .comanda-matriz-nombres .encabezado-nombre, .comanda-matriz-nombres .encabezado-producto { min-height: 38px; font-weight: 900; text-align: center; text-transform: uppercase; }
@@ -615,6 +629,8 @@ body {
 .comanda-nombre-persona b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .comanda-nombre-persona small { color: #444; font-size: .55rem; }
 .comanda-nombre-celda { font-size: .92rem !important; font-weight: 900; }
+.comanda-nombre-celda.cantidad-tres-digitos { font-size: .78rem !important; }
+.comanda-nombre-celda.cantidad-cuatro-digitos { font-size: .66rem !important; }
 .comanda-nombre-celda.seleccionada { box-shadow: inset 0 0 0 3px var(--rojo); background: var(--amarillo-suave); }
 .comanda-extras-nombres { width: 100%; min-height: 42px; padding: 6px 8px; display: grid; grid-template-columns: auto 1fr; gap: 8px; border: 1px solid #111; border-top: 0; color: #111; background: #fff; text-align: left; }
 .comanda-extras-nombres strong { text-transform: uppercase; }

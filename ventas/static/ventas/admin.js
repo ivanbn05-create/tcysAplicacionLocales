@@ -18,6 +18,8 @@
     ticketsSeleccionados: new Set(),
     canalPedidosAbierto: "",
     movimientoEditandoId: "",
+    asignacionesRepartidor: new Map(),
+    secuenciaAsignacion: 0,
   };
 
   class ErrorAPI extends Error {
@@ -249,11 +251,6 @@
     return '<option value="">Seleccionar repartidor</option>' + repartidores.map(item => '<option value="' + escapar(item.id) + '" ' + (String(item.id) === String(seleccionado) ? "selected" : "") + '>' + escapar(item.nombre) + '</option>').join("");
   }
 
-  function opcionesPosiciones() {
-    const posiciones = posicionesCompletas().filter(item => item.disponible !== false && !item.ticket_id);
-    return '<option value="">Posición libre</option>' + posiciones.map(item => '<option value="' + escapar(item.id) + '">' + escapar(item.canal_etiqueta) + ' · ' + escapar(item.nombre) + '</option>').join("");
-  }
-
   function tickets() {
     return estado.administrador?.tickets || [];
   }
@@ -326,7 +323,7 @@
     const creado = ticket.creado_en || ticket.detalles?.creado_en || ticket.detalles?.creado;
     $("#dialogo-detalle-pedido-titulo").textContent = "Detalle del pedido #" + ticket.folio;
     contenedor.innerHTML =
-      '<article class="pedido-ficha">' +
+      '<article class="pedido-ficha" data-ticket-id="' + escapar(ticket.id) + '">' +
         '<div class="pedido-ficha-folio"><span>' + escapar(ticket.canal_etiqueta) + '</span><strong>#' + escapar(ticket.folio) + '</strong></div>' +
         '<h3>' + escapar(ticket.mesa) + '</h3>' +
         '<dl>' +
@@ -338,6 +335,7 @@
           '<div><dt>Repartidor</dt><dd>' + escapar(ticket.repartidor || "Sin asignar") + '</dd></div>' +
         '</dl>' +
         '<div class="pedido-ficha-acciones">' +
+          '<label class="pedido-descuento">Descuento porcentual<span><input type="number" min="0" max="100" step="0.01" value="' + escapar(ticket.descuento_porcentaje) + '" aria-label="Descuento porcentual"><button class="boton" data-accion-ticket="descuento" type="button">Guardar descuento</button></span></label>' +
           '<button class="boton peligro" data-pedido-accion="cancelar" data-ticket-id="' + escapar(ticket.id) + '" type="button">Cancelar pedido</button>' +
         '</div>' +
       '</article>';
@@ -545,13 +543,11 @@
     }
   }
 
-  function tarjetaTicket(ticket, { asignar = false, programar = false } = {}) {
+  function tarjetaTicket(ticket, { programar = false } = {}) {
     const programacion = programacionPredeterminada();
-    const controles = asignar
-      ? `<div class="ticket-controles"><select aria-label="Repartidor para ticket ${ticket.folio}">${opcionesRepartidores(ticket.repartidor_id)}</select><button class="boton mini primario" data-accion-ticket="asignar" type="button">Asignar</button></div>`
-      : programar
-        ? `<div class="ticket-controles programacion-control"><input type="date" min="${programacion.minima}" value="${programacion.fecha}" aria-label="Fecha para ticket ${ticket.folio}"><input type="time" value="${programacion.hora}" aria-label="Hora para ticket ${ticket.folio}"><button class="boton mini primario" data-accion-ticket="programar" type="button">Programar</button></div>`
-        : "";
+    const controles = programar
+      ? `<div class="ticket-controles programacion-control"><input type="date" min="${programacion.minima}" value="${programacion.fecha}" aria-label="Fecha para ticket ${ticket.folio}"><input type="time" value="${programacion.hora}" aria-label="Hora para ticket ${ticket.folio}"><button class="boton mini primario" data-accion-ticket="programar" type="button">Programar</button></div>`
+      : "";
     return `<article class="ticket-pendiente ${ticket.estado === "programado" ? "programado" : ""}" data-ticket-id="${ticket.id}">
       <div class="ticket-cabecera"><strong>${escapar(ticket.mesa || ticket.canal_etiqueta)}</strong><b>#${escapar(ticket.folio)}</b></div>
       <div class="ticket-cliente">${escapar(ticket.cliente_nombre || "Cliente sin nombre")}</div>
@@ -565,7 +561,7 @@
     $("#conteo-domicilios").textContent = admin.domicilios_sin_repartidor.length;
     $("#conteo-programados").textContent = admin.programados.length;
     $("#inicio-domicilios").innerHTML = admin.domicilios_sin_repartidor.length
-      ? admin.domicilios_sin_repartidor.map(ticket => tarjetaTicket(ticket, { asignar: true })).join("")
+      ? admin.domicilios_sin_repartidor.map(ticket => tarjetaTicket(ticket)).join("")
       : '<p class="vacio">Todos los domicilios procesados ya tienen repartidor.</p>';
     $("#inicio-programados").innerHTML = admin.programados.length
       ? admin.programados.map(ticket => tarjetaTicket(ticket)).join("")
@@ -608,22 +604,18 @@
 
   function renderDomicilios() {
     const tickets = (estado.administrador.tickets || []).filter(ticket => ticket.canal === "domicilio" && ticket.estado === "procesado");
-    $("#lista-domicilios").innerHTML = tickets.length ? tickets.map(ticket => `<article class="fila-domicilio ${ticket.repartidor_id ? "asignado" : ""}" data-ticket-id="${ticket.id}">
-      <div><strong>#${escapar(ticket.folio)} · ${escapar(ticket.cliente_nombre || "Sin nombre")}</strong><span>${escapar(ticket.cliente_domicilio || "Sin domicilio")} · ${ticket.terminal ? "Terminal" : "Efectivo"}</span></div>
-      <b class="total-fila">${dinero(ticket.total)}</b>
-      <div class="grupo-control asignacion-control"><select aria-label="Repartidor">${opcionesRepartidores(ticket.repartidor_id)}</select><button class="boton mini primario" data-accion-ticket="asignar" type="button">${ticket.repartidor_id ? "Cambiar" : "Asignar"}</button></div>
-    </article>`).join("") : '<p class="vacio">No hay domicilios procesados en el turno.</p>';
-
-    const administrables = (estado.administrador.tickets || []).filter(ticket => ["abierto", "procesado", "cobrar", "programado"].includes(ticket.estado));
-    $("#lista-operaciones-ticket").innerHTML = administrables.length ? administrables.map(ticket => {
-      const reasignable = ticket.estado !== "programado" && ticket.canal !== "sucursales";
-      return `<article class="fila-operacion" data-ticket-id="${ticket.id}">
-        <div><strong>#${escapar(ticket.folio)} · ${escapar(ticket.mesa)}</strong><small>${escapar(ticket.canal_etiqueta)} · ${escapar(ticket.estado_etiqueta)} · ${dinero(ticket.total)}</small></div>
-        ${reasignable ? `<div class="grupo-control"><select aria-label="Nueva posición">${opcionesPosiciones()}</select><button class="boton mini" data-accion-ticket="reasignar" type="button">Mover</button></div>` : '<small>Sin reasignación disponible</small>'}
-        <div class="grupo-control"><input type="number" min="0" max="100" step="0.01" value="${escapar(ticket.descuento_porcentaje)}" aria-label="Descuento porcentual"><button class="boton mini" data-accion-ticket="descuento" type="button">%</button></div>
-        <button class="boton mini peligro" data-accion-ticket="cancelar" type="button">Cancelar</button>
+    $("#lista-domicilios").innerHTML = tickets.length ? tickets.map(ticket => {
+      const estadoId = `estado-repartidor-${ticket.id}`;
+      const asignado = Boolean(ticket.repartidor_id);
+      return `<article class="fila-domicilio ${asignado ? "asignado" : ""}" data-ticket-id="${ticket.id}">
+        <div><strong>#${escapar(ticket.folio)} · ${escapar(ticket.cliente_nombre || "Sin nombre")}</strong><span>${escapar(ticket.cliente_domicilio || "Sin domicilio")} · ${ticket.terminal ? "Terminal" : "Efectivo"}</span></div>
+        <b class="total-fila">${dinero(ticket.total)}</b>
+        <div class="asignacion-control">
+          <label>Repartidor<select data-asignar-repartidor data-valor-anterior="${escapar(ticket.repartidor_id || "")}" aria-describedby="${estadoId}">${opcionesRepartidores(ticket.repartidor_id)}</select></label>
+          <span id="${estadoId}" class="estado-asignacion ${asignado ? "guardado" : "pendiente"}" role="status" aria-live="polite">${asignado ? "Asignado" : "Selecciona un repartidor"}</span>
+        </div>
       </article>`;
-    }).join("") : '<p class="vacio">No hay pedidos activos para administrar.</p>';
+    }).join("") : '<p class="vacio">No hay domicilios procesados en el turno.</p>';
   }
 
   function renderProgramados() {
@@ -655,7 +647,7 @@
 
   function renderTodo() {
     const admin = estado.administrador;
-    $("#turno-inicio").textContent = `Desde ${fechaHora(admin.inicio_turno)}`;
+    $("#turno-inicio").textContent = admin.inicio_turno ? `Desde ${fechaHora(admin.inicio_turno)}` : "Sin pedidos en el turno";
     renderPendientes();
     renderTotales();
     renderPersonal();
@@ -666,17 +658,74 @@
     renderSucursales();
   }
 
+  async function asignarRepartidorInmediato(select) {
+    const fila = select.closest("[data-ticket-id]");
+    const ticketId = fila?.dataset.ticketId;
+    const contenedor = select.closest(".asignacion-control");
+    const estadoNodo = contenedor?.querySelector(".estado-asignacion");
+    if (!ticketId || !contenedor || !estadoNodo) return;
+    const anterior = select.dataset.valorAnterior || "";
+    const repartidorId = select.value;
+    if (!repartidorId) {
+      select.value = anterior;
+      contenedor.classList.remove("guardando", "guardado");
+      contenedor.classList.add("error");
+      estadoNodo.textContent = "Elige un repartidor activo";
+      toast("Selecciona un repartidor activo; se conservó la asignación anterior.", true);
+      return;
+    }
+    const token = ++estado.secuenciaAsignacion;
+    estado.asignacionesRepartidor.set(String(ticketId), token);
+    contenedor.classList.remove("error", "guardado");
+    contenedor.classList.add("guardando");
+    estadoNodo.textContent = "Guardando…";
+    select.disabled = true;
+    select.setAttribute("aria-busy", "true");
+    ajustarEstadoOcupado(1);
+    try {
+      const ejecutar = () => api(`/api/administrador/tickets/${ticketId}/repartidor/`, {
+        method: "POST",
+        body: JSON.stringify({ repartidor_id: repartidorId }),
+      });
+      try {
+        await ejecutar();
+      } catch (error) {
+        if (error.status !== 401 || !(await autorizarEntrada())) throw error;
+        await ejecutar();
+      }
+      if (estado.asignacionesRepartidor.get(String(ticketId)) !== token) return;
+      select.dataset.valorAnterior = repartidorId;
+      contenedor.classList.remove("guardando", "error");
+      contenedor.classList.add("guardado");
+      estadoNodo.textContent = "Guardado";
+      toast("Repartidor guardado.");
+      const seUnioAResumenEnCurso = Boolean(estado.promesaResumen);
+      await cargarResumen(false);
+      if (seUnioAResumenEnCurso) await cargarResumen(false);
+    } catch (error) {
+      if (estado.asignacionesRepartidor.get(String(ticketId)) !== token) return;
+      select.value = anterior;
+      contenedor.classList.remove("guardando", "guardado");
+      contenedor.classList.add("error");
+      estadoNodo.textContent = `No se guardó: ${error.message}`;
+      toast(`${error.message} Se restauró la asignación anterior.`, true);
+    } finally {
+      if (estado.asignacionesRepartidor.get(String(ticketId)) === token) {
+        estado.asignacionesRepartidor.delete(String(ticketId));
+        if (select.isConnected) {
+          select.disabled = false;
+          select.removeAttribute("aria-busy");
+        }
+      }
+      ajustarEstadoOcupado(-1);
+    }
+  }
+
   async function accionTicket(boton) {
     const fila = boton.closest("[data-ticket-id]");
     const ticketId = fila?.dataset.ticketId;
     if (!ticketId) return;
     const accion = boton.dataset.accionTicket;
-    if (accion === "asignar") {
-      const repartidorId = fila.querySelector("select")?.value;
-      if (!repartidorId) return toast("Selecciona un repartidor.", true);
-      await ejecutarConClave({ titulo: "Asignar repartidor", ayuda: "Confirma quién llevará este domicilio.", url: `/api/administrador/tickets/${ticketId}/repartidor/`, cuerpo: { repartidor_id: repartidorId }, mensaje: "Repartidor asignado." });
-      return;
-    }
     if (accion === "programar") {
       const fecha = fila.querySelector('input[type="date"]')?.value;
       const hora = fila.querySelector('input[type="time"]')?.value;
@@ -688,22 +737,17 @@
       });
       return;
     }
-    if (accion === "reasignar") {
-      const mesaId = fila.querySelector("select")?.value;
-      if (!mesaId) return toast("Selecciona una posición libre.", true);
-      await ejecutarConClave({ titulo: "Reasignar pedido", ayuda: "El pedido conservará sus productos, estado e importe.", url: `/api/administrador/tickets/${ticketId}/reasignar/`, cuerpo: { mesa_id: mesaId }, mensaje: "Pedido reasignado." });
-      return;
-    }
     if (accion === "descuento") {
       const porcentaje = fila.querySelector('input[type="number"]')?.value;
       await ejecutarConClave({ titulo: "Aplicar descuento", ayuda: `Confirma el descuento de ${porcentaje || 0}% para este pedido.`, url: `/api/administrador/tickets/${ticketId}/descuento/`, cuerpo: { porcentaje }, mensaje: "Descuento actualizado." });
       return;
     }
-    if (accion === "cancelar") {
-      if (!window.confirm("¿Cancelar este pedido? Dejará de aparecer en reportes y cortes.")) return;
-      await ejecutarConClave({ titulo: "Cancelar pedido", ayuda: "Esta acción libera su posición y excluye el pedido del corte.", url: `/api/administrador/tickets/${ticketId}/cancelar/`, mensaje: "Pedido cancelado." });
-    }
   }
+
+  document.addEventListener("change", evento => {
+    const select = evento.target.closest("[data-asignar-repartidor]");
+    if (select) asignarRepartidorInmediato(select);
+  });
 
   document.addEventListener("click", async evento => {
     const navegacion = evento.target.closest("[data-panel], [data-panel-ir]");

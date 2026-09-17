@@ -73,10 +73,6 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
       <button class="rail-item" data-panel="sucursales" type="button"{% if not modulos.pedidos_sucursales %} disabled title="Módulo no habilitado"{% endif %}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h18v12H3zM2 5h20l-2 4H4zM6 21v-7h5v7M15 13h3v4h-3M4 9c1.3 2 2.7 2 4 0 1.3 2 2.7 2 4 0 1.3 2 2.7 2 4 0 1.3 2 2.7 2 4 0"/></svg><span>Sucursales</span>
       </button>
-      <div class="rail-ayuda">
-        <strong>Sesión autorizada</strong>
-        <span>La clave sólo vuelve a solicitarse al cambiarla o si la sesión vence.</span>
-      </div>
     </nav>
 
     <main class="admin-main" id="administrador-app" aria-busy="false">
@@ -88,31 +84,24 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
 
         <div class="bandeja-grid">
           <section class="hoja hoja-principal hoja-domicilios">
-            <header class="hoja-titulo"><div><span>01</span><h2>Domicilios sin repartidor</h2></div><b id="conteo-domicilios">0</b></header>
+            <header class="hoja-titulo"><div><h2>Domicilios sin repartidor</h2></div><b id="conteo-domicilios">0</b></header>
             <div id="inicio-domicilios" class="tickets-pendientes"></div>
           </section>
 
           <aside class="hoja hoja-cierres">
-            <header class="hoja-titulo"><div><span>02</span><h2>Cierres pendientes</h2></div></header>
+            <header class="hoja-titulo"><div><h2>Cierres pendientes</h2></div></header>
             <div id="inicio-bloqueos" class="lista-bloqueos"></div>
             <div class="atajos-cierre">
-              <button class="boton primario" data-accion="reporte-parcial" type="button">Imprimir reporte parcial</button>
-              <button class="boton oscuro" data-panel-ir="reportes" type="button">Revisar corte de caja</button>
+              <button class="boton oscuro" data-panel-ir="reportes" type="button">Abrir reportes y corte</button>
             </div>
           </aside>
 
           <section class="hoja hoja-programados-inicio">
-            <header class="hoja-titulo"><div><span>03</span><h2>Pedidos programados</h2></div><b id="conteo-programados">0</b></header>
+            <header class="hoja-titulo"><div><h2>Pedidos programados</h2></div><b id="conteo-programados">0</b></header>
             <div id="inicio-programados" class="tickets-pendientes compactos"></div>
           </section>
         </div>
 
-        <nav class="pista-herramientas" aria-label="Herramientas administrativas">
-          <button data-panel-ir="personal" type="button"><span>01</span><strong>Personal operativo</strong></button>
-          <button data-panel-ir="domicilios" type="button"><span>02</span><strong>Control de domicilios</strong></button>
-          <button data-panel-ir="movimientos" type="button"><span>03</span><strong>Entradas y salidas</strong></button>
-          <button data-panel-ir="sucursales" type="button"><span>04</span><strong>Corte de sucursales</strong></button>
-        </nav>
       </section>
 
       <section class="admin-panel" data-admin-panel="pedidos" hidden>
@@ -122,7 +111,7 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
         </header>
         <div class="pedidos-estacion">
           <section class="hoja pedidos-mapa" aria-labelledby="pedidos-mapa-titulo">
-            <header class="hoja-titulo"><div><span>01</span><h2 id="pedidos-mapa-titulo">Posiciones reales</h2></div><b id="conteo-seleccionados">0</b></header>
+            <header class="hoja-titulo"><div><h2 id="pedidos-mapa-titulo">Posiciones reales</h2></div><b id="conteo-seleccionados">0</b></header>
             <p id="instruccion-mover" class="aviso-mover" role="status" hidden>Modo Mover activo: elige una casilla libre como destino.</p>
             <div id="mapa-posiciones" class="mapa-posiciones"></div>
           </section>
@@ -153,11 +142,11 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
         <header class="panel-titulo"><div><h1>Personal operativo</h1><p>Meseros para identificar comandas y repartidores para liquidar domicilios.</p></div></header>
         <div class="dos-columnas">
           <section class="hoja">
-            <header class="hoja-titulo"><div><span>01</span><h2>Usuarios registrados</h2></div><button class="boton mini" id="nuevo-usuario" type="button">Nuevo</button></header>
+            <header class="hoja-titulo"><div><h2>Usuarios registrados</h2></div><button class="boton mini" id="nuevo-usuario" type="button">Nuevo</button></header>
             <div id="lista-usuarios" class="lista-personal"></div>
           </section>
           <section class="hoja">
-            <header class="hoja-titulo"><div><span>02</span><h2 id="titulo-form-usuario">Nuevo usuario</h2></div></header>
+            <header class="hoja-titulo"><div><h2 id="titulo-form-usuario">Nuevo usuario</h2></div></header>
             <form id="form-usuario" class="formulario-admin">
               <input id="usuario-id" type="hidden">
               <label>Nombre<input id="usuario-nombre" maxlength="100" autocomplete="off" required></label>
@@ -175,11 +164,11 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
         <header class="panel-titulo"><div><h1>Control de domicilios</h1><p>Asigna pedidos procesados y genera el total de cada repartidor.</p></div></header>
         <div class="dos-columnas domicilios-layout">
           <section class="hoja">
-            <header class="hoja-titulo"><div><span>01</span><h2>Pedidos del turno</h2></div></header>
+            <header class="hoja-titulo"><div><h2>Pedidos del turno</h2></div></header>
             <div id="lista-domicilios" class="lista-domicilios"></div>
           </section>
           <section class="hoja hoja-fija">
-            <header class="hoja-titulo"><div><span>02</span><h2>Total de repartidor</h2></div></header>
+            <header class="hoja-titulo"><div><h2>Total de repartidor</h2></div></header>
             <form id="form-liquidacion" class="formulario-admin">
               <label>Repartidor<select id="liquidacion-repartidor" required></select></label>
               <label>Fondo de cambio, opcional<input id="liquidacion-fondo" type="number" min="0" step="0.01" value="0" inputmode="decimal"></label>
@@ -188,21 +177,17 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
             </form>
           </section>
         </div>
-        <section class="hoja hoja-operaciones">
-          <header class="hoja-titulo"><div><span>03</span><h2>Reasignar, descontar o cancelar</h2></div></header>
-          <div id="lista-operaciones-ticket" class="tabla-operaciones"></div>
-        </section>
       </section>
 
       <section class="admin-panel" data-admin-panel="programados" hidden>
         <header class="panel-titulo"><div><h1>Pedidos programados</h1><p>Define fecha y hora de entrega; se activarán en la primera casilla de domicilio disponible.</p></div></header>
         <div class="dos-columnas">
           <section class="hoja">
-            <header class="hoja-titulo"><div><span>01</span><h2>Domicilios procesados</h2></div></header>
+            <header class="hoja-titulo"><div><h2>Domicilios procesados</h2></div></header>
             <div id="lista-programables" class="tickets-pendientes"></div>
           </section>
           <section class="hoja">
-            <header class="hoja-titulo"><div><span>02</span><h2>Agenda futura</h2></div></header>
+            <header class="hoja-titulo"><div><h2>Agenda futura</h2></div></header>
             <div id="lista-programados" class="tickets-pendientes"></div>
           </section>
         </div>
@@ -212,7 +197,7 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
         <header class="panel-titulo"><div><h1>Entradas y salidas</h1><p>Registra movimientos de efectivo que formarán parte del siguiente corte.</p></div></header>
         <div class="dos-columnas">
           <section class="hoja">
-            <header class="hoja-titulo"><div><span>01</span><h2 id="titulo-form-movimiento">Nuevo movimiento</h2></div></header>
+            <header class="hoja-titulo"><div><h2 id="titulo-form-movimiento">Nuevo movimiento</h2></div></header>
             <form id="form-movimiento" class="formulario-admin">
               <input id="movimiento-id" type="hidden">
               <label>Tipo<select id="movimiento-tipo" required><option value="entrada">Entrada +</option><option value="salida">Salida −</option></select></label>
@@ -225,7 +210,7 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
             </form>
           </section>
           <section class="hoja">
-            <header class="hoja-titulo"><div><span>02</span><h2>Movimientos del turno</h2></div></header>
+            <header class="hoja-titulo"><div><h2>Movimientos del turno</h2></div></header>
             <div id="lista-movimientos" class="lista-movimientos"></div>
           </section>
         </div>
@@ -243,14 +228,14 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
         </section>
         <div class="dos-columnas">
           <section class="hoja">
-            <header class="hoja-titulo"><div><span>01</span><h2>Acciones de cierre</h2></div></header>
+            <header class="hoja-titulo"><div><h2>Acciones de cierre</h2></div></header>
             <div class="botones-apilados">
               <button class="boton primario" data-accion="reporte-parcial" type="button">Imprimir reporte parcial</button>
               <button class="boton oscuro" data-accion="corte-caja" type="button">Realizar corte de caja</button>
             </div>
           </section>
           <section class="hoja">
-            <header class="hoja-titulo"><div><span>02</span><h2>Requisitos del corte</h2></div></header>
+            <header class="hoja-titulo"><div><h2>Requisitos del corte</h2></div></header>
             <div id="bloqueos-reporte" class="lista-bloqueos"></div>
             <hr>
             <form id="form-clave" class="formulario-admin formulario-clave">

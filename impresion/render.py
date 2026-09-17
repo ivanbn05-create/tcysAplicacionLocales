@@ -65,9 +65,18 @@ def _ajustar(draw, texto, font, ancho):
 
 
 def _cantidad_matriz(valor):
+    valor = Decimal(str(valor))
     if valor == valor.to_integral_value():
         return str(int(valor))
     return format(valor.normalize(), "f")
+
+
+def _fuente_cantidad_celda(valor, tamano=30):
+    """Reduce sólo el glifo numérico para conservar la cuadrícula impresa."""
+
+    longitud = len(_cantidad_matriz(valor))
+    ajustado = tamano if longitud <= 2 else max(18, tamano - (longitud - 2) * 5)
+    return fuente(ajustado, negrita=True)
 
 
 def _segmentos_bebidas(bebidas_agrupadas, fuente_normal, fuente_negrita):
@@ -350,7 +359,13 @@ def _dibujar_comanda_por_nombres(draw, y, ticket, comanda_numero=None):
             draw.line((x, y, x, y + alto_fila), fill=0, width=1)
             if valor:
                 texto = _cantidad_matriz(valor)
-                draw.text((x + (ancho_producto - _ancho(draw, texto, f_cantidad)) / 2, y + 13), texto, font=f_cantidad, fill=0)
+                fuente_valor = _fuente_cantidad_celda(valor, 28)
+                draw.text(
+                    (x + (ancho_producto - _ancho(draw, texto, fuente_valor)) / 2, y + 13),
+                    texto,
+                    font=fuente_valor,
+                    fill=0,
+                )
         y += alto_fila
 
     if datos["extras"]:
@@ -546,7 +561,13 @@ def render_comanda(ticket, destino, comanda_numero=None):
                     valor = fila["cantidades"].get(persona)
                     if valor:
                         texto = _cantidad_matriz(valor)
-                        draw.text((x + (celda - _ancho(draw, texto, f_matriz_numero)) / 2, y + 5), texto, font=f_matriz_numero, fill=0)
+                        fuente_valor = _fuente_cantidad_celda(valor, 30)
+                        draw.text(
+                            (x + (celda - _ancho(draw, texto, fuente_valor)) / 2, y + 5),
+                            texto,
+                            font=fuente_valor,
+                            fill=0,
+                        )
                 draw.line((ANCHO - MARGEN, y, ANCHO - MARGEN, y + 46), fill=0, width=1)
                 draw.line((MARGEN, y + 46, ANCHO - MARGEN, y + 46), fill=145, width=1)
                 y += 48
@@ -907,8 +928,9 @@ def render_reporte_administrativo(reporte):
             "llevar": "LLEVAR",
             "domicilio": "DOMICILIO",
             "recoger": "RECOGER",
-            "sucursales": "SUCURSALES",
         }
+        if tipo == "corte_caja":
+            etiquetas["sucursales"] = "SUCURSALES"
         for canal, etiqueta in etiquetas.items():
             valor = Decimal(str(datos.get("canales", {}).get(canal, 0)))
             fila(etiqueta, f"${valor:,.2f}")

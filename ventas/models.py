@@ -393,6 +393,37 @@ class Ticket(models.Model):
         return self.subtotal - descuento
 
 
+class SolicitudRepeticionTicket(models.Model):
+    """Resultado idempotente de ``Agregar`` para domicilio y recoger."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(
+        Sucursal,
+        on_delete=models.PROTECT,
+        related_name="solicitudes_repeticion_ticket",
+    )
+    ticket_origen = models.ForeignKey(
+        Ticket,
+        on_delete=models.PROTECT,
+        related_name="solicitudes_repeticion",
+    )
+    ticket_nuevo = models.OneToOneField(
+        Ticket,
+        on_delete=models.PROTECT,
+        related_name="solicitud_repeticion_origen",
+    )
+    clave_idempotencia = models.CharField(max_length=128)
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["ticket_origen", "clave_idempotencia"],
+                name="repeticion_ticket_clave_unica",
+            )
+        ]
+
+
 class Partida(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="partidas")
@@ -565,7 +596,7 @@ class LiquidacionRepartidor(models.Model):
 class CorteCaja(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="cortes_caja")
-    inicio = models.DateTimeField()
+    inicio = models.DateTimeField(null=True, blank=True)
     fin = models.DateTimeField()
     tickets = models.ManyToManyField(Ticket, related_name="cortes_caja")
     movimientos = models.ManyToManyField(MovimientoCaja, related_name="cortes_caja")

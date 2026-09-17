@@ -95,6 +95,7 @@ from .services import (
     bloqueo_ticket_payload,
     completar_ticket_sucursal,
     convertir_tipo_ticket,
+    crear_ticket_repetido,
     guardar_ticket,
     procesar_ticket,
     reiniciar_folios,
@@ -914,10 +915,32 @@ def api_agregar_comanda(request, ticket_id):
     try:
         datos = _json(request)
         with transaction.atomic():
-            ticket = _ticket(ticket_id)
-            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
-            ticket = agregar_comanda(ticket)
-        return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
+            ticket_origen = _ticket(ticket_id)
+            ticket_origen, device_id = _asegurar_edicion_ticket(request, ticket_origen, datos)
+            if ticket_origen.canal in {Mesa.Canal.DOMICILIO, Mesa.Canal.RECOGER}:
+                ticket, creado = crear_ticket_repetido(
+                    ticket_origen,
+                    datos.get("idempotency_key"),
+                    atendio=_operador_actual_pos(request, ticket_origen.sucursal),
+                )
+                ticket = asegurar_bloqueo_ticket(
+                    ticket,
+                    device_id,
+                    operador=_operador_actual_pos(request, ticket.sucursal),
+                )
+                modo = "ticket_nuevo"
+            else:
+                ticket = agregar_comanda(ticket_origen)
+                creado = False
+                modo = "comanda"
+        return JsonResponse(
+            {
+                "ticket": _ticket_payload(_ticket(ticket.id), device_id),
+                "ticket_origen_id": str(ticket_origen.id),
+                "creado": creado,
+                "modo": modo,
+            }
+        )
     except ErrorVenta as exc:
         return _respuesta_error_venta(exc, device_id)
 

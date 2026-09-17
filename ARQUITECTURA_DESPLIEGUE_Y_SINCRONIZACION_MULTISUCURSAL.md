@@ -7,9 +7,13 @@ POS local de Los Tocayos en un producto instalable, actualizable y administrable
 en varias sucursales. Está pensado como material de continuidad para otro agente
 o para retomar el trabajo sin depender de conversaciones anteriores.
 
-**Estado a 2026-09-13:** dirección arquitectónica aceptada. Se eligió Hostinger
+**Estado a 2026-09-15:** dirección arquitectónica aceptada. Se eligió Hostinger
 KVM 2 como infraestructura central inicial prevista; el backend central, su
 aprovisionamiento y la sincronización general todavía no están implementados.
+La candidata A `0.4.0-dev.1` ya acreditó instalación limpia y la candidata
+provisional B `0.4.0-dev.2` acreditó una actualización real en el equipo de
+laboratorio. B no es todavía la base funcional aceptada ni se ha integrado al
+repositorio principal.
 
 Este documento complementa a:
 
@@ -18,6 +22,8 @@ Este documento complementa a:
 - `DESPLIEGUE_WINDOWS.md`, que describe el despliegue Windows actualmente
   probado en Arboledas y sus limitaciones.
 - `README.md`, que contiene la operación actual del proyecto.
+- `FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md`, que define el trabajo entre
+  desarrollador y Codex, el despliegue por sucursal y la ruta de `.exe`/`.apk`.
 
 La precedencia depende del tema. Para ejecutar, diagnosticar o recuperar el
 servidor Edge Windows **manda `DESPLIEGUE_WINDOWS.md`**, porque describe el código
@@ -228,7 +234,9 @@ módulo de pedidos mayoristas. No son identidades intercambiables.
 | Pedidos desde `tcysPedidosSucursales` | Integración Supabase de sólo lectura e importación idempotente existente | Mantenerla operativamente separada del protocolo Edge-central |
 | Sincronización de ventas | `EventoOutbox` proporciona una base local | Definir contrato, reintentos, acuses y construir el inbox central |
 | Instalación y soporte | Instalación, adopción, actualización y reparación separadas; dependencias fijadas; `.env` preservado; respaldo, migración, servicio, firewall y salud disponibles | Validar en Windows limpio y añadir staging, cambio atómico, reanudación y rollback |
-| Release del Edge | `VERSION` autoritativa, ZIP reproducible, manifiesto v2 para `cp313/win_amd64`, pins exactos y wheelhouse offline validado | Firma digital, CI atestada e integración del ZIP con staging/actualizador |
+| Release del Edge | `VERSION` autoritativa, ZIP reproducible, manifiesto v2 para `cp313/win_amd64`, pins exactos y wheelhouse offline validados; actualización A→B acreditada en laboratorio | Firma digital, CI atestada e integración del ZIP con staging/actualizador |
+| Módulos | Primera implementación de `Modulo`/`ModuloSucursal`, dependencias y defensa en UI/API/tareas dentro de la candidata B | Aceptar la lista funcional real, probar una segunda sucursal e integrar la candidata |
+| Clientes | Launcher `.exe` que abre Edge en modo aplicación y PWA básica con manifiesto/service worker | `.exe` firmado/aceptado, WebView2 opcional y proyecto Android/APK inexistente |
 | Backend central | Modelado y responsabilidades documentados | Implementar API, panel general, PostgreSQL central, autenticación y auditoría |
 | Despliegue KVM 2 | Proveedor y tamaño inicial elegidos | Contratar, aprovisionar, endurecer, monitorear y probar recuperación/carga |
 
@@ -337,11 +345,17 @@ actualizador confirmar versión, esquema, sucursal o preparación operativa. Deb
 conservarse una sonda pública mínima y agregarse una comprobación local protegida
 con información no secreta para mantenimiento.
 
-### 6.5 Falta un modelo de módulos
+### 6.5 Modelo de módulos provisional
 
-`ConfiguracionSucursal` sólo guarda actualmente la clave administrativa. Los
-canales y secciones se renderizan de manera global. No existe aún una entidad de
-capacidades por sucursal ni validación de dichas capacidades en las API.
+La candidata B incorpora `Modulo` y `ModuloSucursal`, un catálogo de cuatro
+módulos núcleo y cuatro opcionales, dependencias y un comando de configuración.
+La interfaz oculta o desactiva capacidades no disponibles; las API vuelven a
+validarlas y las tareas de fondo relacionadas no se ejecutan. Una migración desde
+A habilita todos los módulos para conservar el comportamiento existente.
+
+Esta pieza está implementada y probada en el commit candidato `67b43b3`, pero aún
+no define por sí sola la base funcional real. Faltan aceptación con los módulos
+definitivos, prueba limpia de B y futura autoridad del VPS sobre entitlements.
 
 ## 7. Componentes de la arquitectura objetivo
 
@@ -455,6 +469,13 @@ terminales no deben consultar el VPS para servir una mesa, cobrar o imprimir.
 Consumirán el Edge por LAN. No contienen la base central ni deben conocer las
 credenciales Edge-VPS. Los cambios de menú y la mayoría de cambios de frontend
 se reciben desde el Edge sin generar paquetes diferentes por dispositivo.
+
+El cliente Windows actual es un launcher `.exe` que ejecuta Microsoft Edge con
+`--app`; oculta la interfaz del navegador, pero todavía depende de `msedge.exe`.
+Django ya expone una PWA básica para terminal/tableta mediante manifiesto y
+service worker. No existe aún un proyecto Android ni un APK firmado. La ruta
+recomendada y las implicaciones de WebView2/Capacitor están documentadas en
+`FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md`.
 
 ### 7.4 Matriz de autoridad
 
@@ -1041,7 +1062,9 @@ Canales recomendados:
 Debe promoverse exactamente el mismo artefacto entre canales, no recompilarlo.
 Cada Edge reportará versión, canal, último respaldo, último catálogo aplicado y
 última comunicación. Una actualización de código podrá descargarse con
-anticipación, pero su instalación se hará en una ventana de mantenimiento.
+anticipación, pero su instalación se hará en una ventana de mantenimiento. El
+flujo de trabajo, la política de versiones y el ejemplo de una función exclusiva
+de una sucursal están en `FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md`.
 
 Al principio se recomienda actualización presencial o remota supervisada. No se
 automatizará una instalación desatendida hasta haber probado repetidamente:
@@ -1076,17 +1099,14 @@ automatizará una instalación desatendida hasta haber probado repetidamente:
 - fijar dependencias y preparar paquete completo del servidor;
 - agregar versión/estado de instalación y verificación operativa.
 
-**Estado al 13 de septiembre de 2026:** está implementada la primera iteración
-local de esta fase: identidad obligatoria, comando de aprovisionamiento,
-interfaces separadas, semilla histórica opt-in, lock exacto, `VERSION`,
-manifiesto v2 dirigido a `cp313/win_amd64` y wheelhouse offline comprobado.
-También se conserva `.env` byte por
-byte en actualización, se bloquea contra escritura o sustitución durante toda la
-operación, se revalida antes de cada fase crítica y un mutex global impide dos
-mantenimientos locales simultáneos. También se valida la pertenencia del servicio
-y de la base antes de detenerlo. Falta validar instalación limpia en otro Windows
-y completar el estado persistente de instalación; staging, firma, conmutación,
-diario reanudable y rollback siguen deliberadamente en la fase 5.
+**Estado al 15 de septiembre de 2026:** la fase local separada quedó probada
+mediante instalación limpia A y actualización A→B en este equipo. La actualización
+conservó `.env`, identidad, catálogo y cuentas; aplicó la migración, respondió
+saludable y terminó sin desviaciones ACL. Una auditoría posterior confirmó un
+perfil POS y una cuenta operativa activos; la aceptación manual de ingreso/PIN
+sigue pendiente. El ZIP B fue reproducible, pero el staging se orquestó externamente: firma, extracción integrada, conmutación,
+diario reanudable y rollback siguen deliberadamente en la fase 5. También faltan
+Windows limpio, segunda sucursal y aceptación funcional para declarar una base.
 
 ### Fase 2. Catálogo local versionado
 
@@ -1108,6 +1128,11 @@ exista el VPS. Así se valida el modelo de datos y el aplicador local.
 - implementar enrolamiento de instalación;
 - crear asistente presencial de impresoras, red, respaldo y módulos;
 - generar informe de instalación.
+
+**Estado provisional:** la candidata B cubre el catálogo local de módulos,
+dependencias, selección inicial y defensa en UI/API/tareas. Faltan aceptación de
+la lista definitiva, enrolamiento autorizado, prueba en otra sucursal e informe
+canónico de instalación.
 
 ### Fase 4. VPS y Administrador General
 
@@ -1295,10 +1320,11 @@ Antes de implementar deberán confirmarse:
 
 ## 26. Próximo paso recomendado
 
-Antes de construir el VPS, cerrar las fases 0 y 1 validando la release v2
-productiva en un Windows limpio y una segunda sucursal, y después crear las
-publicaciones locales de catálogo versionadas de la fase 2. Esto permite validar
-desde ahora, sin depender de infraestructura central, la misma semántica que
+Antes de construir el VPS, el usuario debe definir la matriz funcional que
+formará la base real. Después se implementará esa matriz sobre la línea común, se
+repetirán instalación limpia y actualización, y se probarán el cliente Windows y
+un primer APK piloto en dispositivos distintos del Edge. En paralelo se deben
+crear publicaciones locales de catálogo versionadas para validar la semántica que
 después usará la consulta diaria al VPS.
 
 La primera prueba integral debe instalar la release dorada en un Windows limpio,

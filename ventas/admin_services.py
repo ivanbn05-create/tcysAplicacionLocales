@@ -29,13 +29,13 @@ from .services import (
 )
 
 
-CANALES_CAJA = (
+CANALES_PARCIAL = (
     Mesa.Canal.COMEDOR,
     Mesa.Canal.LLEVAR,
     Mesa.Canal.DOMICILIO,
     Mesa.Canal.RECOGER,
-    Mesa.Canal.SUCURSALES,
 )
+CANALES_CAJA = (*CANALES_PARCIAL, Mesa.Canal.SUCURSALES)
 ESTADOS_ACTIVOS = (Ticket.Estado.ABIERTO, Ticket.Estado.PROCESADO, Ticket.Estado.COBRAR)
 
 
@@ -143,21 +143,56 @@ def guardar_usuario(sucursal, datos, usuario=None):
     return usuario
 
 
-def inicio_turno(sucursal, ahora=None):
-    ultimo = CorteCaja.objects.filter(sucursal=sucursal).order_by("-fin").first()
-    if ultimo:
-        return ultimo.fin
-    ahora = timezone.localtime(ahora or timezone.now())
-    return timezone.make_aware(datetime.combine(ahora.date(), time.min))
+def _limite_turno(sucursal, ahora=None):
+    cortes = CorteCaja.objects.filter(sucursal=sucursal)
+    if ahora is not None:
+        instante = ahora
+        if isinstance(instante, date) and not isinstance(instante, datetime):
+            instante = datetime.combine(instante, time.max)
+        if timezone.is_naive(instante):
+            instante = timezone.make_aware(instante)
+        cortes = cortes.filter(fin__lte=instante)
+    ultimo = cortes.order_by("-fin").first()
+    return ultimo.fin if ultimo else None
 
 
 def _tickets_turno(sucursal, ahora=None):
-    inicio = inicio_turno(sucursal, ahora)
-    return Ticket.objects.filter(
-        sucursal=sucursal,
-    ).filter(
-        Q(creado_en__gte=inicio) | Q(activado_programado_en__gte=inicio),
-    )
+    limite = _limite_turno(sucursal, ahora)
+    tickets = Ticket.objects.filter(sucursal=sucursal)
+    if limite is not None:
+        tickets = tickets.filter(
+            Q(creado_en__gt=limite) | Q(activado_programado_en__gt=limite),
+        )
+    return tickets
+
+
+def inicio_turno(sucursal, ahora=None):
+    """Primer pedido del turno; ``None`` hasta que exista uno tras el corte."""
+
+    limite = _limite_turno(sucursal, ahora)
+    candidatos = []
+    for creado_en, activado_programado_en, tipo_entrega in _tickets_turno(
+        sucursal, ahora
+    ).values_list("creado_en", "activado_programado_en", "tipo_entrega"):
+        if activado_programado_en is not None:
+            if limite is None or activado_programado_en > limite:
+                candidatos.append(activado_programado_en)
+            continue
+        if tipo_entrega == Ticket.TipoEntrega.PROGRAMADA:
+            # Crear o cancelar una reserva futura no inicia la operación. El
+            # instante operativo se fija cuando se activa y se conserva luego.
+            continue
+        if limite is None or creado_en > limite:
+            candidatos.append(creado_en)
+    return min(candidatos) if candidatos else None
+
+
+def _movimientos_turno(sucursal):
+    movimientos = MovimientoCaja.objects.filter(sucursal=sucursal)
+    limite = _limite_turno(sucursal)
+    if limite is not None:
+        movimientos = movimientos.filter(creado_en__gt=limite)
+    return movimientos
 
 
 @transaction.atomic
@@ -508,8 +543,10 @@ def totales_parciales(sucursal):
 
 @transaction.atomic
 def crear_reporte_parcial(sucursal):
-    totales = totales_parciales(sucursal)
+    totales_completos = totales_parciales(sucursal)
+    totales = {canal: totales_completos[canal] for canal in CANALES_PARCIAL}
     total = sum(totales.values(), Decimal("0.00"))
+    inicio = inicio_turno(sucursal)
     reporte = ReporteAdministrativo.objects.create(
         sucursal=sucursal,
         tipo=ReporteAdministrativo.Tipo.PARCIAL,
@@ -517,7 +554,7 @@ def crear_reporte_parcial(sucursal):
             "titulo": "REPORTE PARCIAL",
             "canales": {canal: str(valor) for canal, valor in totales.items()},
             "total": str(total),
-            "inicio": inicio_turno(sucursal).isoformat(),
+            "inicio": inicio.isoformat() if inicio else None,
             "fin": timezone.now().isoformat(),
         },
     )
@@ -629,11 +666,7 @@ def crear_corte_caja(sucursal):
     fin = timezone.now()
     tickets = list(_tickets_reporte(sucursal).select_for_update())
     movimientos = list(
-        MovimientoCaja.objects.select_for_update().filter(
-            sucursal=sucursal,
-            creado_en__gte=inicio,
-            cortes_caja__isnull=True,
-        )
+        _movimientos_turno(sucursal).select_for_update().filter(cortes_caja__isnull=True)
     )
     totales = {
         canal: sum((ticket.total for ticket in tickets if ticket.canal == canal), Decimal("0.00"))
@@ -651,7 +684,7 @@ def crear_corte_caja(sucursal):
     total_caja = total_ventas + entradas - salidas
     datos = {
         "titulo": "CORTE DE CAJA",
-        "inicio": inicio.isoformat(),
+        "inicio": inicio.isoformat() if inicio else None,
         "fin": fin.isoformat(),
         "canales": {canal: str(valor) for canal, valor in totales.items()},
         "entradas": str(entradas),
@@ -790,6 +823,7 @@ def _ticket_admin_payload(ticket):
 
 def resumen_administrador(sucursal):
     activar_programados(sucursal)
+    inicio = inicio_turno(sucursal)
     usuarios = list(
         UsuarioPOS.objects.select_related("rol")
         .filter(sucursal=sucursal, rol__tipo__in=[Rol.Tipo.MESERO, Rol.Tipo.REPARTIDOR])
@@ -839,7 +873,7 @@ def resumen_administrador(sucursal):
     )
     return {
         "sucursal": {"id": str(sucursal.id), "nombre": sucursal.nombre},
-        "inicio_turno": inicio_turno(sucursal).isoformat(),
+        "inicio_turno": inicio.isoformat() if inicio else None,
         "usuarios": [usuario_payload(usuario) for usuario in usuarios],
         "repartidores": [usuario_payload(usuario) for usuario in usuarios if usuario.rol.tipo == Rol.Tipo.REPARTIDOR and usuario.activo],
         "tickets": [_ticket_admin_payload(ticket) for ticket in tickets],
@@ -866,10 +900,7 @@ def resumen_administrador(sucursal):
                 "importe": str(movimiento.importe),
                 "creado_en": movimiento.creado_en.isoformat(),
             }
-            for movimiento in MovimientoCaja.objects.filter(
-                sucursal=sucursal,
-                creado_en__gte=inicio_turno(sucursal),
-            )[:50]
+            for movimiento in _movimientos_turno(sucursal)[:50]
         ],
         "sucursales": [
             {

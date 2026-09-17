@@ -8,7 +8,9 @@ La dirección futura de paquete único, módulos por sucursal, actualización se
 sincronización y servidor central Hostinger KVM 2 está documentada en
 [ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md](ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md).
 Esa arquitectura está aceptada, pero el backend central todavía no está
-implementado.
+implementado. El ciclo recomendado para desarrollar, versionar y desplegar por
+sucursal, junto con el estado real de `.exe`, PWA y `.apk`, está en
+[FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md](FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md).
 
 ## Producción local en Windows
 
@@ -98,9 +100,12 @@ El instalador Windows admite por ahora sólo SQLite, migra la base a
 `runtime\db.sqlite3` y rechaza PostgreSQL antes de modificar servicios mientras
 no exista respaldo/restauración `pg_dump`. Solicita un superusuario si
 falta, recopila estáticos, limita el firewall a perfil privado/subred local y
-comprueba `/salud/`. Sólo puede crear una cuenta operativa si ya existe un perfil
-POS disponible; en una sucursal vacía los roles, perfiles y menú deben llegar de
-un paquete inicial autorizado. El servicio corre como `LocalService`; sólo puede
+comprueba `/salud/`. La candidata B también crea el primer rol, perfil POS y
+cuenta operativa mediante prompts si no existe ninguno; nunca fija un PIN o una
+contraseña predeterminados. En la prueba A→B se confirmó después un perfil
+POS activo y una cuenta operativa activa no administrativa; falta probar el
+ingreso y el PIN desde la interfaz. El menú histórico de Arboledas sigue siendo
+una semilla separada y explícita. El servicio corre como `LocalService`; sólo puede
 modificar `runtime`, `logs` y `media`. El código, `.venv`, `.env`, certificados y
 respaldos quedan bajo ACL restringidas.
 
@@ -341,6 +346,11 @@ scroll encadenado y el gesto de recarga de Android, inicia en modo `fullscreen` 
 se abre como PWA y ofrece un botón **Salir** para abandonar la pantalla completa.
 
 ### Instalación en tabletas Android
+
+El repositorio entrega hoy una PWA básica, pero **no contiene todavía un proyecto
+Android ni genera un APK**. La estrategia acordada es construir un APK firmado en
+Android Studio e instalarlo directamente por USB-C en las tabletas; el procedimiento
+y sus límites están en `FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md`.
 
 La opción recomendada para operación diaria es publicar `/tabletas/` por HTTPS dentro
 de la red local y usar **Instalar aplicación** desde Chrome. El manifiesto ya define el

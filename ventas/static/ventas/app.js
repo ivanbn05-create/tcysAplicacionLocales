@@ -54,6 +54,17 @@
     return `tablet-${Date.now().toString(36)}-${aleatorio}`;
   }
 
+  function crearIdempotencyKey() {
+    if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+    const bytes = new Uint8Array(16);
+    if (window.crypto?.getRandomValues) window.crypto.getRandomValues(bytes);
+    else bytes.forEach((_, indice) => { bytes[indice] = Math.floor(Math.random() * 256); });
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hexadecimal = [...bytes].map(valor => valor.toString(16).padStart(2, "0")).join("");
+    return `${hexadecimal.slice(0, 8)}-${hexadecimal.slice(8, 12)}-${hexadecimal.slice(12, 16)}-${hexadecimal.slice(16, 20)}-${hexadecimal.slice(20)}`;
+  }
+
   function obtenerDeviceId() {
     try {
       const guardado = localStorage.getItem(DEVICE_ID_KEY);
@@ -87,6 +98,11 @@
     resultadosClientes: [],
     temporizadorCliente: null,
     temporizadorNombre: null,
+    temporizadorClienteLlevar: null,
+    colaGuardadoClienteLlevar: Promise.resolve(),
+    clienteLlevarGuardado: "",
+    clienteLlevarTicketId: "",
+    errorClienteLlevar: null,
     temporizadorBloqueo: null,
     temporizadorSucursales: null,
     tokenBusquedaCliente: 0,
@@ -97,6 +113,7 @@
     entregaProgramadaDigitos: "",
     comandaVisible: 1,
     botonOperacion: null,
+    idempotenciaAgregar: "",
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -104,6 +121,12 @@
   const csrf = () => document.cookie.split("; ").find(v => v.startsWith("csrftoken="))?.split("=")[1] || "";
   const dinero = (valor) => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(Number(valor || 0));
   const cantidad = (valor) => Number(valor).toLocaleString("es-MX", { maximumFractionDigits: 3 });
+  const claseCantidad = valor => {
+    const digitos = String(Math.max(0, Math.trunc(Number(valor) || 0))).length;
+    if (digitos >= 4) return "cantidad-cuatro-digitos";
+    if (digitos >= 3) return "cantidad-tres-digitos";
+    return "";
+  };
   const escapar = (valor) => String(valor ?? "").replace(/[&<>'"]/g, caracter => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[caracter]);
 
   function numeroComandaActual(ticket = estado.ticket) {
@@ -714,11 +737,21 @@
     const esDomicilio = ticket.canal === "domicilio";
     const esRecoger = ticket.canal === "recoger";
     const esLlevar = ticket.canal === "llevar";
+    if (esLlevar) {
+      clearTimeout(estado.temporizadorClienteLlevar);
+      estado.clienteLlevarGuardado = ticket.cliente?.nombre || "";
+      estado.clienteLlevarTicketId = String(ticket.id);
+      estado.errorClienteLlevar = null;
+    } else {
+      estado.clienteLlevarGuardado = "";
+      estado.clienteLlevarTicketId = "";
+      estado.errorClienteLlevar = null;
+    }
     const esEntrega = esDomicilio || esRecoger;
     const esDirecto = esRecoger || esLlevar;
     $(".panel-orden").classList.toggle("con-domicilio", esEntrega || esDirecto);
     $("#datos-cliente").classList.toggle("oculto", !esDomicilio);
-    $("#datos-servicio-directo").classList.toggle("oculto", !esDirecto);
+    $("#datos-servicio-directo").classList.toggle("oculto", !esRecoger);
     $("#pago-domicilio").classList.toggle("oculto", !esEntrega);
     $(".campo-entrega").classList.toggle("oculto", !esEntrega);
     $("#cliente-directo-telefono-label").classList.toggle("oculto", !esRecoger);
@@ -798,6 +831,7 @@
     const destino = comandas[indice + direccion];
     if (!destino) return;
     if (!(await finalizarEdicion())) return;
+    if (!(await guardarNombreClienteLlevar())) return;
     if (comandaVisibleEditable() && estado.ticket.captura_por_nombres) {
       clearTimeout(estado.temporizadorNombre);
       try { await guardarNombrePersona(); }
@@ -842,6 +876,7 @@
 
   async function convertirTipoPedido() {
     if (!estado.ticket || !(await finalizarEdicion())) return;
+    if (!(await guardarNombreClienteLlevar())) return;
     const destino = canalesPareja[estado.ticket.canal];
     if (!destino) return;
     bloquear(true);
@@ -863,6 +898,7 @@
 
   async function alternarCapturaPorNombres() {
     if (!estado.ticket || !(await finalizarEdicion())) return;
+    if (!(await guardarNombreClienteLlevar())) return;
     const activo = $("#switch-modo-nombres").checked;
     bloquear(true);
     try {
@@ -1131,10 +1167,25 @@
         ${ticket.cliente?.nombre ? `<b class="comanda-cliente-directo">${escapar(ticket.cliente.nombre)}${ticket.canal === "recoger" && ticket.cliente.telefono ? ` · ${escapar(ticket.cliente.telefono)}` : ""}</b>` : ""}`;
     }
     if (["comedor", "llevar"].includes(ticket.canal)) {
+      const clienteLlevarEditable = comandaVisibleEditable() && !bloqueoDeOtro() && !estado.operando;
+      const clienteLlevarSinGuardar = (
+        String(ticket.id) === estado.clienteLlevarTicketId
+        && String(ticket.cliente?.nombre || "") !== estado.clienteLlevarGuardado
+      );
+      const estadoClienteLlevar = !clienteLlevarEditable
+        ? { texto: "Sólo lectura", clase: "lectura" }
+        : estado.errorClienteLlevar
+          ? { texto: "Sin guardar · Presiona Enter para reintentar", clase: "error" }
+          : clienteLlevarSinGuardar
+            ? { texto: "Pendiente de guardar", clase: "pendiente" }
+            : { texto: "Guardado", clase: "guardado" };
+      const clienteLlevar = ticket.canal === "llevar"
+        ? `<label class="comanda-cliente-llevar"><span>Cliente</span><input data-cliente-llevar maxlength="180" autocomplete="name" aria-label="Nombre del cliente para llevar" value="${escapar(ticket.cliente?.nombre || "")}" placeholder="Nombre para la comanda" ${clienteLlevarEditable ? "" : "disabled"}><small data-estado-cliente-llevar class="${estadoClienteLlevar.clase}" role="status" aria-live="polite">${estadoClienteLlevar.texto}</small></label>`
+        : "";
       return `
         <div><span>${formatoFechaComanda(ticket.creado_en)}</span><strong>${escapar(ticket.mesa)}</strong></div>
         <div><strong>Ticket: ${ticket.folio}</strong><strong>${dinero(ticket.total)}</strong></div>
-        ${ticket.canal === "llevar" && ticket.cliente?.nombre ? `<b class="comanda-cliente-directo">${escapar(ticket.cliente.nombre)}</b>` : ""}`;
+        ${clienteLlevar}`;
     }
     return `<div><span>${formatoFechaComanda(ticket.creado_en)}</span><strong>Ticket: ${ticket.folio}</strong></div><b>${dinero(ticket.total)}</b>`;
   }
@@ -1173,7 +1224,7 @@
         const valor = columna.cantidades.get(persona) || 0;
         const seleccionada = estado.edicion?.clave === columna.clave && estado.edicion?.persona === persona;
         const texto = seleccionada ? estado.edicion.cantidadPantalla : (valor ? cantidad(valor) : "");
-        return `<button class="comanda-nombre-celda cantidad-celda ${seleccionada ? "seleccionada" : ""}" data-celda-producto="${columna.productoId}" data-celda-persona="${persona}" data-celda-termino="${columna.termino}" data-celda-clave="${columna.clave}" type="button">${texto}</button>`;
+        return `<button class="comanda-nombre-celda cantidad-celda ${claseCantidad(seleccionada ? estado.edicion.cantidadPantalla : valor)} ${seleccionada ? "seleccionada" : ""}" data-celda-producto="${columna.productoId}" data-celda-persona="${persona}" data-celda-termino="${columna.termino}" data-celda-clave="${columna.clave}" type="button">${texto}</button>`;
       }).join("");
       return `<button class="comanda-nombre-persona" data-seleccionar-persona="${persona}" type="button"><b>${persona}. ${escapar(nombres[String(persona)] || "SIN NOMBRE")}</b><small>${escapar(preparacion.get(persona) || "")}</small></button>${celdas}`;
     }).join("");
@@ -1284,7 +1335,7 @@
         const seleccionada = estado.edicion?.clave === fila.clave && estado.edicion?.persona === persona;
         const valor = seleccionada ? estado.edicion.cantidadPantalla : (celda?.cantidad || 0);
         const texto = valor || seleccionada ? cantidad(valor) : "";
-        return `<button class="comanda-celda cantidad-celda ${seleccionada ? "seleccionada" : ""}" data-celda-producto="${fila.productoId}" data-celda-persona="${persona}" data-celda-termino="${fila.termino}" data-celda-clave="${fila.clave}" type="button">${texto}</button>`;
+        return `<button class="comanda-celda cantidad-celda ${claseCantidad(valor)} ${seleccionada ? "seleccionada" : ""}" data-celda-producto="${fila.productoId}" data-celda-persona="${persona}" data-celda-termino="${fila.termino}" data-celda-clave="${fila.clave}" type="button">${texto}</button>`;
       }).join("");
       return `<button class="comanda-etiqueta producto-zona" data-modo-menu="productos" type="button">${escapar(fila.nombre)}</button>${celdas}`;
     }).join("");
@@ -1433,21 +1484,19 @@
   }
 
   function filaTelefono(telefono = {}) {
-    return `<div class="fila-telefono" data-registro-id="${escapar(telefono.id || "")}">
-      <label>Etiqueta<input class="telefono-etiqueta" value="${escapar(telefono.etiqueta || "Principal")}" maxlength="30"></label>
+    return `<div class="fila-telefono" data-registro-id="${escapar(telefono.id || "")}" data-etiqueta="${escapar(telefono.etiqueta || "Principal")}">
       <label>Teléfono<input class="telefono-numero" value="${escapar(telefono.numero || "")}" inputmode="tel" autocomplete="tel"></label>
       <button class="quitar-fila" data-quitar-fila type="button" aria-label="Quitar teléfono">×</button>
     </div>`;
   }
 
   function filaDomicilio(domicilio = {}) {
-    return `<div class="fila-domicilio" data-registro-id="${escapar(domicilio.id || "")}">
-      <label>Etiqueta<input class="domicilio-etiqueta" value="${escapar(domicilio.etiqueta || "Principal")}" maxlength="30"></label>
-      <label>Calle<input class="domicilio-calle" value="${escapar(domicilio.calle || "")}" autocomplete="address-line1"></label>
-      <label>Núm. exterior<input class="domicilio-exterior" value="${escapar(domicilio.numero_exterior || "")}"></label>
-      <label>Núm. interior<input class="domicilio-interior" value="${escapar(domicilio.numero_interior || "")}"></label>
+    return `<div class="fila-domicilio" data-registro-id="${escapar(domicilio.id || "")}" data-etiqueta="${escapar(domicilio.etiqueta || "Principal")}">
+      <label class="domicilio-calle-campo">Calle<input class="domicilio-calle" value="${escapar(domicilio.calle || "")}" autocomplete="address-line1"></label>
+      <label class="domicilio-exterior-campo">Núm. exterior<input class="domicilio-exterior" value="${escapar(domicilio.numero_exterior || "")}"></label>
+      <label class="domicilio-interior-campo">Núm. interior<input class="domicilio-interior" value="${escapar(domicilio.numero_interior || "")}"></label>
+      <label class="domicilio-cp-campo">CP<input class="domicilio-cp" value="${escapar(domicilio.codigo_postal || "")}" inputmode="numeric"></label>
       <label class="domicilio-colonia">Colonia<input class="domicilio-colonia-valor" value="${escapar(domicilio.colonia || "")}"></label>
-      <label>CP<input class="domicilio-cp" value="${escapar(domicilio.codigo_postal || "")}" inputmode="numeric"></label>
       <label class="domicilio-municipio">Municipio<input class="domicilio-municipio-valor" value="${escapar(domicilio.municipio || "")}"></label>
       <label class="domicilio-referencia">Referencia<textarea class="domicilio-referencia-valor" rows="2">${escapar(domicilio.referencia || "")}</textarea></label>
       <button class="quitar-fila" data-quitar-fila type="button" aria-label="Quitar domicilio">×</button>
@@ -1474,12 +1523,12 @@
   function datosFormularioCliente(confirmarDuplicado = false) {
     const telefonos = $$("#telefonos-form .fila-telefono").map(fila => ({
       id: fila.dataset.registroId || null,
-      etiqueta: fila.querySelector(".telefono-etiqueta").value,
+      etiqueta: fila.dataset.etiqueta || "Principal",
       numero: fila.querySelector(".telefono-numero").value,
     }));
     const domicilios = $$("#domicilios-form .fila-domicilio").map(fila => ({
       id: fila.dataset.registroId || null,
-      etiqueta: fila.querySelector(".domicilio-etiqueta").value,
+      etiqueta: fila.dataset.etiqueta || "Principal",
       calle: fila.querySelector(".domicilio-calle").value,
       numero_exterior: fila.querySelector(".domicilio-exterior").value,
       numero_interior: fila.querySelector(".domicilio-interior").value,
@@ -1545,6 +1594,7 @@
     const cobrable = ["procesado", "cobrar"].includes(estado.ticket.estado);
     const esSucursal = estado.ticket.canal === "sucursales";
     const esDomicilio = estado.ticket.canal === "domicilio";
+    const iniciaNuevoTicket = ["domicilio", "recoger"].includes(estado.ticket.canal);
     const comandaAgregadaPendiente = (
       estado.ticket.estado === "procesado"
       && enEdicion
@@ -1566,6 +1616,7 @@
       : (numeroComandaActual() > 1 ? "Procesar comanda" : "Procesar orden");
     $("#cobrar").textContent = esSucursal ? "Completar pedido" : "Cobrar";
     $("#cancelar-orden").textContent = comandaAgregadaPendiente ? "Cancelar comanda" : "Cancelar orden";
+    $("#agregar-comanda").textContent = iniciaNuevoTicket ? "Agregar pedido" : "Agregar comanda";
     $("#procesar").classList.toggle("oculto", !abierto);
     $("#cancelar-orden").classList.toggle("oculto", !muestraCancelar);
     $("#ticket-cuenta").classList.toggle("oculto", !muestraTicket);
@@ -1593,7 +1644,7 @@
       if (bloqueoAjeno) b.disabled = true;
     });
     $$("#datos-cliente button, #datos-cliente input, #datos-cliente textarea").forEach(control => control.disabled = !editable);
-    $$("#datos-servicio-directo input, #ticket-switches input, #nombre-persona").forEach(control => control.disabled = !editable);
+    $$("#datos-servicio-directo input, #ticket-switches input, #nombre-persona, .comanda-cliente-llevar input").forEach(control => control.disabled = !editable);
     $$("#entrega, #pago-domicilio input, #comentario").forEach(control => control.disabled = !editable);
     renderNavegadorComandas();
   }
@@ -1646,7 +1697,7 @@
       termino: termino || "",
       clave: `${producto.id}:${termino || "unico"}`,
       ids: partidas.map(partida => partida.id),
-      cantidadPantalla: Math.min(99, Math.max(1, Math.trunc(cantidadActual))),
+      cantidadPantalla: Math.min(9999, Math.max(1, Math.trunc(cantidadActual))),
       reemplazar: true,
     };
     recordarTermino(producto.id, estado.persona, termino);
@@ -1867,10 +1918,10 @@
       estado.edicion.reemplazar = false;
     } else {
       texto = estado.edicion.reemplazar || texto === "0" ? String(tecla) : `${texto}${tecla}`;
-      texto = texto.slice(0, 2);
+      texto = texto.slice(0, 4);
       estado.edicion.reemplazar = false;
     }
-    estado.edicion.cantidadPantalla = Math.min(99, Number(texto) || 0);
+    estado.edicion.cantidadPantalla = Math.min(9999, Number(texto) || 0);
     renderMenu();
     renderComanda();
     if (estado.edicion.cantidadPantalla > 0) persistirEdicion();
@@ -2036,6 +2087,80 @@
     } catch (error) { toast(error.message, true); }
   }
 
+  function actualizarEstadoNombreClienteLlevar(texto, clase) {
+    const estadoNodo = $("[data-estado-cliente-llevar]");
+    const campo = $("[data-cliente-llevar]");
+    if (estadoNodo) {
+      estadoNodo.textContent = texto;
+      estadoNodo.className = clase;
+    }
+    if (campo) {
+      campo.toggleAttribute("aria-busy", clase === "guardando");
+      if (clase === "error") campo.setAttribute("aria-invalid", "true");
+      else campo.removeAttribute("aria-invalid");
+    }
+  }
+
+  function programarGuardadoNombreClienteLlevar() {
+    clearTimeout(estado.temporizadorClienteLlevar);
+    actualizarEstadoNombreClienteLlevar("Pendiente de guardar", "pendiente");
+    estado.temporizadorClienteLlevar = setTimeout(() => {
+      guardarNombreClienteLlevar();
+    }, 650);
+  }
+
+  function guardarNombreClienteLlevar() {
+    clearTimeout(estado.temporizadorClienteLlevar);
+    const ejecutar = async () => {
+      const ticket = estado.ticket;
+      if (!ticket || ticket.canal !== "llevar") return true;
+      const ticketId = String(ticket.id);
+      const nombre = String(ticket.cliente?.nombre || "");
+      if (ticketId === estado.clienteLlevarTicketId && nombre === estado.clienteLlevarGuardado) {
+        estado.errorClienteLlevar = null;
+        actualizarEstadoNombreClienteLlevar("Guardado", "guardado");
+        return true;
+      }
+      actualizarEstadoNombreClienteLlevar("Guardando…", "guardando");
+      try {
+        const datos = await api(`/api/tickets/${ticket.id}/`, {
+          method: "PATCH",
+          body: JSON.stringify({ cliente_nombre: nombre, cliente_telefono: "" }),
+        });
+        if (String(estado.ticket?.id) !== ticketId) return true;
+        const nombreConfirmado = datos.ticket?.cliente?.nombre ?? nombre;
+        estado.ticket.version_entidad = datos.ticket?.version_entidad ?? estado.ticket.version_entidad;
+        estado.clienteLlevarGuardado = nombreConfirmado;
+        estado.clienteLlevarTicketId = ticketId;
+        estado.errorClienteLlevar = null;
+        if (String(estado.ticket.cliente?.nombre || "") === nombre) {
+          estado.ticket.cliente.nombre = nombreConfirmado;
+          $("#cliente-directo-nombre").value = nombreConfirmado;
+          const campo = $("[data-cliente-llevar]");
+          if (campo) campo.value = nombreConfirmado;
+          actualizarEstadoNombreClienteLlevar("Guardado", "guardado");
+        } else {
+          programarGuardadoNombreClienteLlevar();
+        }
+        return true;
+      } catch (error) {
+        if (String(estado.ticket?.id) === ticketId) {
+          estado.ticket.cliente = { ...(estado.ticket.cliente || {}), nombre };
+          $("#cliente-directo-nombre").value = nombre;
+          const campo = $("[data-cliente-llevar]");
+          if (campo) campo.value = nombre;
+          estado.errorClienteLlevar = error;
+          actualizarEstadoNombreClienteLlevar("Sin guardar · Presiona Enter para reintentar", "error");
+        }
+        toast(`${error.message} El nombre se conserva; reintenta antes de salir.`, true);
+        return false;
+      }
+    };
+    const tarea = estado.colaGuardadoClienteLlevar.then(ejecutar, ejecutar);
+    estado.colaGuardadoClienteLlevar = tarea.catch(() => false);
+    return tarea;
+  }
+
   async function guardarDatos() {
     if (estado.ticket?.canal === "sucursales") return;
     clearTimeout(estado.temporizadorNombre);
@@ -2063,6 +2188,7 @@
 
   async function procesar() {
     if (!(await finalizarEdicion())) return;
+    if (!(await guardarNombreClienteLlevar())) return;
     bloquear(true);
     try {
       await guardarDatos();
@@ -2123,19 +2249,35 @@
 
   async function crearComandaAdicional() {
     if (!estado.ticket?.puede_agregar_comanda || !(await finalizarEdicion())) return;
+    const canalOrigen = estado.ticket.canal;
+    const creaTicketIndependiente = ["domicilio", "recoger"].includes(canalOrigen);
+    if (creaTicketIndependiente && !estado.idempotenciaAgregar) {
+      estado.idempotenciaAgregar = crearIdempotencyKey();
+    }
     bloquear(true, $("#agregar-comanda"));
     try {
+      const cuerpo = creaTicketIndependiente
+        ? { idempotency_key: estado.idempotenciaAgregar }
+        : {};
       const datos = await api(`/api/tickets/${estado.ticket.id}/comandas/`, {
         method: "POST",
-        body: "{}",
+        body: JSON.stringify(cuerpo),
       });
       estado.ticket = datos.ticket;
+      estado.idempotenciaAgregar = "";
       estado.persona = 1;
       estado.comandaVisible = numeroComandaActual(datos.ticket);
       mostrarTicket();
-      toast(`Comanda ${estado.comandaVisible} lista para capturar.`);
+      if (creaTicketIndependiente) {
+        const mensaje = datos.creado === false
+          ? `Pedido #${datos.ticket.folio} recuperado y listo para capturar.`
+          : `Pedido #${datos.ticket.folio} creado para el mismo cliente.`;
+        toast(mensaje);
+      } else {
+        toast(`Comanda ${estado.comandaVisible} lista para capturar.`);
+      }
     } catch (error) {
-      toast(error.message, true);
+      toast(`${error.message} Puedes volver a intentar sin duplicar el pedido.`, true);
     } finally {
       bloquear(false);
     }
@@ -2200,8 +2342,14 @@
 
   async function volver(forzar = false) {
     if (!forzar && !(await finalizarEdicion())) return;
+    if (!forzar && !(await guardarNombreClienteLlevar())) return;
     clearTimeout(estado.temporizadorNombre);
+    clearTimeout(estado.temporizadorClienteLlevar);
     await liberarBloqueoActual();
+    estado.idempotenciaAgregar = "";
+    estado.clienteLlevarGuardado = "";
+    estado.clienteLlevarTicketId = "";
+    estado.errorClienteLlevar = null;
     estado.ticket = null;
     document.body.classList.remove("en-ticket");
     $("#vista-ticket").classList.add("oculto");
@@ -2211,7 +2359,12 @@
 
   async function salirModoMesero() {
     if (!(await finalizarEdicion())) return;
+    if (!(await guardarNombreClienteLlevar())) return;
     await liberarBloqueoActual();
+    estado.idempotenciaAgregar = "";
+    estado.clienteLlevarGuardado = "";
+    estado.clienteLlevarTicketId = "";
+    estado.errorClienteLlevar = null;
     estado.ticket = null;
     document.body.classList.remove("en-ticket");
     $("#vista-ticket").classList.add("oculto");
@@ -2229,6 +2382,7 @@
 
   async function salirModoTableta() {
     if (!(await finalizarEdicion())) return;
+    if (!(await guardarNombreClienteLlevar())) return;
     if (document.fullscreenElement || document.webkitFullscreenElement) {
       try {
         if (document.exitFullscreen) await document.exitFullscreen();
@@ -2494,6 +2648,23 @@
     clearTimeout(estado.temporizadorNombre);
     try { await guardarNombrePersona({ avanzar: true }); }
     catch (error) { toast(error.message, true); }
+  });
+  $("#comanda-papel-preview").addEventListener("input", evento => {
+    const campo = evento.target.closest("[data-cliente-llevar]");
+    if (!campo || estado.ticket?.canal !== "llevar" || !comandaVisibleEditable()) return;
+    estado.ticket.cliente.nombre = campo.value;
+    $("#cliente-directo-nombre").value = campo.value;
+    estado.errorClienteLlevar = null;
+    campo.removeAttribute("aria-invalid");
+    programarGuardadoNombreClienteLlevar();
+  });
+  $("#comanda-papel-preview").addEventListener("focusout", evento => {
+    if (evento.target.matches("[data-cliente-llevar]")) guardarNombreClienteLlevar();
+  });
+  $("#comanda-papel-preview").addEventListener("keydown", async evento => {
+    if (!evento.target.matches("[data-cliente-llevar]") || evento.key !== "Enter") return;
+    evento.preventDefault();
+    if (await guardarNombreClienteLlevar()) evento.target.blur();
   });
   $("#cliente-directo-nombre").addEventListener("input", evento => {
     if (!estado.ticket || !["recoger", "llevar"].includes(estado.ticket.canal)) return;
