@@ -4,13 +4,13 @@ Primera versión local del punto de venta de Los Tocayos. Permite operar pedidos
 comedor, domicilio y sucursales, capturar partidas por comensal, procesar la orden,
 cobrarla y generar comandas/cuentas térmicas en modo ráster.
 
-> **Estado al 18 de septiembre de 2026:** `0.4.0-dev.5` es la candidata vigente de
-> laboratorio; no existe ninguna sucursal en producción. `0.4.0-dev.4` conserva su
-> evidencia funcional, pero fue sustituida para nuevas releases porque la respuesta
-> real de `/service-worker.js` aún publicaba la caché y los recursos de
-> `0.4.0-dev.3`. `dev.5` toma `VERSION` como fuente única para el runtime, la PWA y
-> el registro de módulos. Aún faltan la aceptación física en Android y de impresión,
-> el VPS real y la decisión explícita de promover una candidata como base estándar.
+> **Estado al 18 de septiembre de 2026:** `0.4.0-dev.6` es la candidata vigente de
+> laboratorio; no existe ninguna sucursal en producción. `dev.5` centralizó
+> `VERSION`, pero su primer intento de actualización se revirtió de forma segura
+> porque el snapshot efímero del instalador omitía ese archivo. `dev.6` corrige el
+> contrato del validador e incluye `VERSION`. Aún faltan la aceptación física en
+> Android y de impresión, el VPS real y la decisión explícita de promover una
+> candidata como base estándar.
 
 La dirección futura de paquete único, módulos por sucursal, actualización segura,
 sincronización y servidor central Hostinger KVM 2 está documentada en
@@ -666,9 +666,20 @@ forman ese núcleo y no se deshabilitan. Las dependencias se activan automática
 la decisión de cada sucursal queda en `ModuloSucursal`; `pedidos_sucursales`, incluida
 la configuración histórica de Arboledas, no se activa por defecto.
 
+## Corrección del snapshot de despliegue en `0.4.0-dev.6`
+
+El primer intento de aplicar `dev.5` al laboratorio falló durante la validación
+aislada y activó el rollback automático. La copia temporal incluía el código, pero
+omitía el archivo raíz `VERSION` que ahora es parte del contrato de runtime. La
+instalación anterior quedó restaurada; no se perdió configuración ni información.
+
+`dev.6` incorpora `VERSION` al snapshot efímero y añade una regresión de
+infraestructura. La prueba directa del validador completó migraciones, 182 pruebas
+Django, checks de despliegue, respaldo SQLite y host Windows antes de empaquetar.
+
 ## Corrección de identidad en `0.4.0-dev.5`
 
-`0.4.0-dev.5` sustituye a `0.4.0-dev.4` como candidata para cualquier paquete o
+`0.4.0-dev.5` sustituyó a `0.4.0-dev.4` como candidata para cualquier paquete o
 actualización nueva. La comprobación HTTP del servicio instalado encontró que el
 archivo `VERSION` declaraba `dev.4`, pero el service worker dinámico conservaba una
 constante `dev.3`; por ello, el nombre de caché y las URLs versionadas de CSS y
@@ -765,8 +776,8 @@ superó el reintento completo.
   genera un APK.
 - Cerrar enrolamiento de equipos, HTTPS LAN, canal remoto de releases y catálogo
   versionado por sucursal.
-- Mantener `0.4.0-dev.5` como candidata de laboratorio hasta cerrar la aceptación
-  física y tomar la decisión de promoción. Las evidencias de construcción e
-  instalación de `dev.3` y `dev.4` permanecen como antecedentes; cada artefacto
-  `dev.5` que se considere para promoción debe registrar su commit, manifiesto,
-  SHA-256, reproducibilidad y resultado de actualización.
+- Mantener `0.4.0-dev.6` como candidata de laboratorio hasta cerrar la aceptación
+  física y tomar la decisión de promoción. Las evidencias de `dev.3`, `dev.4` y
+  del rollback seguro de `dev.5` permanecen como antecedentes; el artefacto
+  `dev.6` debe registrar commit, manifiesto, SHA-256, reproducibilidad y resultado
+  de actualización antes de cualquier promoción.

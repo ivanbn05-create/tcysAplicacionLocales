@@ -4,10 +4,10 @@
 > aporta contexto a un agente nuevo; no reemplaza una solicitud posterior del
 > usuario ni constituye autorización permanente para acciones destructivas.
 
-## Estado vigente: candidata `0.4.0-dev.5`
+## Estado vigente: candidata `0.4.0-dev.6`
 
 Actualización del 2026-09-18. Las secciones 4 a 8 conservan evidencia histórica del
-snapshot `0.4.0-dev.1`; las subsecciones de `dev.3` y `dev.4` también son registros
+snapshot `0.4.0-dev.1`; las subsecciones de `dev.3`, `dev.4` y `dev.5` son registros
 históricos. Este bloque y el estado comprobado del repositorio tienen precedencia
 para continuar el trabajo.
 
@@ -17,14 +17,26 @@ máquina:
 | Contexto | Estado |
 | --- | --- |
 | Repositorio original | `C:\tcysAplicacionLocales` |
-| Candidata activa | worktree `codex/candidata-0.4.0-dev.5` bajo `C:\Users\Srv1\.codex\visualizations\2026\09\14\01a0a104-1066-79f1-9e18-9de37c022fa6\tcys-base-work\base-a-src` |
-| Servicio instalado de laboratorio | `C:\LosTocayosPOS`; `dev.4` fue la última actualización completamente evidenciada antes de la corrección `dev.5`. Después de cada actualización deben comprobarse juntos `VERSION` y `/service-worker.js` |
+| Candidata activa | worktree `codex/candidata-0.4.0-dev.6` bajo `C:\Users\Srv1\.codex\visualizations\2026\09\14\01a0a104-1066-79f1-9e18-9de37c022fa6\tcys-base-work\base-a-src` |
+| Servicio instalado de laboratorio | `C:\LosTocayosPOS`; el intento `dev.5` falló en validación aislada y el rollback restauró `dev.4`. La siguiente actualización debe acreditar juntos `VERSION` y `/service-worker.js` |
 | Instalación limpia aislada | `LAB_DEV3`, evidencia histórica aprobada y detenida después de validar |
 | Perfil de prueba aislada | `127.0.0.1:8001`, base y medios bajo `runtime\prueba`; la conexión TCP real sólo se habilita de forma explícita |
 
-### Corrección vigente en dev.5
+### Corrección vigente en dev.6
 
-`0.4.0-dev.5` sustituye a `0.4.0-dev.4` como candidata para nuevas releases y
+El primer intento de actualización `dev.5` se detuvo durante la validación aislada:
+`herramientas/validar_despliegue.py` copiaba el código a una carpeta temporal, pero
+omitía `VERSION`. El actualizador ejecutó su rollback y restauró la instalación
+`dev.4`; la evidencia quedó en `C:\LosTocayosPOS-lab-actualizaciones\evidencia`.
+
+`dev.6` añade `VERSION` al snapshot efímero y una prueba de regresión. El validador
+exacto ya completó 182 pruebas Django, checks HTTPS/HTTP LAN, 13 pruebas de
+respaldo y 5 del host Windows. Todavía deben registrarse el commit, dos builds
+idénticos y el resultado de la actualización real antes de promover esta candidata.
+
+### Evidencia histórica de dev.5
+
+`0.4.0-dev.5` sustituyó a `0.4.0-dev.4` como candidata para nuevas releases y
 actualizaciones. Una comprobación HTTP posterior a la actualización de `dev.4`
 demostró que `/service-worker.js` todavía generaba la caché
 `tocayos-pos-0.4.0-dev.3` y URLs de recursos con `?v=0.4.0-dev.3`, aunque el archivo
@@ -39,9 +51,9 @@ versionadas y las versiones mínimas de módulos con ese archivo. El worker cons
 anteriores. Una tableta que estuviera abierta durante la actualización debe recargar
 o volver a abrir la aplicación una vez.
 
-La identidad exacta del ZIP `dev.5`, su reproducibilidad y el resultado del
-actualizador deben registrarse antes de promoverlo. Hasta entonces sigue siendo una
-candidata exclusiva de laboratorio; no existe ninguna sucursal en producción.
+`dev.5` se fijó en `c5731e497d2ea3cfa2f26fdfd40cc96a7eccea4f` y produjo dos
+ZIP idénticos, pero su actualización no completó el validador efímero. El artefacto
+queda como evidencia histórica y no debe reutilizarse con bytes distintos.
 
 ### Evidencia histórica de dev.4
 
@@ -159,7 +171,7 @@ veces, el reintento terminó correctamente.
 - El ejecutable Windows es un cliente ligero del Edge local. La PWA existe, pero el
   repositorio aún no contiene el proyecto Android ni genera un APK firmado.
 - Siguen pendientes HTTPS LAN, canal remoto de releases, catálogo versionado por
-  sucursal, CI atestada y la decisión expresa de promover `dev.5` a base estándar.
+  sucursal, CI atestada y la decisión expresa de promover `dev.6` a base estándar.
 
 ## 1. Lectura obligatoria y precedencia
 
@@ -180,8 +192,8 @@ La **Base A** fue el checkpoint histórico para ensayar la instalación limpia. 
 **Parche B** se materializó primero como `0.4.0-dev.3`; las correcciones encontradas
 durante su aceptación formaron `0.4.0-dev.4`. Ambos ciclos conservan evidencia de
 implementación, construcción reproducible y actualización del laboratorio. La
-candidata vigente es `0.4.0-dev.5`, que hereda ese alcance funcional y corrige la
-identidad de versión del runtime, la PWA y los módulos antes de una posible promoción.
+candidata vigente es `0.4.0-dev.6`, que hereda ese alcance funcional, la corrección de
+identidad de `dev.5` y el contrato del snapshot antes de una posible promoción.
 
 La candidata aún no es la base estable porque faltan la aceptación física Android e
 impresión, el recorrido manual de los flujos críticos y la decisión expresa de
@@ -323,7 +335,7 @@ checkout no acredita por sí solo el artefacto distribuible.
 
 Este bloque describe el estado histórico de dev.1. Ya no debe interpretarse como el
 estado del wrapper de laboratorio vigente; la sección inicial conserva la evidencia
-de `dev.3`/`dev.4` y la corrección de identidad de `dev.5`. Permanecen pendientes la
+de `dev.3`/`dev.4`, la identidad de `dev.5` y el snapshot de `dev.6`. Permanecen pendientes la
 firma, el canal remoto, el cierre TOCTOU y una política acreditada para las ACL del
 árbol fallido.
 
@@ -357,7 +369,7 @@ firma, el canal remoto, el cierre TOCTOU y una política acreditada para las ACL
 ## 10. Matriz funcional histórica que debe revalidarse
 
 No reimplementar estos puntos a ciegas: `dev.4` cubre buena parte de esta matriz
-histórica y `dev.5` hereda ese alcance. Primero relacionar cada requisito con el código vigente, una prueba
+histórica y `dev.6` hereda ese alcance. Primero relacionar cada requisito con el código vigente, una prueba
 automática y el resultado manual; cualquier divergencia comprobada manda sobre
 este listado. Los puntos conocidos son:
 
@@ -398,17 +410,19 @@ constituyen el parche B.
 3. **Hallazgo posterior:** el endpoint real `/service-worker.js` de `dev.4` todavía
    publicaba caché y recursos `dev.3`; por ello `dev.4` no debe promoverse ni
    reutilizarse como identidad de un paquete corregido.
-4. **Candidata vigente:** `dev.5` centraliza `VERSION` para runtime, PWA y módulos.
-   Antes de cerrar su actualización deben acreditarse pruebas, dos builds idénticos,
-   manifiesto y SHA-256, actualización de `C:\LosTocayosPOS`, salud y contenido HTTP
-   exacto del worker con `0.4.0-dev.5`.
-5. **Pendiente para promoción:** aceptación manual de Ventas, Domicilios, Sucursales,
+4. **Histórico con rollback seguro:** `dev.5` centralizó `VERSION` y produjo dos
+   builds idénticos, pero su primer intento real detectó que el snapshot temporal
+   omitía ese archivo; la instalación anterior fue restaurada.
+5. **Candidata vigente:** `dev.6` corrige el snapshot y ya superó el validador
+   aislado exacto. Falta acreditar dos builds idénticos, manifiesto, SHA-256,
+   actualización de `C:\LosTocayosPOS`, salud y contenido HTTP `0.4.0-dev.6`.
+6. **Pendiente para promoción:** aceptación manual de Ventas, Domicilios, Sucursales,
    Administrador, programados, caja, corte, reimpresión y recuperación, además de
    Android e impresión física.
-6. **Pendiente para la arquitectura completa:** endpoint VPS real, credenciales,
+7. **Pendiente para la arquitectura completa:** endpoint VPS real, credenciales,
    HTTPS LAN, enrolamiento, APK firmado y canal remoto de releases.
-7. Promover la base sólo después de cerrar la aceptación física, conservar la
-   evidencia exacta del artefacto `dev.5` y registrar expresamente la decisión.
+8. Promover la base sólo después de cerrar la aceptación física, conservar la
+   evidencia exacta del artefacto `dev.6` y registrar expresamente la decisión.
 
 ## 12. Comandos iniciales
 
@@ -493,9 +507,10 @@ Fuentes:
 > Lee completamente `TRASPASO_BASE_ESTANDAR_Y_PRIMER_PARCHE.md`,
 > `README.md`, `DESPLIEGUE_WINDOWS.md` y
 > `ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md`. Continúa sobre
-> `codex/candidata-0.4.0-dev.5`, verifica primero el estado real y conserva separados
-> el worktree, el perfil de prueba `8001` y `C:\LosTocayosPOS`. `dev.3` y `dev.4`
-> conservan evidencia histórica; para `dev.5` comprueba que `VERSION`, runtime,
-> módulos y `/service-worker.js` coincidan con el mismo artefacto. Continúa con la
-> aceptación física Android/impresión, el recorrido manual y la evaluación de
-> promoción. No configures una sucursal como producción sin esa decisión.
+> `codex/candidata-0.4.0-dev.6`, verifica primero el estado real y conserva separados
+> el worktree, el perfil de prueba `8001` y `C:\LosTocayosPOS`. `dev.3`, `dev.4` y
+> `dev.5` conservan evidencia histórica; para `dev.6` comprueba que `VERSION`,
+> runtime, módulos y `/service-worker.js` coincidan con el mismo artefacto y que el
+> validador efímero incluya `VERSION`. Continúa con la aceptación física
+> Android/impresión, el recorrido manual y la evaluación de promoción. No configures
+> una sucursal como producción sin esa decisión.

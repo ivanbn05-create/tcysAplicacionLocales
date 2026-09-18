@@ -22,6 +22,7 @@ def main() -> int:
         if snapshot.parent != Path(tempfile.gettempdir()).resolve():
             raise RuntimeError("Directorio temporal inesperado.")
         shutil.copyfile(source / "manage.py", snapshot / "manage.py")
+        shutil.copyfile(source / "VERSION", snapshot / "VERSION")
         for name in SOURCE_DIRS:
             if (source / name).is_dir():
                 shutil.copytree(
