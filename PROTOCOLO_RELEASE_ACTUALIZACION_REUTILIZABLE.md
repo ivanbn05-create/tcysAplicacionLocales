@@ -223,7 +223,8 @@ envía papel ni acredita por sí solo la cola, el modelo o ESC/POS. La aceptaci�
 completa después con una impresión física controlada y autorizada.
 
 El script validado `herramientas/configurar_impresion_instalada.ps1` realiza esa
-operación de forma transaccional: respalda `.env`, detiene el servicio, acredita que
+operación de forma transaccional: respalda `.env` dentro de `backups` con ACL privada,
+detiene el servicio, acredita que
 no existan trabajos `PENDIENTE` ni `PROCESANDO`, cambia únicamente las claves de
 impresión, reinicia, comprueba salud y ejecuta el diagnóstico sin papel. Si la cola no
 está vacía, restaura el servicio sin modificar `.env`; si una fase posterior falla,
@@ -235,6 +236,14 @@ restaura sus bytes originales. Se ejecuta elevado después de instalar la candid
 ```
 
 Su evidencia no se mezcla con la instalación del artefacto.
+
+### Incidencia dev.8: ubicación privada del respaldo de impresión
+
+La ejecución real de `dev.7` detectó que guardar el respaldo junto a `.env` conservaba
+permisos válidos para el servicio sobre un archivo que el auditor trataba como código.
+`dev.8` mueve ese respaldo a `backups`, le asigna únicamente `SYSTEM` y Administradores
+y exige que el verificador oficial conserve cero infracciones ACL. Una candidata ya
+emitida no se reconstruye: esta corrección usa una versión y un commit nuevos.
 
 ## 8. Actualización real y preservación
 

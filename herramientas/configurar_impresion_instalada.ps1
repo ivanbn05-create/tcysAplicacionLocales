@@ -13,7 +13,8 @@ Ejemplo desde una consola elevada:
   .\herramientas\configurar_impresion_instalada.ps1 `
     -HostCaja 192.168.0.33 -HostCocina 192.168.0.33 -HostBarra 192.168.0.33
 
-El archivo de respaldo queda junto a .env y conserva sus permisos. El comando
+El respaldo queda bajo backups con acceso exclusivo de SYSTEM y Administradores.
+El comando
 diagnosticar_impresoras solo abre y cierra sockets TCP; no transmite comandos ni
 genera papel.
 #>
@@ -218,6 +219,66 @@ function Write-EnvironmentAtomically {
         if ($reemplazoCompleto -and (Test-Path -LiteralPath $respaldoReemplazo)) {
             Remove-Item -LiteralPath $respaldoReemplazo -Force -ErrorAction SilentlyContinue
         }
+    }
+}
+
+function Write-PrivateEnvironmentBackup {
+    param([string]$Root, [byte[]]$Bytes)
+
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $directorio = [IO.Path]::GetFullPath((Join-Path $rootFull 'backups')).TrimEnd('\')
+    if (-not $directorio.StartsWith($rootFull + '\', [StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $directorio -PathType Container)) {
+        throw 'No existe el directorio privado backups de la instalación.'
+    }
+    if ((Get-Item -LiteralPath $directorio -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw 'El directorio backups no puede ser un enlace o punto de reparación.'
+    }
+    $nombre = 'env-impresion-backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' +
+        [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.bak'
+    $ruta = [IO.Path]::GetFullPath((Join-Path $directorio $nombre))
+    if (-not $ruta.StartsWith($directorio + '\', [StringComparison]::OrdinalIgnoreCase) -or
+        (Test-Path -LiteralPath $ruta)) {
+        throw 'La ruta calculada para el respaldo privado no es válida.'
+    }
+
+    try {
+        [IO.File]::WriteAllBytes($ruta, $Bytes)
+        $aclPrivada = New-Object Security.AccessControl.FileSecurity
+        $aclPrivada.SetAccessRuleProtection($true, $false)
+        $administradores = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
+        $system = New-Object Security.Principal.SecurityIdentifier('S-1-5-18')
+        $aclPrivada.SetOwner($administradores)
+        foreach ($sid in @($system, $administradores)) {
+            $regla = New-Object Security.AccessControl.FileSystemAccessRule(
+                $sid,
+                [Security.AccessControl.FileSystemRights]::FullControl,
+                [Security.AccessControl.AccessControlType]::Allow
+            )
+            [void]$aclPrivada.AddAccessRule($regla)
+        }
+        Set-Acl -LiteralPath $ruta -AclObject $aclPrivada
+        $aclFinal = Get-Acl -LiteralPath $ruta
+        $reglas = @($aclFinal.GetAccessRules(
+            $true,
+            $true,
+            [Security.Principal.SecurityIdentifier]
+        ))
+        if (-not $aclFinal.AreAccessRulesProtected -or $reglas.Count -ne 2 -or
+            @($reglas | Where-Object {
+                $_.IsInherited -or $_.AccessControlType -ne 'Allow' -or
+                $_.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or
+                $_.IdentityReference.Value -notin @('S-1-5-18', 'S-1-5-32-544')
+            }).Count -ne 0) {
+            throw 'El respaldo de .env no quedó con una ACL privada canónica.'
+        }
+        return $ruta
+    }
+    catch {
+        if (Test-Path -LiteralPath $ruta -PathType Leaf) {
+            Remove-Item -LiteralPath $ruta -Force -ErrorAction SilentlyContinue
+        }
+        throw
     }
 }
 
@@ -515,11 +576,7 @@ try {
         throw '.env cambio durante las validaciones; reintenta cuando no haya otro mantenimiento.'
     }
 
-    $sello = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $rutaRespaldo = Join-Path $raiz ('.env.impresion-backup-' + $sello + '-' +
-        [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.bak')
-    [IO.File]::WriteAllBytes($rutaRespaldo, $bytesOriginales)
-    Set-Acl -LiteralPath $rutaRespaldo -AclObject $aclOriginal
+    $rutaRespaldo = Write-PrivateEnvironmentBackup -Root $raiz -Bytes $bytesOriginales
     if ((Get-FileHash -LiteralPath $rutaRespaldo -Algorithm SHA256).Hash -cne
         (Get-FileHash -LiteralPath $rutaEntorno -Algorithm SHA256).Hash) {
         throw 'El respaldo de .env no coincide byte por byte; no se aplico ningun cambio.'

@@ -473,7 +473,9 @@ puede configurar y comprobar TCP sin enviar papel:
   -HostCaja 192.168.0.33 -HostCocina 192.168.0.33 -HostBarra 192.168.0.33
 ```
 
-El configurador detiene momentáneamente el servicio y exige una cola con cero trabajos
+El configurador guarda el respaldo de `.env` bajo `backups` con acceso exclusivo de
+`SYSTEM` y Administradores. Después detiene momentáneamente el servicio y exige una cola
+con cero trabajos
 `PENDIENTE` o `PROCESANDO` antes de cambiar a TCP. Así evita que una vista previa
 histórica se convierta en una impresión física al reiniciar. Si encuentra trabajos,
 restaura el servicio sin modificar `.env` y exige resolver la cola en el backend actual.
