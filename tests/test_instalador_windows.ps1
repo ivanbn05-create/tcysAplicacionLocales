@@ -39,6 +39,21 @@ function Assert-True {
     if (-not $Condition) { throw $Message }
 }
 
+$multicastDefinitions = @($astsSeparados["Verificador"].FindAll({
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq "Test-MulticastAddress"
+}, $true))
+Assert-True ($multicastDefinitions.Count -eq 1) "El verificador no define una única validación multicast compatible."
+. ([scriptblock]::Create($multicastDefinitions[0].Extent.Text))
+foreach ($multicastValida in @("224.0.0.0", "239.255.255.255", "ff02::1", "ff0e::ffff")) {
+    Assert-True (Test-MulticastAddress -Address ([Net.IPAddress]::Parse($multicastValida))) "Se aceptó una dirección multicast: $multicastValida"
+}
+foreach ($direccionUnicast in @("0.0.0.0", "127.0.0.1", "192.168.0.30", "223.255.255.255", "240.0.0.0", "::", "::1", "fe80::1")) {
+    Assert-True (-not (Test-MulticastAddress -Address ([Net.IPAddress]::Parse($direccionUnicast)))) "Se rechazó una dirección no multicast: $direccionUnicast"
+}
+Assert-True (-not $astsSeparados["Verificador"].Extent.Text.Contains(".IsMulticast")) "El verificador depende de IPAddress.IsMulticast, ausente en Windows PowerShell 5.1."
+
 function Assert-PrivateBackupFileAcl {
     param([string]$Path)
 

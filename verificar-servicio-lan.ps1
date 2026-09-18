@@ -124,6 +124,20 @@ function Test-ContainsOrdinalIgnoreCase {
     ) -ge 0
 }
 
+function Test-MulticastAddress {
+    param([AllowNull()][Net.IPAddress]$Address)
+
+    if ($null -eq $Address) { return $false }
+    [byte[]]$bytes = $Address.GetAddressBytes()
+    if ($Address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) {
+        return $bytes.Length -eq 4 -and (($bytes[0] -band 0xF0) -eq 0xE0)
+    }
+    if ($Address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6) {
+        return $bytes.Length -eq 16 -and $bytes[0] -eq 0xFF
+    }
+    return $false
+}
+
 function Test-AllowedHost {
     param([string]$Value)
 
@@ -198,7 +212,7 @@ $allowInsecureHttpLan = ConvertFrom-DotEnvBoolean -Name "ALLOW_INSECURE_HTTP_LAN
 $listenAddress = Get-RequiredDotEnvValue -Name "WAITRESS_HOST"
 $listenIp = $null
 if (-not [Net.IPAddress]::TryParse($listenAddress, [ref]$listenIp)) { throw "WAITRESS_HOST no es una dirección IP válida." }
-if ($listenIp.IsMulticast) { throw "WAITRESS_HOST no puede ser una dirección multicast." }
+if (Test-MulticastAddress -Address $listenIp) { throw "WAITRESS_HOST no puede ser una dirección multicast." }
 if ($Port -eq 0) {
     $Port = ConvertFrom-DotEnvInteger -Name "WAITRESS_PORT" -Value (Get-RequiredDotEnvValue -Name "WAITRESS_PORT") -Minimum 1 -Maximum 65535
 }
