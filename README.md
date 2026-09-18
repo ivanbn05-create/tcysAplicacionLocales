@@ -4,11 +4,12 @@ Primera versión local del punto de venta de Los Tocayos. Permite operar pedidos
 comedor, domicilio y sucursales, capturar partidas por comensal, procesar la orden,
 cobrarla y generar comandas/cuentas térmicas en modo ráster.
 
-> **Estado al 17 de septiembre de 2026:** `0.4.0-dev.3` es una candidata de
-> laboratorio. No existe ninguna sucursal en producción y todavía no debe declararse
-> como base estable. La validación automatizada del código ya cerró correctamente;
-> siguen pendientes la construcción reproducible, la instalación limpia, la
-> actualización de `C:\LosTocayosPOS` y la aceptación física en Android e impresoras.
+> **Estado al 18 de septiembre de 2026:** `0.4.0-dev.3` sigue siendo una candidata
+> validada de laboratorio; no existe ninguna sucursal en producción. La validación
+> automatizada, la construcción reproducible, la instalación limpia aislada
+> `LAB_DEV3` y la actualización real de `C:\LosTocayosPOS` terminaron
+> correctamente. Aún faltan la aceptación física en Android y de impresión, el VPS
+> real y la decisión explícita de promover esta candidata como base estándar.
 
 La dirección futura de paquete único, módulos por sucursal, actualización segura,
 sincronización y servidor central Hostinger KVM 2 está documentada en
@@ -689,11 +690,48 @@ migraciones, la sintaxis JavaScript, `git diff --check` y el detector de Impecca
 también aprobaron sin hallazgos. El requisito 14 conserva una validación física
 pendiente en una tableta Android real.
 
+### Evidencia de distribución e instalación
+
+| Evidencia | Resultado |
+| --- | --- |
+| Commit final | `7ae0431d4d615d4c3df059ce8749179c966c4ab7` |
+| Artefacto | `LosTocayosPOS-Servidor-0.4.0-dev.3.zip` |
+| SHA-256 del ZIP | `c3c23e58663e2f110d568f4781a1507b257af4382c74ac67e35820989ff9e890` |
+| Reproducibilidad | 2/2 construcciones idénticas; 32,327,195 bytes y 204 archivos |
+| SHA-256 del manifiesto | `14abf805f2f827b045d84cf2353a155ebb79405f22afc45f7ffc315a30d3257d` |
+| Instalación limpia aislada | `LAB_DEV3` aprobada y detenida tras validar |
+| Actualización real | `C:\LosTocayosPOS` actualizado con el ZIP final; salud `ok` |
+
+La instalación limpia acreditó el payload funcional en el commit `b568bb5`:
+Python 3.13.14, dependencias, migraciones, salud, clave maestra `0000` como hash,
+alta administrativa y operativa, 204 posiciones y únicamente los cuatro módulos
+del núcleo. El commit final `7ae0431` sólo modifica el verificador PowerShell y su
+prueba de regresión; su ZIP exacto se acreditó mediante la actualización real del
+laboratorio.
+
+La actualización preservó `.env` byte por byte y dejó el servicio en ejecución
+automática como `LocalService`. Las tareas `LosTocayosPOS-RespaldoSQLite` y
+`LosTocayosPOS-PurgasFisicas` quedaron presentes y listas. El verificador elevado
+ejecutó un respaldo con resultado 0, auditó 11,984 elementos con 0 violaciones ACL y
+confirmó el firewall privado en `LocalSubnet`. El service worker declara la versión,
+`skipWaiting` y `clients.claim`; el manifiesto de tableta abre `/tabletas/` en
+`fullscreen` o `standalone`.
+
+El primer intento encontró que Windows PowerShell 5.1 no expone
+`IPAddress.IsMulticast`. La aplicación permaneció saludable; el fallo fue sólo de
+la verificación posterior. El commit final sustituyó esa llamada por una comprobación
+portable de bytes IPv4/IPv6, agregó la regresión, reconstruyó el artefacto dos veces y
+superó el reintento completo.
+
 ## Brechas pendientes antes de fijar la base
 
-- Construir dos veces el artefacto reproducible y documentar su SHA-256; después
-  completar la instalación limpia, la actualización del servicio de laboratorio y
-  la aceptación manual con la impresora y una tableta Android físicas.
+- Completar la aceptación manual en una tableta Android y una impresión física. La
+  instalación permanece deliberadamente en modo `archivo`;
+  `192.168.0.33:9100` responde por TCP, pero aún no se ha enviado ni confirmado un
+  ticket físico desde el servicio instalado.
+- Recorrer manualmente Ventas, Administrador, programados, corte diario, reimpresión
+  y recuperación sobre el equipo y los dispositivos que se usarán para aceptar la
+  base.
 - Implementar, desplegar y autenticar el endpoint real del VPS; hoy sólo existe el
   contrato Edge y sus pruebas con respuestas simuladas.
 - Convertir el wrapper reversible de laboratorio en un canal remoto firmado y
@@ -704,6 +742,6 @@ pendiente en una tableta Android real.
   genera un APK.
 - Cerrar enrolamiento de equipos, HTTPS LAN, canal remoto de releases y catálogo
   versionado por sucursal.
-- Mantener `0.4.0-dev.3` como candidata de laboratorio hasta que la instalación limpia
-  y la ruta de actualización produzcan evidencia equivalente y cierren su aceptación
-  física.
+- Mantener `0.4.0-dev.3` como candidata de laboratorio hasta cerrar la aceptación
+  física y tomar la decisión de promoción. La construcción, la instalación limpia y
+  la ruta de actualización ya cuentan con evidencia.

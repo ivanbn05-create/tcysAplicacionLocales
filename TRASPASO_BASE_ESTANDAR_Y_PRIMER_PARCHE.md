@@ -6,24 +6,40 @@
 
 ## Estado vigente: candidata `0.4.0-dev.3`
 
-Actualización del 2026-09-17. Las secciones 4 a 7 conservan evidencia histórica del
+Actualización del 2026-09-18. Las secciones 4 a 8 conservan evidencia histórica del
 snapshot `0.4.0-dev.1`; este bloque y el estado comprobado del repositorio tienen
 precedencia para continuar el trabajo.
 
-**No existe ninguna sucursal en producción.** Hay cuatro contextos distintos en esta
+**No existe ninguna sucursal en producción.** Hay cinco contextos distintos en esta
 máquina:
 
 | Contexto | Estado |
 | --- | --- |
 | Repositorio original | `C:\tcysAplicacionLocales` |
 | Candidata activa | worktree `codex/candidata-0.4.0-dev.3` bajo `C:\Users\Srv1\.codex\visualizations\2026\09\14\01a0a104-1066-79f1-9e18-9de37c022fa6\tcys-base-work\base-a-src` |
-| Servicio instalado de laboratorio | `C:\LosTocayosPOS`, `LosTocayosPOS` activo en `0.0.0.0:8000` |
-| Prueba aislada | `127.0.0.1:8001`, base y medios bajo `runtime\prueba`; impresora TCP real habilitada sólo de forma explícita |
+| Servicio instalado de laboratorio | `C:\LosTocayosPOS`, dev.3 commit `7ae0431`, servicio saludable en `0.0.0.0:8000` |
+| Instalación limpia aislada | `LAB_DEV3` aprobada y detenida después de validar |
+| Perfil de prueba aislada | `127.0.0.1:8001`, base y medios bajo `runtime\prueba`; la conexión TCP real sólo se habilita de forma explícita |
 
-La candidata declara `0.4.0-dev.3`. Su HEAD base conocido es `927c5dc`
-(`feat: habilitar prueba aislada con impresora real`); la integración funcional se
-encuentra en el worktree de candidata y todavía debe quedar en un commit limpio
-antes de construir el artefacto reproducible.
+La candidata declara `0.4.0-dev.3`. Su HEAD final es
+`7ae0431d4d615d4c3df059ce8749179c966c4ab7`
+(`fix: validar multicast en Windows PowerShell 5.1`), está publicado en
+`github/codex/candidata-0.4.0-dev.3` y era limpio al construir. Dos builds del mismo
+commit y epoch produjeron exactamente el mismo ZIP:
+
+- `LosTocayosPOS-Servidor-0.4.0-dev.3.zip`;
+- SHA-256 `c3c23e58663e2f110d568f4781a1507b257af4382c74ac67e35820989ff9e890`;
+- 32,327,195 bytes y 204 archivos;
+- manifiesto SHA-256
+  `14abf805f2f827b045d84cf2353a155ebb79405f22afc45f7ffc315a30d3257d`.
+
+La instalación limpia `LAB_DEV3` acreditó el payload funcional en `b568bb5`.
+Validó Python 3.13.14, dependencias, migraciones, salud, cuenta administrativa y
+operativa, clave maestra `0000` almacenada como hash, 24 posiciones de Comedor,
+100 de Domicilio, 40 de Llevar y 40 de Recoger, y sólo los módulos del núcleo. El
+commit final `7ae0431` cambia únicamente el verificador PowerShell y su regresión;
+el ZIP final exacto se acreditó mediante la actualización real de
+`C:\LosTocayosPOS`.
 
 ### Cambios incorporados en dev.3
 
@@ -57,41 +73,58 @@ antes de construir el artefacto reproducible.
 
 Los requisitos funcionales 1 a 14 quedaron cubiertos por implementación y pruebas.
 La validación cerró con 172/172 pruebas Django, 68/68 pruebas unitarias de
-infraestructura, `test_instalador_windows.ps1 -SkipAcl`, `django check`,
-`makemigrations --check --dry-run`, comprobación de sintaxis JavaScript,
-`git diff --check` y el detector de Impeccable sin hallazgos. El requisito 14 aún
-requiere aceptación física en una tableta Android real. La construcción reproducible,
-la instalación limpia y la actualización del laboratorio siguen pendientes, por lo
-que esta versión todavía no es la base estable.
+infraestructura, el contrato PowerShell 5.1, `django check`,
+`makemigrations --check --dry-run`, sintaxis JavaScript, `git diff --check` y el
+detector de Impeccable sin hallazgos. La construcción reproducible, la instalación
+limpia aislada y la actualización real del laboratorio también están completas.
+El requisito 14 y la salida impresa aún requieren aceptación física.
+
+### Actualización real de laboratorio
+
+El 2026-09-18, entre 07:57:49 y 08:06:27, el wrapper
+`actualizar-laboratorio-desde-release.ps1` instaló el ZIP final en
+`C:\LosTocayosPOS` y concluyó con `status=ok`:
+
+- versión `0.4.0-dev.3`, commit `7ae0431` y SHA-256 del artefacto coincidentes;
+- `.env` preservado byte por byte, identidad y datos conservados;
+- servicio `Running`, inicio automático y cuenta `NT AUTHORITY\LocalService`;
+- las dos tareas programadas presentes y en estado `Ready`;
+- respaldo real con resultado 0 y archivo `db-20260918-080534.sqlite3`;
+- 11,984 elementos auditados y 0 violaciones ACL;
+- firewall privado limitado a `LocalSubnet`;
+- service worker dev.3 con `skipWaiting` y `clients.claim`;
+- manifiesto de tableta con `/tabletas/` y `fullscreen,standalone`.
+
+La instalación anterior quedó respaldada en
+`C:\LosTocayosPOS-respaldo-lab-20260918-075832-91d6c18f`. El parche explícito
+`Topo` se aplicó después de un dry-run y un respaldo: `AM`/$30 vigente desde
+2026-08-14 pasó a `Topo`/$32 vigente desde 2026-09-17. La segunda ejecución informó
+`ya_aplicado` y la salud permaneció `ok`.
+
+El primer intento de actualización dejó la aplicación saludable, pero falló en la
+verificación posterior porque Windows PowerShell 5.1 no expone
+`IPAddress.IsMulticast`. El commit `7ae0431` sustituyó esa dependencia por
+inspección de bytes IPv4/IPv6 y añadió una prueba de regresión. Tras reconstruir dos
+veces, el reintento terminó correctamente.
 
 ### Brechas vigentes
 
+- La instalación conserva deliberadamente `PRINT_BACKEND=archivo`. El sondeo a
+  `192.168.0.33:9100` responde por TCP y una prueba aislada acreditó el backend,
+  pero todavía no se ha aceptado la salida física de un ticket desde el servicio.
+- Falta la aceptación manual en una tableta Android real y el recorrido funcional de
+  Ventas, Administrador, programados, corte diario, reimpresión y recuperación.
 - Falta configurar `VPS_CONSOLIDACION_URL`, `VPS_CONSOLIDACION_TOKEN` y, si se
   modifica, `VPS_CONSOLIDACION_TIMEOUT`. El backend real del VPS, su autenticación,
-  enrolamiento y operación no existen todavía; una respuesta simulada sólo valida el
-  contrato.
-- El motor `actualizar-servidor.ps1` continúa siendo in-place cuando se ejecuta solo,
-  pero ya existe `actualizar-laboratorio-desde-release.ps1` para la prueba A→B. El
-  wrapper verifica release y versión, extrae a staging externo, intercambia árboles,
-  conserva el estado operativo y ejecuta el motor oficial; ante fallo restaura el
-  árbol anterior, su salud y los XML —o ausencia— de ambas tareas programadas.
-- El wrapper preserva exactamente `.env`, `.venv`, `runtime`, `media`, `logs`,
-  `backups` y los archivos SQLite de la raíz. También conserva horario y retención
-  existentes, y mantiene el respaldo completo anterior. Falta ejecutar la prueba real
-  contra `C:\LosTocayosPOS`.
+  enrolamiento y operación no existen todavía.
 - El wrapper sigue limitado al laboratorio: no descarga ni valida una firma del
   publicador, tiene una ventana TOCTOU entre verificar y consumir el ZIP local, y las
   ACL finales del árbol de candidata conservado tras un rollback no quedan
-  acreditadas. Ese árbol es sólo diagnóstico y debe permanecer restringido.
-- Falta completar la aceptación equivalente de instalación limpia y actualización,
-  incluida interfaz, acceso LAN, respaldo, ACL, impresión física y el recorrido del
-  requisito 14 en Android.
+  acreditadas.
 - El ejecutable Windows es un cliente ligero del Edge local. La PWA existe, pero el
-  repositorio aún no contiene un proyecto Android ni genera un APK firmado; falta
-  construir el envolvente WebView/TWA en Android Studio y probar la instalación
-  USB-C.
+  repositorio aún no contiene el proyecto Android ni genera un APK firmado.
 - Siguen pendientes HTTPS LAN, canal remoto de releases, catálogo versionado por
-  sucursal y CI atestada.
+  sucursal, CI atestada y la decisión expresa de promover dev.3 a base estándar.
 
 ## 1. Lectura obligatoria y precedencia
 
@@ -108,29 +141,22 @@ convertir frases de este documento en instrucciones que contradigan al usuario.
 
 ## 2. Objetivo acordado
 
-La siguiente etapa debe usar dos artefactos internos:
+La **Base A** fue el checkpoint histórico para ensayar la instalación limpia. El
+**Parche B** se materializó como `0.4.0-dev.3`. El laboratorio ya completó el ciclo
+técnico de implementación, construcción reproducible, instalación limpia aislada,
+actualización real A→B, verificación elevada y aplicación idempotente del parche de
+catálogo.
 
-- **Base A:** estado actual del instalador, usado sólo para comprobar una
-  instalación limpia.
-- **Parche B:** cambios funcionales y de interfaz que aún solicite el usuario.
+La candidata aún no es la base estable porque faltan la aceptación física Android e
+impresión, el recorrido manual de los flujos críticos y la decisión expresa de
+promoción. El VPS real y el canal firmado son brechas del producto multisucursal y no
+deben presentarse como capacidades ya disponibles.
 
-El parche B se materializó como la candidata `0.4.0-dev.3`. No es todavía una base
-estable: falta cerrar la secuencia de validación y comparar instalación limpia con
-actualización.
-
-Secuencia aprobada conceptualmente:
-
-1. Congelar y empaquetar Base A desde un commit limpio.
-2. Retirar de forma controlada la instalación simulada e instalar Base A.
-3. Implementar y empaquetar el parche B.
-4. Probar la actualización Base A → B.
-5. Limpiar otra vez e instalar B desde cero.
-6. Declarar B versión mínima común sólo si la actualización y la instalación
-   limpia producen un estado equivalente y pasan aceptación.
-7. Incorporar después módulos extras mediante configuración o `entitlements`
-   por sucursal, no mediante ramas, copias manuales o instaladores divergentes.
-
-Base A no debe distribuirse a sucursales. Es únicamente un banco de prueba.
+Después de promover una base, todas las sucursales deben recibir el mismo paquete.
+Los módulos extras se activan mediante configuración o futuros `entitlements` por
+sucursal; no mediante ramas, copias manuales ni instaladores divergentes. Una
+instalación en sucursal se actualiza desde una release validada y nunca con
+`git pull`.
 
 ## 3. Contexto operativo y límites de autorización
 
@@ -327,24 +353,28 @@ constituyen el parche B.
 
 ## 11. Secuencia vigente para cerrar la candidata
 
-1. **Completado:** integrar dev.3 y cerrar suite, checks de Django, migraciones,
-   JavaScript, `git diff --check` e Impeccable.
-2. **Operativo para desarrollo:** mantener la prueba aislada en
-   `127.0.0.1:8001` con `runtime\prueba\db.sqlite3`, separada del servicio
-   instalado en `8000`. La aceptación física Android del requisito 14 sigue
-   pendiente.
-3. **Pendiente:** construir dos releases desde el mismo commit y epoch, comprobar
-   SHA-256 idéntico y validar una de ellas en una instalación limpia. Confirmar clave
-   maestra `0000`, rotación manual, alta de operador y módulos opcionales vacíos.
-4. **Pendiente:** aplicar el mismo artefacto a `C:\LosTocayosPOS` mediante
-   `actualizar-laboratorio-desde-release.ps1`. Verificar preservación de `.env`,
-   identidad, datos, impresoras, módulos, ambas tareas, horario, retención y ACL.
-5. Ejecutar aceptación manual de Ventas, Administrador, tabletas, programados,
-   corte diario, reimpresión y salida física de los tickets.
-6. Configurar y aceptar el endpoint real antes de depender del cierre mensual en una
-   sucursal; las pruebas actuales sólo acreditan el contrato y respuestas simuladas.
-7. Comparar instalación limpia y actualización. Sólo si ambas son equivalentes,
-   documentar el artefacto, etiquetar la versión y promoverla como base.
+1. **Completado:** implementación dev.3, 172 pruebas Django, 68 pruebas de
+   infraestructura, checks de Django, migraciones, JavaScript, PowerShell 5.1,
+   `git diff --check` e Impeccable.
+2. **Completado:** instalación limpia aislada `LAB_DEV3` del payload funcional,
+   con bootstrap, clave maestra hash, alta de operador, 204 posiciones y sólo los
+   módulos del núcleo. Se detuvo después de validar.
+3. **Completado:** dos releases finales reproducibles del commit `7ae0431`, con
+   ZIP SHA-256
+   `c3c23e58663e2f110d568f4781a1507b257af4382c74ac67e35820989ff9e890`.
+4. **Completado:** actualización real de `C:\LosTocayosPOS` con el ZIP final,
+   preservación byte a byte de `.env`, servicio y salud correctos, dos tareas
+   listas, respaldo real, firewall conforme y 11,984 elementos ACL sin violaciones.
+5. **Completado:** dry-run, aplicación e idempotencia del parche de catálogo
+   `AM` → `Topo`, con salud posterior `ok`.
+6. **Pendiente para promoción:** aceptación manual de Ventas, Administrador,
+   tabletas, programados, corte diario, reimpresión y salida física de tickets.
+7. **Pendiente para la arquitectura completa:** endpoint VPS real, credenciales,
+   HTTPS LAN, enrolamiento, APK firmado y canal remoto de releases.
+8. Ambas rutas quedaron validadas para el mismo payload funcional, aunque la
+   instalación limpia fue anterior al cambio exclusivo del verificador en `7ae0431`.
+   Promover la base sólo después de cerrar la aceptación física y registrar la
+   decisión.
 
 ## 12. Comandos iniciales
 
@@ -418,8 +448,8 @@ Fuentes:
 - No cargar la semilla Arboledas durante una actualización.
 - No asumir sucursal, IP, HTTP/HTTPS, impresoras, módulos ni datos a borrar.
 - No debilitar ACL ni tomar posesión masiva de la raíz.
-- Los 22 fallos heredados reaparecerán si `backups\` se conserva dentro de la
-  misma raíz. Archivarlos fuera o eliminarlos sólo con autorización.
+- La actualización final auditó 11,984 elementos y terminó con 0 violaciones ACL;
+  cada release futura debe repetir el verificador elevado.
 - Este archivo no forma parte de la allowlist del paquete del servidor.
 - La estimación anterior de “98 %” se refería únicamente al hardening del
   instalador, no al producto completo.
@@ -430,7 +460,7 @@ Fuentes:
 > `README.md`, `DESPLIEGUE_WINDOWS.md` y
 > `ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md`. Continúa sobre
 > `codex/candidata-0.4.0-dev.3`, verifica primero el estado real y conserva separados
-> el worktree, la prueba `8001` y `C:\LosTocayosPOS`. La suite ya está cerrada;
-> completa build reproducible, instalación limpia, actualización de laboratorio y
-> aceptación física Android. No declares la base ni configures una sucursal como
-> producción sin esa evidencia.
+> el worktree, el perfil de prueba `8001` y `C:\LosTocayosPOS`. Build reproducible,
+> instalación limpia y actualización de laboratorio ya tienen evidencia; continúa con
+> la aceptación física Android/impresión, el recorrido manual y la evaluación de
+> promoción. No configures una sucursal como producción sin esa decisión.
