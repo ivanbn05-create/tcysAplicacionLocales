@@ -462,8 +462,23 @@ input:focus, select:focus { border-color: var(--carbon); }
   display: block;
 }
 .pedidos-mapa { min-width: 0; }
+.estado-pedidos {
+  min-height: 44px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--amarillo);
+  color: var(--carbon);
+  background: var(--amarillo-suave);
+  font-size: .67rem;
+  font-weight: 800;
+  line-height: 1.4;
+}
+.estado-pedidos[hidden] { display: none !important; }
+.estado-pedidos.error { color: #fff; border-color: var(--rojo); background: var(--rojo); }
 .mapa-posiciones { display: grid; gap: 10px; }
-.mapa-grupo { border: 2px solid var(--carbon); background: #fff; }
+.mapa-grupo { min-width: 0; border: 2px solid var(--carbon); background: #fff; }
 .mapa-grupo h3 { margin: 0; }
 .mapa-grupo-toggle {
   width: 100%;
@@ -508,6 +523,24 @@ input:focus, select:focus { border-color: var(--carbon); }
   border-top: 2px solid var(--carbon);
 }
 .mapa-grupo-celdas[hidden] { display: none !important; }
+.mapa-sucursales-pedidos { min-width: 0; border-top: 2px solid var(--carbon); }
+.mapa-sucursales-pedidos[hidden] { display: none !important; }
+.mapa-pedidos-sucursales-tabs {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--borde);
+  scroll-padding-inline: 12px;
+  scroll-snap-type: x proximity;
+}
+.mapa-pedidos-sucursal-tab {
+  flex: 0 0 min(210px, 75vw);
+  scroll-snap-align: start;
+}
+.mapa-sucursal-panel { border-top: 0; }
+.mapa-sucursal-panel > .vacio { grid-column: 1 / -1; }
 .celda-posicion-admin {
   min-height: 104px;
   padding: 10px;
@@ -983,6 +1016,8 @@ dialog::backdrop { background: rgba(20,20,20,.72); }
   .movimiento-acciones .boton { flex: 1; }
   .fila-domicilio .asignacion-control { grid-column: auto; }
   .tarjetas-sucursales { grid-template-columns: 1fr; }
+  .mapa-pedidos-sucursales-tabs { padding: 8px; scroll-padding-inline: 8px; }
+  .mapa-pedidos-sucursal-tab { flex-basis: min(170px, 78vw); }
   .mapa-grupo-celdas { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .barra-lote { position: static; align-items: stretch; flex-direction: column; }
   .barra-lote-resumen, .acciones-pedido-seleccionado, .accion-lote { flex-basis: auto; }

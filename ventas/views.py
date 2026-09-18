@@ -827,6 +827,11 @@ def api_estado(request):
             "folio": ticket.folio,
             "estado": ticket.estado,
             "total": str(ticket.total),
+            "cliente_nombre": (
+                ticket.cliente_nombre
+                if ticket.canal == Mesa.Canal.LLEVAR
+                else ""
+            ),
             "version_entidad": ticket.version_entidad,
             "bloqueo": bloqueo_ticket_payload(ticket, device_id),
         }
@@ -1661,7 +1666,25 @@ def api_admin_acceso(request):
 @require_GET
 @acceso_administrador
 def api_admin_resumen(request):
-    resumen = resumen_administrador(_sucursal())
+    sucursal = _sucursal()
+    resumen = resumen_administrador(sucursal)
+    sucursales_por_posicion = {
+        str(mesa.id): mesa.cliente_sucursal
+        for mesa in Mesa.objects.select_related("cliente_sucursal").filter(
+            sucursal=sucursal,
+            activa=True,
+            canal=Mesa.Canal.SUCURSALES,
+            cliente_sucursal__isnull=False,
+        )
+    }
+    for posicion in resumen.get("posiciones", []):
+        cliente_sucursal = sucursales_por_posicion.get(str(posicion.get("id", "")))
+        posicion["cliente_sucursal_id"] = (
+            str(cliente_sucursal.id) if cliente_sucursal else ""
+        )
+        posicion["cliente_sucursal"] = (
+            cliente_sucursal.nombre if cliente_sucursal else ""
+        )
     resumen["acceso"] = {
         "nivel": request.acceso_administrador["nivel"],
         "permisos": dict(request.acceso_administrador["permisos"]),

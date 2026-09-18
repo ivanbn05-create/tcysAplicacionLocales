@@ -81,6 +81,23 @@ h2 { font-size: 1.7rem; }
 .posicion.procesada { background: var(--carbon-suave); }
 .posicion strong { position: relative; z-index: 1; font-size: 1rem; line-height: 1.15; }
 .posicion small { position: relative; z-index: 1; opacity: .88; }
+.posicion .posicion-detalle-llevar {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  opacity: 1;
+  text-align: left;
+}
+.posicion-cliente-llevar {
+  max-width: 100%;
+  overflow: hidden;
+  font-weight: 900;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.posicion-detalle-llevar > span:last-child { opacity: .82; }
 
 .boton { min-height: 45px; padding: 10px 18px; border: 0; border-radius: 12px; font-weight: 800; }
 .boton.secundario { color: var(--azul); background: #fff; border: 1px solid var(--borde); }

@@ -22,6 +22,7 @@
     canalPedidosAbierto: "",
     movimientoEditandoId: "",
     sucursalActivaId: "",
+    sucursalPedidosActivaId: "",
     asignacionesRepartidor: new Map(),
     secuenciaAsignacion: 0,
     panelInicialSolicitado: "",
@@ -79,6 +80,16 @@
   function ajustarEstadoOcupado(cambio) {
     estado.peticionesPendientes = Math.max(0, estado.peticionesPendientes + cambio);
     $("#administrador-app").setAttribute("aria-busy", estado.peticionesPendientes ? "true" : "false");
+  }
+
+  function mostrarEstadoPedidos(tipo = "", mensaje = "") {
+    const aviso = $("#estado-pedidos");
+    const mapa = $("#mapa-posiciones");
+    if (!aviso || !mapa) return;
+    aviso.textContent = mensaje;
+    aviso.className = ["estado-pedidos", tipo].filter(Boolean).join(" ");
+    aviso.hidden = !mensaje;
+    mapa.setAttribute("aria-busy", tipo === "cargando" ? "true" : "false");
   }
 
   function controlQueDisparoLaAccion() {
@@ -219,6 +230,7 @@
     const promesa = (async () => {
       ajustarEstadoOcupado(1);
       marcarControlPendiente(iniciador, true, "Actualizando…");
+      mostrarEstadoPedidos("cargando", estado.administrador ? "Actualizando posiciones…" : "Cargando posiciones…");
       try {
         let datos;
         try {
@@ -233,8 +245,10 @@
         }
         depurarSeleccion();
         renderTodo();
+        mostrarEstadoPedidos();
         return true;
       } catch (error) {
+        mostrarEstadoPedidos("error", `No se pudieron cargar las posiciones. ${error.message} Usa Actualizar para volver a intentarlo.`);
         toast(error.message, true);
         return false;
       } finally {
@@ -329,6 +343,8 @@
         ticket_id: ticket.id,
         ticket_folio: ticket.folio,
         ticket_estado: ticket.estado,
+        cliente_sucursal_id: ticket.cliente_sucursal_id || "",
+        cliente_sucursal: ticket.cliente_sucursal || "",
       });
       ids.add(String(ticket.mesa_id));
     });
@@ -412,6 +428,69 @@
     $("#lote-repartidor").innerHTML = opcionesRepartidores();
   }
 
+  function renderCeldaPosicion(posicion) {
+    const ticket = ticketDePosicion(posicion);
+    const seleccionado = Boolean(ticket && estado.ticketsSeleccionados.has(String(ticket.id)));
+    const detalleActivo = Boolean(ticket && String(ticket.id) === String(estado.ticketSeleccionadoId));
+    const destino = Boolean(estado.ticketMoverId && !ticket);
+    const clases = [
+      "celda-posicion-admin",
+      ticket ? "ocupada" : "libre",
+      seleccionado ? "seleccionada" : "",
+      detalleActivo ? "detalle-activo" : "",
+      destino ? "destino-disponible" : "",
+    ].filter(Boolean).join(" ");
+    const resumen = ticket
+      ? '<small>Ticket ' + escapar(ticket.folio) + ' · ' + dinero(ticket.total) + '</small><span>' + escapar(ticket.estado_etiqueta) + '</span>'
+      : '<small>Disponible</small><span>Libre</span>';
+    return '<button class="' + clases + '" data-posicion-id="' + escapar(posicion.id) + '"' +
+      (ticket ? ' data-ticket-id="' + escapar(ticket.id) + '"' : "") +
+      ' type="button" aria-pressed="' + (seleccionado ? "true" : "false") + '"' +
+      (!ticket && !estado.ticketMoverId ? ' aria-disabled="true"' : "") + '>' +
+        '<b>' + escapar(posicion.nombre) + '</b>' + resumen +
+      '</button>';
+  }
+
+  function renderSucursalesEnPedidos(posiciones, idPanel, idBoton, abierto) {
+    const fuentes = new Map();
+    (estado.administrador?.sucursales || []).forEach(item => {
+      const clave = String(item.id || item.nombre || "");
+      if (clave) fuentes.set(clave, { nombre: item.nombre || "Sucursal", posiciones: [] });
+    });
+    posiciones.forEach(posicion => {
+      const ticket = ticketDePosicion(posicion);
+      const clave = String(posicion.cliente_sucursal_id || ticket?.cliente_sucursal_id || posicion.cliente_sucursal || ticket?.cliente_sucursal || "sin-identificar");
+      if (!fuentes.has(clave)) fuentes.set(clave, {
+        nombre: posicion.cliente_sucursal || ticket?.cliente_sucursal || "Sucursal sin identificar",
+        posiciones: [],
+      });
+      fuentes.get(clave).posiciones.push(posicion);
+    });
+    const sucursales = [...fuentes.entries()];
+    if (!sucursales.some(([clave]) => clave === estado.sucursalPedidosActivaId)) {
+      estado.sucursalPedidosActivaId = sucursales[0]?.[0] || "";
+    }
+    if (!sucursales.length) {
+      return '<div class="mapa-sucursales-pedidos" id="' + idPanel + '" role="region" aria-labelledby="' + idBoton + '"' + (abierto ? "" : " hidden") + '><p class="vacio">No hay sucursales cliente configuradas.</p></div>';
+    }
+    const tabs = sucursales.map(([clave, sucursal], indice) => {
+      const activa = clave === estado.sucursalPedidosActivaId;
+      const ocupadas = sucursal.posiciones.filter(posicion => ticketDePosicion(posicion)).length;
+      return '<button class="tab-sucursal mapa-pedidos-sucursal-tab ' + (activa ? "activo" : "") + '" id="tab-pedidos-sucursal-' + indice + '" data-pedidos-sucursal-tab="' + escapar(clave) + '" type="button" role="tab" tabindex="' + (activa ? "0" : "-1") + '" aria-selected="' + (activa ? "true" : "false") + '" aria-controls="panel-pedidos-sucursal-' + indice + '">' +
+        '<span>' + escapar(sucursal.nombre) + '</span><b>' + ocupadas + '</b></button>';
+    }).join("");
+    const paneles = sucursales.map(([clave, sucursal], indice) => {
+      const activa = clave === estado.sucursalPedidosActivaId;
+      const celdas = sucursal.posiciones.length
+        ? sucursal.posiciones.map(renderCeldaPosicion).join("")
+        : '<p class="vacio">Esta sucursal no tiene posiciones configuradas.</p>';
+      return '<div class="mapa-grupo-celdas mapa-sucursal-panel" id="panel-pedidos-sucursal-' + indice + '" role="tabpanel" tabindex="0" aria-labelledby="tab-pedidos-sucursal-' + indice + '"' + (activa ? "" : " hidden") + '>' + celdas + '</div>';
+    }).join("");
+    return '<div class="mapa-sucursales-pedidos" id="' + idPanel + '" role="region" aria-labelledby="' + idBoton + '"' + (abierto ? "" : " hidden") + '>' +
+      '<div class="tabs-sucursales mapa-pedidos-sucursales-tabs" role="tablist" aria-label="Pedidos Sucursales por sucursal">' + tabs + '</div>' + paneles +
+    '</div>';
+  }
+
   function renderPedidos() {
     const contenedor = $("#mapa-posiciones");
     if (!contenedor) return;
@@ -421,50 +500,30 @@
       llevar: "Llevar",
       recoger: "Recoger",
       domicilio: "Domicilio",
-      sucursales: "Sucursales",
+      sucursales: "Pedidos Sucursales",
     };
     const posiciones = posicionesCompletas();
     const canalesDisponibles = ordenCanales.filter(canal => posiciones.some(posicion => posicion.canal === canal));
     if (!canalesDisponibles.includes(estado.canalPedidosAbierto)) estado.canalPedidosAbierto = "";
-    contenedor.innerHTML = canalesDisponibles
+    contenedor.innerHTML = canalesDisponibles.length ? canalesDisponibles
       .map(canal => {
         const grupo = posiciones.filter(posicion => posicion.canal === canal);
         const abierto = estado.canalPedidosAbierto === canal;
         const ocupadas = grupo.filter(posicion => ticketDePosicion(posicion)).length;
         const libres = grupo.length - ocupadas;
-        const celdas = grupo.map(posicion => {
-          const ticket = ticketDePosicion(posicion);
-          const seleccionado = Boolean(ticket && estado.ticketsSeleccionados.has(String(ticket.id)));
-          const detalleActivo = Boolean(ticket && String(ticket.id) === String(estado.ticketSeleccionadoId));
-          const destino = Boolean(estado.ticketMoverId && !ticket);
-          const clases = [
-            "celda-posicion-admin",
-            ticket ? "ocupada" : "libre",
-            seleccionado ? "seleccionada" : "",
-            detalleActivo ? "detalle-activo" : "",
-            destino ? "destino-disponible" : "",
-          ].filter(Boolean).join(" ");
-          const resumen = ticket
-            ? '<small>Ticket ' + escapar(ticket.folio) + ' · ' + dinero(ticket.total) + '</small><span>' + escapar(ticket.estado_etiqueta) + '</span>'
-            : '<small>Disponible</small><span>Libre</span>';
-          return '<button class="' + clases + '" data-posicion-id="' + escapar(posicion.id) + '"' +
-            (ticket ? ' data-ticket-id="' + escapar(ticket.id) + '"' : "") +
-            ' type="button" aria-pressed="' + (seleccionado ? "true" : "false") + '"' +
-            (!ticket && !estado.ticketMoverId ? ' aria-disabled="true"' : "") + '>' +
-              '<b>' + escapar(posicion.nombre) + '</b>' + resumen +
-            '</button>';
-        }).join("");
         const idBoton = "alternar-posiciones-" + canal;
         const idPanel = "posiciones-" + canal;
+        const contenido = canal === "sucursales"
+          ? renderSucursalesEnPedidos(grupo, idPanel, idBoton, abierto)
+          : '<div class="mapa-grupo-celdas" id="' + idPanel + '" role="region" aria-labelledby="' + idBoton + '"' + (abierto ? "" : " hidden") + '>' + grupo.map(renderCeldaPosicion).join("") + '</div>';
         return '<section class="mapa-grupo" data-canal="' + canal + '">' +
           '<h3><button class="mapa-grupo-toggle" id="' + idBoton + '" data-acordeon-canal="' + canal + '" type="button" aria-expanded="' + (abierto ? "true" : "false") + '" aria-controls="' + idPanel + '">' +
             '<span class="mapa-grupo-nombre">' + etiquetas[canal] + '</span>' +
             '<span class="mapa-grupo-resumen"><strong>' + ocupadas + (ocupadas === 1 ? " ocupada" : " ocupadas") + '</strong><small>' + libres + (libres === 1 ? " libre" : " libres") + '</small></span>' +
             '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>' +
-          '</button></h3>' +
-          '<div class="mapa-grupo-celdas" id="' + idPanel + '" role="region" aria-labelledby="' + idBoton + '"' + (abierto ? "" : " hidden") + '>' + celdas + '</div>' +
+          '</button></h3>' + contenido +
         '</section>';
-      }).join("");
+      }).join("") : '<p class="vacio">No hay posiciones configuradas para mostrar.</p>';
     const avisoMover = $("#instruccion-mover");
     avisoMover.hidden = !estado.ticketMoverId;
     if (estado.ticketMoverId) {
@@ -1044,6 +1103,21 @@
   });
 
   document.addEventListener("keydown", evento => {
+    const tabPedidosSucursal = evento.target.closest("#mapa-posiciones [data-pedidos-sucursal-tab]");
+    if (tabPedidosSucursal && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(evento.key)) {
+      const tabsPedidos = $$("#mapa-posiciones [data-pedidos-sucursal-tab]");
+      const actualPedidos = tabsPedidos.indexOf(tabPedidosSucursal);
+      const destinoPedidos = evento.key === "Home"
+        ? 0
+        : evento.key === "End"
+          ? tabsPedidos.length - 1
+          : (actualPedidos + (evento.key === "ArrowRight" ? 1 : -1) + tabsPedidos.length) % tabsPedidos.length;
+      evento.preventDefault();
+      estado.sucursalPedidosActivaId = tabsPedidos[destinoPedidos].dataset.pedidosSucursalTab;
+      renderPedidos();
+      requestAnimationFrame(() => $$("#mapa-posiciones [data-pedidos-sucursal-tab]")[destinoPedidos]?.focus());
+      return;
+    }
     const tabSucursal = evento.target.closest("#tabs-sucursales [data-sucursal-tab]");
     if (!tabSucursal || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(evento.key)) return;
     const tabs = $$("#tabs-sucursales [data-sucursal-tab]");
@@ -1063,6 +1137,13 @@
     const navegacion = evento.target.closest("[data-panel], [data-panel-ir]");
     if (navegacion) {
       mostrarPanel(navegacion.dataset.panel || navegacion.dataset.panelIr);
+      return;
+    }
+    const tabPedidosSucursal = evento.target.closest("#mapa-posiciones [data-pedidos-sucursal-tab]");
+    if (tabPedidosSucursal) {
+      estado.sucursalPedidosActivaId = tabPedidosSucursal.dataset.pedidosSucursalTab;
+      renderPedidos();
+      requestAnimationFrame(() => $("#mapa-posiciones [data-pedidos-sucursal-tab=\"" + CSS.escape(estado.sucursalPedidosActivaId) + "\"]")?.focus());
       return;
     }
     const tabSucursal = evento.target.closest("[data-sucursal-tab]");
@@ -1096,6 +1177,9 @@
         estado.ticketMoverId = String(ticketId);
         estado.ticketSeleccionadoId = String(ticketId);
         estado.canalPedidosAbierto = ticket.canal;
+        if (ticket.canal === "sucursales") {
+          estado.sucursalPedidosActivaId = String(ticket.cliente_sucursal_id || ticket.cliente_sucursal || "");
+        }
         if ($("#dialogo-detalle-pedido").open) $("#dialogo-detalle-pedido").close();
         renderPedidos();
         return;

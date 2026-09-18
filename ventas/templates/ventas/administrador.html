@@ -113,7 +113,8 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
           <section class="hoja pedidos-mapa" aria-labelledby="pedidos-mapa-titulo">
             <header class="hoja-titulo"><div><h2 id="pedidos-mapa-titulo">Posiciones reales</h2></div><b id="conteo-seleccionados">0</b></header>
             <p id="instruccion-mover" class="aviso-mover" role="status" hidden>Modo Mover activo: elige una casilla libre como destino.</p>
-            <div id="mapa-posiciones" class="mapa-posiciones"></div>
+            <p id="estado-pedidos" class="estado-pedidos cargando" role="status">Cargando posiciones…</p>
+            <div id="mapa-posiciones" class="mapa-posiciones" aria-busy="true" aria-live="polite"></div>
           </section>
         </div>
         <section id="barra-lote" class="barra-lote" aria-label="Acciones para pedidos seleccionados" hidden>

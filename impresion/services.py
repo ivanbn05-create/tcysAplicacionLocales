@@ -131,23 +131,34 @@ def encolar_reporte(reporte):
     return [trabajo]
 
 
-def estado_impresora(destino="caja"):
+def sondear_impresora(destino="caja"):
+    """Comprueba el socket TCP sin transmitir bytes ni generar papel."""
+
+    if destino not in settings.PRINTER_HOSTS:
+        raise ValueError("Destino de impresión inválido.")
     host = settings.PRINTER_HOSTS[destino]
-    if settings.PRINT_BACKEND != "tcp":
+    if not host:
         return {
-            "backend": settings.PRINT_BACKEND,
-            "disponible": False,
             "destino": destino,
-            "mensaje": "Modo vista previa: no se enviará papel a la impresora.",
+            "host": "",
+            "puerto": settings.PRINTER_PORT,
+            "configurada": False,
+            "alcanzable": False,
+            "mensaje": "No hay una dirección configurada para esta impresora.",
         }
     try:
-        with socket.create_connection((host, settings.PRINTER_PORT), timeout=settings.PRINTER_TIMEOUT):
+        with socket.create_connection(
+            (host, settings.PRINTER_PORT),
+            timeout=settings.PRINTER_TIMEOUT,
+        ):
             pass
         return {
-            "backend": "tcp",
-            "disponible": True,
             "destino": destino,
-            "mensaje": "Impresora térmica conectada.",
+            "host": host,
+            "puerto": settings.PRINTER_PORT,
+            "configurada": True,
+            "alcanzable": True,
+            "mensaje": "Conectividad TCP disponible; no se enviaron datos.",
         }
     except OSError as exc:
         logger.warning(
@@ -155,11 +166,39 @@ def estado_impresora(destino="caja"):
             type(exc).__name__,
         )
         return {
-            "backend": "tcp",
+            "destino": destino,
+            "host": host,
+            "puerto": settings.PRINTER_PORT,
+            "configurada": True,
+            "alcanzable": False,
+            "mensaje": "Impresora sin conexión TCP.",
+        }
+
+
+def estado_impresora(destino="caja"):
+    if settings.PRINT_BACKEND != "tcp":
+        return {
+            "backend": settings.PRINT_BACKEND,
             "disponible": False,
             "destino": destino,
-            "mensaje": "Impresora sin conexión.",
+            "codigo": "impresion_fisica_desactivada",
+            "mensaje": (
+                "Impresión física desactivada (PRINT_BACKEND=archivo): "
+                "sólo se generará una vista previa."
+            ),
         }
+    sondeo = sondear_impresora(destino)
+    return {
+        "backend": "tcp",
+        "disponible": sondeo["alcanzable"],
+        "destino": destino,
+        "codigo": "conectada" if sondeo["alcanzable"] else "sin_conexion",
+        "mensaje": (
+            "Impresora térmica conectada."
+            if sondeo["alcanzable"]
+            else sondeo["mensaje"]
+        ),
+    }
 
 
 @transaction.atomic

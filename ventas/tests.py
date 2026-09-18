@@ -1599,6 +1599,45 @@ class FlujoPOSTests(TestCase):
                 ticket.refresh_from_db()
                 self.assertEqual(ticket.cliente_nombre, nombre)
 
+    def test_estado_expone_nombre_de_llevar_solo_mientras_la_posicion_sigue_activa(self):
+        mesa_cobrada = Mesa.objects.get(sucursal=self.sucursal, clave="LLEV-1")
+        cobrada, _ = abrir_ticket(mesa_cobrada)
+        agregar_partida(cobrada, self.producto)
+        cobrada.cliente_nombre = "Mónica Ramírez"
+        cobrada.save(update_fields=["cliente_nombre"])
+
+        estado_abierto = self.client.get("/api/estado/").json()["tickets"]
+        self.assertEqual(
+            estado_abierto[str(mesa_cobrada.id)]["cliente_nombre"],
+            "Mónica Ramírez",
+        )
+        procesar_ticket(cobrada)
+        estado_procesado = self.client.get("/api/estado/").json()["tickets"]
+        self.assertEqual(
+            estado_procesado[str(mesa_cobrada.id)]["cliente_nombre"],
+            "Mónica Ramírez",
+        )
+        cobrada.refresh_from_db()
+        cobrar_ticket(cobrada, Ticket.FormaPago.EFECTIVO, cobrada.total)
+        self.assertNotIn(
+            str(mesa_cobrada.id), self.client.get("/api/estado/").json()["tickets"]
+        )
+
+        mesa_cancelada = Mesa.objects.get(sucursal=self.sucursal, clave="LLEV-2")
+        cancelada, _ = abrir_ticket(mesa_cancelada)
+        cancelada.cliente_nombre = "Cliente cancelado"
+        cancelada.save(update_fields=["cliente_nombre"])
+        self.assertEqual(
+            self.client.get("/api/estado/").json()["tickets"][str(mesa_cancelada.id)][
+                "cliente_nombre"
+            ],
+            "Cliente cancelado",
+        )
+        cancelar_ticket(cancelada)
+        self.assertNotIn(
+            str(mesa_cancelada.id), self.client.get("/api/estado/").json()["tickets"]
+        )
+
     def test_frontend_expone_un_solo_nombre_visible_para_llevar_y_limita_cuatro_digitos(self):
         javascript = (Path(settings.BASE_DIR) / "ventas" / "static" / "ventas" / "app.js").read_text(
             encoding="utf-8"
@@ -1616,6 +1655,29 @@ class FlujoPOSTests(TestCase):
         self.assertIn("Math.min(9999", javascript)
         self.assertIn("cantidad-tres-digitos", estilos)
         self.assertIn("cantidad-cuatro-digitos", estilos)
+
+    def test_frontend_muestra_nombre_en_posicion_y_tabs_accesibles_por_sucursal(self):
+        app_js = (Path(settings.BASE_DIR) / "ventas" / "static" / "ventas" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        admin_js = (
+            Path(settings.BASE_DIR) / "ventas" / "static" / "ventas" / "admin.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("cliente_nombre: ticket.cliente_nombre", app_js)
+        self.assertIn("posicion-cliente-llevar", app_js)
+        for contrato in (
+            'data-pedidos-sucursal-tab="',
+            'role="tablist" aria-label="Pedidos Sucursales por sucursal"',
+            'role="tabpanel" tabindex="0"',
+            '["ArrowLeft", "ArrowRight", "Home", "End"]',
+        ):
+            with self.subTest(contrato=contrato):
+                self.assertIn(contrato, admin_js)
+
+        pagina = self.client.get("/administrador/")
+        self.assertEqual(pagina.status_code, 200)
+        self.assertContains(pagina, 'id="estado-pedidos"')
+        self.assertContains(pagina, 'id="mapa-posiciones" class="mapa-posiciones" aria-busy="true"')
 
     def test_formulario_cliente_oculta_etiquetas_y_conserva_alias_internos(self):
         javascript = (Path(settings.BASE_DIR) / "ventas" / "static" / "ventas" / "app.js").read_text(
@@ -2370,6 +2432,34 @@ class FlujoPOSTests(TestCase):
         self.assertIn("máximo de 4", respuesta.json()["error"])
         ticket.refresh_from_db()
         self.assertFalse(ticket.captura_por_nombres)
+
+    def test_resumen_administrativo_identifica_la_sucursal_de_cada_posicion(self):
+        self.assertEqual(self._autorizar_administrador().status_code, 200)
+        respuesta = self.client.get("/api/administrador/resumen/")
+        self.assertEqual(respuesta.status_code, 200)
+
+        posiciones = {
+            str(item["id"]): item
+            for item in respuesta.json()["administrador"]["posiciones"]
+            if item["canal"] == Mesa.Canal.SUCURSALES
+        }
+        esperadas = Mesa.objects.select_related("cliente_sucursal").filter(
+            sucursal=self.sucursal,
+            activa=True,
+            canal=Mesa.Canal.SUCURSALES,
+            cliente_sucursal__isnull=False,
+        )
+        self.assertTrue(posiciones)
+        for mesa in esperadas:
+            with self.subTest(posicion=mesa.clave):
+                self.assertEqual(
+                    posiciones[str(mesa.id)]["cliente_sucursal_id"],
+                    str(mesa.cliente_sucursal_id),
+                )
+                self.assertEqual(
+                    posiciones[str(mesa.id)]["cliente_sucursal"],
+                    mesa.cliente_sucursal.nombre,
+                )
 
     def test_administrador_valida_clave_gestiona_personal_y_permite_cambiar_su_clave(self):
         self.assertEqual(self.client.get("/api/administrador/resumen/").status_code, 401)

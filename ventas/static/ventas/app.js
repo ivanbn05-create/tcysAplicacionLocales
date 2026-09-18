@@ -705,6 +705,7 @@
       folio: ticket.folio,
       estado: ticket.estado,
       total: ticket.total,
+      cliente_nombre: ticket.cliente_nombre || ticket.cliente?.nombre || "",
       version_entidad: ticket.version_entidad,
       bloqueo: ticket.bloqueo,
       comanda_actual: ticket.comanda_actual,
@@ -733,15 +734,21 @@
         : "";
       const etiquetaEstado = ticket ? (etiquetaBloqueo || (ordenAbierta ? "Orden abierta" : "Procesada")) : "Libre";
       const detalle = ticket ? `Ticket ${ticket.folio} · ${dinero(ticket.total)}` : "Disponible";
+      const nombreLlevar = posicion.canal === "llevar" && ticket
+        ? String(ticket.cliente_nombre || "").trim()
+        : "";
       const partes = String(posicion.nombre).match(/^(.*?)[\s-]*(\d+)$/);
       const tipo = partes ? partes[1].trim() : "Posición";
       const numero = partes ? partes[2] : posicion.nombre;
       const tipoVisible = opciones.tipoVisible || tipo;
-      const etiquetaAccesible = `${posicion.nombre}. ${etiquetaEstado}. ${detalle}`;
+      const etiquetaAccesible = `${posicion.nombre}. ${etiquetaEstado}. ${nombreLlevar ? `Cliente ${nombreLlevar}. ` : ""}${detalle}`;
+      const detalleVisible = nombreLlevar
+        ? `<small class="posicion-detalle-llevar"><span class="posicion-cliente-llevar">${escapar(nombreLlevar)}</span><span>${escapar(detalle)}</span></small>`
+        : `<small>${escapar(detalle)}</small>`;
       return `<button class="posicion ${clase}" data-id="${posicion.id}" data-estado="${clase}" type="button" aria-label="${escapar(etiquetaAccesible)}">
         <span class="posicion-estado"><i aria-hidden="true"></i>${etiquetaEstado}</span>
         <strong><span class="posicion-tipo">${escapar(tipoVisible)}</span><span class="posicion-numero">${escapar(numero)}</span></strong>
-        <small>${escapar(detalle)}</small>
+        ${detalleVisible}
       </button>`;
     };
     const renderTarjetas = canal => posiciones

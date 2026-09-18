@@ -464,9 +464,25 @@ PRINTER_BARRA_HOST=192.168.0.33
 PRINTER_PORT=9100
 ```
 
+En una instalación existente, la actualización conserva `.env` y no activa la
+impresión física de forma implícita. Después de instalar una candidata, un administrador
+puede configurar y comprobar TCP sin enviar papel:
+
+```powershell
+& C:\LosTocayosPOS\herramientas\configurar_impresion_instalada.ps1 `
+  -HostCaja 192.168.0.33 -HostCocina 192.168.0.33 -HostBarra 192.168.0.33
+```
+
+El configurador detiene momentáneamente el servicio y exige una cola con cero trabajos
+`PENDIENTE` o `PROCESANDO` antes de cambiar a TCP. Así evita que una vista previa
+histórica se convierta en una impresión física al reiniciar. Si encuentra trabajos,
+restaura el servicio sin modificar `.env` y exige resolver la cola en el backend actual.
+
 El servicio `impresion` consume la cola de trabajos, renderiza PNG monocromático de
 576 píxeles (80 mm) y envía comandos ESC/POS ráster por TCP. Conserva el PNG como
-evidencia incluso cuando imprime por red.
+evidencia incluso cuando imprime por red. La aceptación final requiere una única
+impresión física controlada. El procedimiento completo está en
+`PROTOCOLO_RELEASE_ACTUALIZACION_REUTILIZABLE.md`.
 
 La cabecera no ocupa espacio con telemetría pasiva. Un trabajo en modo archivo queda
 como `Vista previa generada`; sólo se marca `Impreso` después de completar el envío TCP.
