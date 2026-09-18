@@ -209,6 +209,43 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 .hoja-cierres { grid-area: cierres; }
 .hoja-programados-inicio { grid-area: programados; }
 .dos-columnas { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, 1fr); gap: 18px; align-items: start; }
+.panel-movimientos {
+  min-width: 0;
+  container-name: movimientos;
+  container-type: inline-size;
+}
+.movimientos-bandeja {
+  min-width: 0;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: minmax(280px, .82fr) minmax(0, 1.38fr);
+  gap: 12px;
+  align-items: start;
+  border: 1px solid var(--borde);
+  border-top: 5px solid var(--carbon);
+  background: var(--lienzo);
+}
+.hoja-captura-movimiento { border-top-color: var(--carbon); }
+.hoja-movimientos-turno {
+  min-width: 0;
+  container-name: lista-movimientos;
+  container-type: inline-size;
+}
+.nota-operativa {
+  max-width: 72ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: .8rem;
+  font-weight: 650;
+  line-height: 1.55;
+}
+.movimiento-campos {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(120px, .75fr) minmax(130px, 1fr);
+  gap: 12px;
+}
+.movimiento-concepto { grid-column: 1 / -1; }
 .domicilios-layout { grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); }
 .hoja {
   min-width: 0;
@@ -390,13 +427,32 @@ input:focus, select:focus { border-color: var(--carbon); }
 .asignacion-control.guardando .estado-asignacion { color: #705d00; }
 .asignacion-control.guardado .estado-asignacion { color: var(--verde-oscuro); }
 .asignacion-control.error .estado-asignacion { color: var(--rojo); }
-.fila-movimiento { grid-template-columns: auto minmax(0, 1fr) auto auto; }
-.fila-movimiento > b:first-child { color: var(--verde-oscuro); }
-.fila-movimiento.salida > b:first-child { color: var(--rojo); }
-.fila-movimiento > b { font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.4rem; font-weight: 400; }
-.fila-movimiento div { display: grid; gap: 2px; }
-.fila-movimiento small { color: var(--muted); font-size: .6rem; }
-.movimiento-acciones { display: flex !important; flex-wrap: wrap; justify-content: flex-end; gap: 5px !important; }
+.fila-movimiento { grid-template-columns: 34px minmax(0, 1fr) auto auto; }
+.movimiento-senal {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  color: var(--verde-oscuro);
+  border: 1px solid currentColor;
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: 1.35rem;
+  line-height: 1;
+}
+.fila-movimiento.gasto .movimiento-senal, .fila-movimiento.salida .movimiento-senal { color: var(--rojo); }
+.fila-movimiento.terminal .movimiento-senal { color: #111; border-color: #111; background: var(--amarillo); }
+.movimiento-detalle { min-width: 0; display: grid; gap: 3px; }
+.movimiento-detalle strong { overflow-wrap: anywhere; }
+.movimiento-detalle small { color: var(--muted); font-size: .6rem; line-height: 1.4; }
+.movimiento-importe {
+  white-space: nowrap;
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: 1.4rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.movimiento-acciones { min-width: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.movimiento-acciones .boton { min-height: 44px; }
 .acciones-formulario { display: flex; flex-wrap: wrap; gap: 8px; }
 .acciones-formulario .boton { flex: 1 1 160px; }
 .programacion-control { grid-template-columns: minmax(130px, 1fr) minmax(105px, .7fr) auto; }
@@ -544,27 +600,33 @@ input:focus, select:focus { border-color: var(--carbon); }
   letter-spacing: .06em;
   text-transform: uppercase;
 }
-#form-control-efectivo { display: grid; gap: 18px; }
+.control-efectivo { min-width: 0; }
+.control-efectivo > .nota-operativa { margin: -4px 0 16px; }
+#form-control-efectivo { min-width: 0; display: grid; gap: 18px; }
 .control-efectivo-grid {
+  min-width: 0;
   display: grid;
-  grid-template-columns: repeat(2, minmax(280px, 1fr)) minmax(220px, .75fr);
-  gap: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
   align-items: start;
 }
 .desglose-efectivo, .ventas-apps {
-  min-width: 0;
+  min-inline-size: 0;
   margin: 0;
-  padding: 15px 0 0;
+  padding: 14px;
   display: grid;
   gap: 11px;
-  border: 0;
+  border: 1px solid var(--borde);
   border-top: 3px solid var(--carbon);
+  background: #fff;
 }
 .desglose-efectivo legend, .ventas-apps legend {
+  max-width: 100%;
   padding: 0 8px 0 0;
   font-family: "Bebas Neue Tocayos", sans-serif;
   font-size: 1.45rem;
   font-weight: 400;
+  line-height: 1;
   text-transform: uppercase;
 }
 .desglose-efectivo > p, .ventas-apps > p {
@@ -575,8 +637,9 @@ input:focus, select:focus { border-color: var(--carbon); }
   line-height: 1.45;
 }
 .denominaciones-grid {
+  min-width: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(78px, 100%), 1fr));
   gap: 7px;
 }
 .denominaciones-grid label, .ventas-apps label {
@@ -590,9 +653,14 @@ input:focus, select:focus { border-color: var(--carbon); }
 }
 .denominaciones-grid label span { font-variant-numeric: tabular-nums; }
 .denominaciones-grid input { min-width: 0; text-align: right; font-variant-numeric: tabular-nums; }
-.ventas-apps { align-content: start; }
-.ventas-apps label { grid-template-columns: minmax(80px, 1fr) minmax(100px, .8fr); align-items: center; }
-.ventas-apps input { text-align: right; font-variant-numeric: tabular-nums; }
+.ventas-apps {
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-content: start;
+}
+.ventas-apps legend, .ventas-apps > p, .ventas-apps .total-desglose { grid-column: 1 / -1; }
+.ventas-apps label { grid-template-columns: minmax(72px, 1fr) minmax(92px, .8fr); align-items: center; }
+.ventas-apps input { min-width: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .total-desglose {
   min-height: 46px;
   padding: 9px 11px;
@@ -629,9 +697,7 @@ input:focus, select:focus { border-color: var(--carbon); }
 .formula-efectivo strong.saldo-negativo { color: #ff817f; }
 .formula-efectivo small { color: rgba(255,255,255,.74); font-size: .59rem; line-height: 1.4; }
 
-.fila-movimiento.ingreso > b:first-child, .fila-movimiento.entrada > b:first-child { color: var(--verde-oscuro); }
-.fila-movimiento.gasto > b:first-child, .fila-movimiento.salida > b:first-child { color: var(--rojo); }
-.fila-movimiento.terminal > b:first-child { min-width: 28px; color: #111; background: var(--amarillo); text-align: center; }
+
 .aviso-cierre-mensual {
   margin-top: 18px;
   padding: 18px;
@@ -811,6 +877,29 @@ dialog::backdrop { background: rgba(20,20,20,.72); }
 .admin-toast.visible { opacity: 1; transform: translateY(0); }
 .admin-toast.error { border-color: var(--rojo); }
 
+@container lista-movimientos (max-width: 560px) {
+  .fila-movimiento { grid-template-columns: 34px minmax(0, 1fr) auto; }
+  .movimiento-acciones { grid-column: 2 / -1; justify-content: stretch; }
+  .movimiento-acciones .boton { flex: 1 1 120px; }
+}
+
+@container movimientos (max-width: 780px) {
+  .movimientos-bandeja { grid-template-columns: 1fr; }
+  .control-efectivo-grid { grid-template-columns: 1fr; }
+  .ventas-apps {
+    grid-column: auto;
+    grid-template-columns: 1fr;
+  }
+  .ventas-apps legend, .ventas-apps > p, .ventas-apps .total-desglose { grid-column: auto; }
+}
+
+@container movimientos (max-width: 520px) {
+  .movimientos-bandeja { padding: 8px; }
+  .movimiento-campos { grid-template-columns: 1fr; }
+  .movimiento-concepto { grid-column: auto; }
+  .formula-efectivo { grid-template-columns: 1fr; }
+  .formula-efectivo strong { grid-row: auto; grid-column: auto; }
+}
 @media (max-width: 1040px) {
   .control-efectivo-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .aviso-cierre-mensual { grid-template-columns: 1fr; }
@@ -861,13 +950,16 @@ dialog::backdrop { background: rgba(20,20,20,.72); }
       "cierres"
       "programados";
   }
-  .dos-columnas, .domicilios-layout { grid-template-columns: 1fr; }
+  .dos-columnas, .domicilios-layout, .movimientos-bandeja { grid-template-columns: 1fr; }
   .hoja { padding: 13px; }
   .hoja-fija { position: static; }
   .tickets-pendientes { grid-template-columns: 1fr; }
   .ticket-pendiente { min-height: 140px; }
   .franja-totales { grid-template-columns: repeat(2, 1fr); }
   .control-efectivo-grid { grid-template-columns: 1fr; }
+  .movimientos-bandeja { padding: 8px; }
+  .movimiento-campos { grid-template-columns: 1fr; }
+  .movimiento-concepto { grid-column: auto; }
   .ventas-apps { grid-column: auto; grid-template-columns: 1fr; }
   .ventas-apps legend, .ventas-apps > p, .ventas-apps .total-desglose { grid-column: auto; }
   .formula-efectivo { grid-template-columns: 1fr; }
@@ -886,8 +978,8 @@ dialog::backdrop { background: rgba(20,20,20,.72); }
   .programacion-control-agenda .boton.peligro { grid-column: auto; }
   .franja-totales .total-general { grid-column: 1 / -1; }
   .fila-domicilio { grid-template-columns: 1fr; }
-  .fila-movimiento { grid-template-columns: auto minmax(0, 1fr) auto; }
-  .movimiento-acciones { grid-column: 1 / -1; justify-content: stretch; }
+  .fila-movimiento { grid-template-columns: 34px minmax(0, 1fr) auto; }
+  .movimiento-acciones { grid-column: 2 / -1; justify-content: stretch; }
   .movimiento-acciones .boton { flex: 1; }
   .fila-domicilio .asignacion-control { grid-column: auto; }
   .tarjetas-sucursales { grid-template-columns: 1fr; }

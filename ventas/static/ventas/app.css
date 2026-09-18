@@ -676,7 +676,7 @@ body {
 .pin-tableta-panel > small { color: var(--rojo); font-size: .72rem; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
 .pin-tableta-panel h2 { margin: 0; font-size: clamp(1.55rem, 3vw, 2.5rem); line-height: 1; }
 .pin-tableta-panel > p { max-width: 42ch; margin: 0; color: var(--muted); font-size: .86rem; line-height: 1.45; }
-.pin-tableta-cancelar { min-height: 44px; padding: 8px 14px; border: 1px solid var(--borde); border-radius: 9px; color: var(--carbon); background: #f2efe8; font-weight: 850; }
+.pin-tableta-estado { min-height: 20px; font-weight: 750; text-align: center; }
 .pin-tableta-puntos { display: grid; grid-template-columns: repeat(4, 34px); gap: 10px; padding: 8px; }
 .pin-tableta-puntos i { width: 34px; height: 34px; display: grid; place-items: center; border: 2px solid #a8a39a; border-radius: 50%; background: #fff; }
 .pin-tableta-puntos i.capturado::after { content: ""; width: 14px; height: 14px; border-radius: 50%; background: var(--carbon); }
@@ -686,18 +686,9 @@ body {
 .teclado-pin-tableta button:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 2px 5px rgba(38,38,38,.1); }
 .teclado-pin-tableta button:disabled { color: #9a968e; background: #e9e6df; box-shadow: none; opacity: .68; }
 .teclado-pin-tableta .borrar { color: #fff; background: var(--carbon-suave); }
-.teclado-pin-tableta .confirmar:not(:disabled) { color: #fff; border-color: var(--verde-oscuro); background: var(--verde-oscuro); }
+.teclado-pin-tableta .cancelar { color: var(--rojo); border-color: var(--rojo); background: var(--papel); font-size: .75rem; }
 .teclado-pin-ayuda { margin: 0; color: var(--muted); font-size: .66rem; font-weight: 750; line-height: 1.35; text-align: center; }
 
-.segmento-personalizado { margin-bottom: 4px; }
-.segmento-personalizado .segmento-productos { grid-template-columns: minmax(180px, 1fr); }
-.producto.producto-personalizado { border-color: #d0bd19; color: var(--carbon); background: var(--amarillo-suave); }
-.producto.producto-personalizado:hover, .producto.producto-personalizado:focus-visible { border-color: #9f8d00; background: #fff3a0; }
-.producto-personalizado-simbolo { width: 100%; min-height: 42px; display: grid; place-items: center; border-radius: 8px; color: #fff; background: var(--carbon); }
-.producto-personalizado-simbolo i { position: relative; width: 24px; height: 24px; display: block; }
-.producto-personalizado-simbolo i::before, .producto-personalizado-simbolo i::after { content: ""; position: absolute; top: 50%; left: 50%; border-radius: 2px; background: var(--amarillo); transform: translate(-50%, -50%); }
-.producto-personalizado-simbolo i::before { width: 24px; height: 4px; }
-.producto-personalizado-simbolo i::after { width: 4px; height: 24px; }
 .producto-personalizado-formulario { width: min(520px, calc(100vw - 28px)); }
 .producto-personalizado-ayuda { max-width: 52ch; margin: 7px 38px 0 0; color: var(--muted); line-height: 1.45; }
 .campo-precio-personalizado { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; border: 1px solid #cfc9bd; border-radius: 9px; background: #fff; overflow: hidden; }

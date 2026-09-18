@@ -725,15 +725,24 @@
 
   function renderMovimientos() {
     const movimientos = estado.administrador.movimientos || [];
+    const conteo = $("#conteo-movimientos");
+    conteo.textContent = movimientos.length;
+    conteo.setAttribute("aria-label", movimientos.length === 1 ? "1 movimiento" : movimientos.length + " movimientos");
     $("#lista-movimientos").innerHTML = movimientos.length ? movimientos.map(item => {
       const tipo = tipoMovimientoCanonico(item.tipo);
       return '<article class="fila-movimiento ' + tipo + '" data-movimiento-id="' + escapar(item.id) + '">' +
-        '<b aria-label="' + etiquetaMovimiento(tipo) + '">' + simboloMovimiento(tipo) + '</b>' +
-        '<div><strong>' + escapar(item.concepto) + '</strong><small>' + etiquetaMovimiento(tipo) + ' · ' + fechaHora(item.creado_en) + '</small></div>' +
-        '<b>' + dinero(item.importe) + '</b>' +
+        '<span class="movimiento-senal" aria-label="' + etiquetaMovimiento(tipo) + '"><span aria-hidden="true">' + simboloMovimiento(tipo) + '</span></span>' +
+        '<div class="movimiento-detalle"><strong>' + escapar(item.concepto) + '</strong><small>' + etiquetaMovimiento(tipo) + ' · ' + fechaHora(item.creado_en) + '</small></div>' +
+        '<strong class="movimiento-importe">' + dinero(item.importe) + '</strong>' +
         '<div class="movimiento-acciones"><button class="boton mini" data-editar-movimiento="' + escapar(item.id) + '" type="button">Editar</button><button class="boton mini peligro" data-eliminar-movimiento="' + escapar(item.id) + '" type="button">Eliminar</button></div>' +
       '</article>';
-    }).join("") : '<p class="vacio">No hay movimientos registrados en este turno.</p>';
+    }).join("") : '<p class="vacio">No hay movimientos en este turno. Registra el primero en la hoja de captura.</p>';
+  }
+
+  function valorNumericoEditable(valor) {
+    if (valor === null || valor === undefined || valor === "") return "";
+    const numero = Number(valor);
+    return Number.isFinite(numero) && numero !== 0 ? String(valor) : "";
   }
 
   function numeroSeguro(valor) {
@@ -750,7 +759,9 @@
     contenedor.innerHTML = DENOMINACIONES.map(denominacion => {
       const id = prefijo + "-" + denominacion.replace(".", "-");
       const etiqueta = Number(denominacion) < 1 ? "50 ¢" : dinero(denominacion).replace(".00", "");
-      return '<label for="' + id + '"><span>' + etiqueta + '</span><input id="' + id + '" data-denominacion="' + denominacion + '" type="number" min="0" max="99999" step="1" inputmode="numeric" value="' + escapar(valores[denominacion] || 0) + '"></label>';
+      const valor = valorNumericoEditable(valores[denominacion]);
+      const atributoValor = valor ? ' value="' + escapar(valor) + '"' : "";
+      return '<label for="' + id + '"><span>' + etiqueta + '</span><input id="' + id + '" data-denominacion="' + denominacion + '" type="number" min="0" max="99999" step="1" inputmode="numeric"' + atributoValor + ' aria-label="Cantidad de ' + escapar(etiqueta) + '"></label>';
     }).join("");
   }
 
@@ -794,9 +805,9 @@
     renderDenominaciones("fondo-anterior-denominaciones", "fondo-anterior", control.fondo_anterior || {});
     renderDenominaciones("fondo-siguiente-denominaciones", "fondo-siguiente", control.fondo_siguiente || {});
     const apps = control.ventas_apps || {};
-    $("#app-rappi").value = numeroSeguro(apps.rappi);
-    $("#app-didi").value = numeroSeguro(apps.didi);
-    $("#app-uber-eats").value = numeroSeguro(apps.uber_eats);
+    $("#app-rappi").value = valorNumericoEditable(apps.rappi);
+    $("#app-didi").value = valorNumericoEditable(apps.didi);
+    $("#app-uber-eats").value = valorNumericoEditable(apps.uber_eats);
     $("#control-efectivo-fecha").textContent = control.fecha ? fechaCorta(control.fecha) : "Hoy";
     if (control.fecha) $("#control-efectivo-fecha").setAttribute("datetime", control.fecha);
     actualizarTotalesControl();

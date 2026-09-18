@@ -194,24 +194,27 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
         </div>
       </section>
 
-      <section class="admin-panel" data-admin-panel="movimientos" hidden>
-        <header class="panel-titulo"><div><h1>Movimientos</h1><p>Registra ingresos, gastos y cobros por terminal; prepara el efectivo que pasa de un día al siguiente.</p></div></header>
-        <div class="dos-columnas">
-          <section class="hoja">
+      <section class="admin-panel panel-movimientos" data-admin-panel="movimientos" hidden>
+        <header class="panel-titulo"><div><h1>Movimientos</h1><p>Registra lo que entra y sale de caja, cuenta el efectivo y deja preparado el fondo del siguiente turno.</p></div></header>
+        <div class="movimientos-bandeja">
+          <section class="hoja hoja-captura-movimiento">
             <header class="hoja-titulo"><div><h2 id="titulo-form-movimiento">Nuevo movimiento</h2></div></header>
-            <form id="form-movimiento" class="formulario-admin">
+            <form id="form-movimiento" class="formulario-admin" aria-describedby="movimiento-ayuda">
               <input id="movimiento-id" type="hidden">
-              <label>Tipo<select id="movimiento-tipo" required><option value="ingreso">Ingreso +</option><option value="gasto">Gasto −</option><option value="terminal">Terminal −</option></select></label>
-              <label>Concepto<input id="movimiento-concepto" maxlength="180" required placeholder="Ej. Compra de insumos"></label>
-              <label>Importe<input id="movimiento-importe" type="number" min="0.01" step="0.01" inputmode="decimal" required></label>
+              <p id="movimiento-ayuda" class="nota-operativa">Ingreso suma al efectivo; gasto y terminal se descuentan. El importe debe ser mayor a cero.</p>
+              <div class="movimiento-campos">
+                <label>Tipo<select id="movimiento-tipo" required><option value="ingreso">Ingreso +</option><option value="gasto">Gasto −</option><option value="terminal">Terminal −</option></select></label>
+                <label>Importe<input id="movimiento-importe" type="number" min="0.01" step="0.01" inputmode="decimal" autocomplete="off" required></label>
+                <label class="movimiento-concepto">Concepto<input id="movimiento-concepto" maxlength="180" required placeholder="Ej. Compra de insumos" autocomplete="off"></label>
+              </div>
               <div class="acciones-formulario">
                 <button class="boton primario" id="guardar-movimiento" type="submit">Registrar movimiento</button>
                 <button class="boton" id="cancelar-edicion-movimiento" type="button" hidden>Cancelar edición</button>
               </div>
             </form>
           </section>
-          <section class="hoja">
-            <header class="hoja-titulo"><div><h2>Movimientos del turno</h2></div></header>
+          <section class="hoja hoja-movimientos-turno">
+            <header class="hoja-titulo"><div><h2>Movimientos del turno</h2></div><b id="conteo-movimientos" aria-label="0 movimientos">0</b></header>
             <div id="lista-movimientos" class="lista-movimientos"></div>
           </section>
         </div>
@@ -221,15 +224,16 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
             <div><h2 id="control-efectivo-titulo">Control de efectivo del día</h2></div>
             <time id="control-efectivo-fecha">Hoy</time>
           </header>
-          <form id="form-control-efectivo">
+          <p id="control-efectivo-ayuda" class="nota-operativa">Escribe sólo las cantidades que tengas. Los campos vacíos cuentan como cero y puedes guardarlos así.</p>
+          <form id="form-control-efectivo" aria-describedby="control-efectivo-ayuda">
             <div class="control-efectivo-grid">
-              <fieldset class="desglose-efectivo">
+              <fieldset class="desglose-efectivo fondo-anterior">
                 <legend>Fondo del día anterior</legend>
                 <p>Indica cuántas piezas hay de cada denominación al iniciar.</p>
                 <div id="fondo-anterior-denominaciones" class="denominaciones-grid"></div>
                 <output class="total-desglose" id="total-fondo-anterior">$0.00</output>
               </fieldset>
-              <fieldset class="desglose-efectivo">
+              <fieldset class="desglose-efectivo fondo-siguiente">
                 <legend>Fondo del día siguiente</legend>
                 <p>Este importe se convertirá en el fondo anterior después del corte.</p>
                 <div id="fondo-siguiente-denominaciones" class="denominaciones-grid"></div>
@@ -238,9 +242,9 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
               <fieldset class="ventas-apps">
                 <legend>Ventas de apps</legend>
                 <p>Se imprimen como referencia y no alteran la fórmula de efectivo.</p>
-                <label>Rappi<input id="app-rappi" type="number" min="0" step="0.01" inputmode="decimal" value="0"></label>
-                <label>Didi<input id="app-didi" type="number" min="0" step="0.01" inputmode="decimal" value="0"></label>
-                <label>Uber Eats<input id="app-uber-eats" type="number" min="0" step="0.01" inputmode="decimal" value="0"></label>
+                <label>Rappi<input id="app-rappi" type="number" min="0" step="0.01" inputmode="decimal" autocomplete="off"></label>
+                <label>Didi<input id="app-didi" type="number" min="0" step="0.01" inputmode="decimal" autocomplete="off"></label>
+                <label>Uber Eats<input id="app-uber-eats" type="number" min="0" step="0.01" inputmode="decimal" autocomplete="off"></label>
                 <output class="total-desglose" id="total-ventas-apps">$0.00</output>
               </fieldset>
             </div>

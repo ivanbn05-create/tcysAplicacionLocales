@@ -118,6 +118,7 @@
     botonOperacion: null,
     idempotenciaAgregar: "",
     pinTabletaActivo: false,
+    pinTabletaEnviando: false,
     claveTableta: "",
     mesaClaveTableta: "",
     tituloClaveTableta: "",
@@ -437,10 +438,12 @@
     const claveEnZonaComedor = modoTableta && !estado.ticket && !$("#vista-posiciones").classList.contains("oculto");
     if (claveEnZonaComedor) {
       estado.pinTabletaActivo = true;
+      estado.pinTabletaEnviando = false;
       estado.claveTableta = "";
       estado.tituloClaveTableta = titulo;
       estado.ayudaClaveTableta = ayuda;
       renderPosiciones();
+      requestAnimationFrame(() => $("#rejilla-posiciones [data-tecla-pin-tableta]")?.focus());
       return new Promise(resolve => { estado.resolucionClave = resolve; });
     }
     const dialogo = $("#dialogo-clave-pos");
@@ -457,9 +460,16 @@
 
   function resolverClavePos(clave) {
     if (modoTableta && estado.pinTabletaActivo) {
-      estado.pinTabletaActivo = false;
-      estado.claveTableta = "";
-      if (!clave) estado.errorClaveTableta = "";
+      if (clave) {
+        if (estado.pinTabletaEnviando) return;
+        estado.pinTabletaEnviando = true;
+        estado.errorClaveTableta = "";
+      } else {
+        estado.pinTabletaActivo = false;
+        estado.pinTabletaEnviando = false;
+        estado.claveTableta = "";
+        estado.errorClaveTableta = "";
+      }
       renderPosiciones();
     } else {
       const dialogo = $("#dialogo-clave-pos");
@@ -471,7 +481,12 @@
   }
 
   function manejarTeclaClaveTableta(tecla) {
-    if (!modoTableta || !estado.pinTabletaActivo || estado.operando) return;
+    if (
+      !modoTableta
+      || !estado.pinTabletaActivo
+      || estado.pinTabletaEnviando
+      || estado.operando
+    ) return;
     if (tecla === "cancelar") {
       resolverClavePos(null);
       return;
@@ -482,13 +497,13 @@
       renderPosiciones();
       return;
     }
-    if (tecla === "confirmar") {
-      if (/^\d{4}$/.test(estado.claveTableta)) resolverClavePos(estado.claveTableta);
-      return;
-    }
     if (/^\d$/.test(tecla) && estado.claveTableta.length < 4) {
       estado.claveTableta += tecla;
       estado.errorClaveTableta = "";
+      if (estado.claveTableta.length === 4) {
+        resolverClavePos(estado.claveTableta);
+        return;
+      }
       renderPosiciones();
     }
   }
@@ -529,6 +544,9 @@
         });
         estado.operador = datos.operador;
         renderOperadorActual();
+        estado.pinTabletaActivo = false;
+        estado.pinTabletaEnviando = false;
+        estado.claveTableta = "";
         estado.errorClaveTableta = "";
         if (mostrarPantalla) {
           $("#pantalla-acceso")?.classList.add("oculto");
@@ -543,6 +561,8 @@
       } catch (error) {
         toast(error.message, true);
         if (!modoTableta) return false;
+        estado.pinTabletaEnviando = false;
+        estado.claveTableta = "";
         estado.errorClaveTableta = error.message;
       } finally {
         bloquear(false);
@@ -697,6 +717,10 @@
 
   function renderPosiciones() {
     const contenedor = $("#rejilla-posiciones");
+    if (modoTableta && estado.canal !== "comedor") {
+      estado.canal = "comedor";
+      estado.sucursalSeleccionada = null;
+    }
     contenedor.setAttribute("aria-label", `Posiciones de ${nombresCanal[estado.canal] || estado.canal}`);
     const renderTarjeta = (posicion, opciones = {}) => {
       const ticket = estado.tickets[posicion.id];
@@ -767,39 +791,46 @@
       }
       return;
     }
-    if (modoTableta && estado.canal === "comedor") {
+    if (modoTableta) {
+      const tarjetasComedor = renderTarjetas("comedor");
+      if (!estado.pinTabletaActivo) {
+        contenedor.className = "rejilla-posiciones rejilla-simple rejilla-tableta-comedor";
+        contenedor.innerHTML = tarjetasComedor || '<p class="vacio">No hay mesas de Comedor configuradas.</p>';
+        return;
+      }
       const posicionClave = posiciones.find(posicion => String(posicion.id) === String(estado.mesaClaveTableta));
       const nombrePosicion = posicionClave?.nombre || "Mesa";
       const digitosCapturados = estado.claveTableta.length;
-      const tarjetasComedor = renderTarjetas("comedor");
-      const contenidoComedor = estado.pinTabletaActivo
-        ? `<section class="pin-tableta-panel" role="dialog" aria-labelledby="pin-tableta-titulo" aria-describedby="pin-tableta-ayuda">
-            <button class="pin-tableta-cancelar" data-tecla-pin-tableta="cancelar" type="button">Cancelar</button>
-            <small>Identificación para ${escapar(nombrePosicion)}</small>
-            <h2 id="pin-tableta-titulo">${escapar(estado.tituloClaveTableta || "Acceso a Ventas")}</h2>
-            <p id="pin-tableta-ayuda">${escapar(estado.ayudaClaveTableta || "Ingresa tu código de 4 dígitos.")}</p>
-            <output class="pin-tableta-puntos" aria-label="${digitosCapturados} de 4 dígitos capturados">
-              ${Array.from({ length: 4 }, (_, indice) => `<i class="${indice < digitosCapturados ? "capturado" : ""}" aria-hidden="true"></i>`).join("")}
-            </output>
-            <p class="pin-tableta-error" role="alert" ${estado.errorClaveTableta ? "" : "hidden"}>${escapar(estado.errorClaveTableta)}</p>
-          </section>`
-        : tarjetasComedor || '<p class="vacio">No hay posiciones configuradas.</p>';
-      const tecladoDeshabilitado = estado.pinTabletaActivo ? "" : "disabled";
+      const tecladoDeshabilitado = estado.pinTabletaEnviando ? "disabled" : "";
+      const estadoValidacion = estado.pinTabletaEnviando
+        ? "Validando acceso…"
+        : "El código se validará automáticamente al capturar el cuarto dígito.";
       contenedor.className = "rejilla-posiciones rejilla-dividida rejilla-tableta-pin";
       contenedor.innerHTML = `
         <section class="grupo-posiciones grupo-principal grupo-comedor-tableta">
-          <header><strong>Comedor</strong><small>${estado.pinTabletaActivo ? nombrePosicion : "Selecciona una mesa"}</small></header>
-          <div>${contenidoComedor}</div>
+          <header><strong>Identificación</strong><small>${escapar(nombrePosicion)}</small></header>
+          <div>
+            <section class="pin-tableta-panel" role="dialog" aria-labelledby="pin-tableta-titulo" aria-describedby="pin-tableta-ayuda pin-tableta-estado" aria-busy="${String(estado.pinTabletaEnviando)}">
+              <small>Acceso a ${escapar(nombrePosicion)}</small>
+              <h2 id="pin-tableta-titulo">${escapar(estado.tituloClaveTableta || "Acceso a Ventas")}</h2>
+              <p id="pin-tableta-ayuda">${escapar(estado.ayudaClaveTableta || "Ingresa tu código de 4 dígitos.")}</p>
+              <output class="pin-tableta-puntos" aria-label="${digitosCapturados} de 4 dígitos capturados">
+                ${Array.from({ length: 4 }, (_, indice) => `<i class="${indice < digitosCapturados ? "capturado" : ""}" aria-hidden="true"></i>`).join("")}
+              </output>
+              <p id="pin-tableta-estado" class="pin-tableta-estado" role="status" aria-live="polite">${estadoValidacion}</p>
+              <p class="pin-tableta-error" role="alert" aria-live="assertive" ${estado.errorClaveTableta ? "" : "hidden"}>${escapar(estado.errorClaveTableta)}</p>
+            </section>
+          </div>
         </section>
         <section class="grupo-posiciones grupo-auxiliar grupo-teclado-tableta">
-          <header><strong>Teclado</strong><small>${estado.pinTabletaActivo ? "Código de 4 dígitos" : "Disponible al elegir mesa"}</small></header>
+          <header><strong>Teclado</strong><small>${estado.pinTabletaEnviando ? "Comprobando código" : "Código de 4 dígitos"}</small></header>
           <div class="teclado-pin-tableta" aria-label="Teclado numérico para código de acceso">
             ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(numero => `<button data-tecla-pin-tableta="${numero}" type="button" ${tecladoDeshabilitado}>${numero}</button>`).join("")}
             <button class="borrar" data-tecla-pin-tableta="borrar" type="button" aria-label="Borrar último dígito" ${tecladoDeshabilitado}>←</button>
             <button data-tecla-pin-tableta="0" type="button" ${tecladoDeshabilitado}>0</button>
-            <button class="confirmar" data-tecla-pin-tableta="confirmar" type="button" aria-label="Confirmar código" ${digitosCapturados === 4 ? "" : "disabled"}>OK</button>
+            <button class="cancelar" data-tecla-pin-tableta="cancelar" type="button" ${tecladoDeshabilitado}>Cancelar</button>
           </div>
-          <p class="teclado-pin-ayuda">${estado.pinTabletaActivo ? "El código se captura aquí; no se abrirá el teclado de Android." : "Toca una mesa de Comedor para identificarte."}</p>
+          <p class="teclado-pin-ayuda">Usa este teclado; el cuarto dígito inicia la validación.</p>
         </section>`;
       return;
     }
@@ -1110,7 +1141,10 @@
   }
 
   function nombrePartida(partida) {
-    return String(partida?.nombre || partida?.nombre_corto || "Producto personalizado");
+    if (esPartidaPersonalizada(partida)) {
+      return String(partida?.nombre || partida?.nombre_corto || "Producto personalizado");
+    }
+    return String(partida?.nombre_corto || partida?.nombre || "Producto");
   }
 
   function clavePartidaEdicion(partida) {
@@ -1298,18 +1332,19 @@
       $("#menu-contexto").textContent = "Productos de sucursal";
       $("#menu-indicacion").textContent = "Selecciona un producto y captura su cantidad";
       const capturados = new Set(ticketVisible.partidas.map(partida => partida.producto_sucursal_id));
-      $("#productos").innerHTML = `<section class="catalogo-sucursal">
-        <button class="producto producto-sucursal producto-personalizado" data-producto-personalizado type="button" ${!abierto ? "disabled" : ""}>
-          <small>Venta fuera de catálogo</small>
-          <strong>Producto personalizado</strong>
-          <b>Nombre + precio</b>
-        </button>
-        ${(estado.ticket.catalogo_sucursal || []).map(producto => `
+      const catalogoSucursalHtml = (estado.ticket.catalogo_sucursal || []).map(producto => `
         <button class="producto producto-sucursal ${capturados.has(producto.id) ? "en-pedido" : ""}" data-sucursal-producto="${producto.id}" type="button" ${!abierto ? "disabled" : ""}>
           <small>${escapar(producto.nombre_ticket)} · ${escapar(producto.unidad)}</small>
           <strong>${escapar(producto.nombre)}</strong>
           <b>${dinero(producto.precio)}</b>
-        </button>`).join("")}</section>`;
+        </button>`).join("");
+      const accesoPersonalizadoSucursal = `
+        <button class="producto producto-sucursal" data-producto-personalizado type="button" aria-label="Producto personalizado. Capturar nombre y precio" ${!abierto ? "disabled" : ""}>
+          <small>Venta fuera de catálogo</small>
+          <strong>Producto personalizado</strong>
+          <b>Nombre + precio</b>
+        </button>`;
+      $("#productos").innerHTML = `<section class="catalogo-sucursal">${catalogoSucursalHtml}${accesoPersonalizadoSucursal}</section>`;
       return;
     }
     if (estado.modoMenu === "calculadora" && estado.edicion) {
@@ -1415,15 +1450,16 @@
     }
     const secciones = [...segmentos.entries()];
     const accesoPersonalizado = soloBebidas ? "" : `
-      <section class="segmento-menu segmento-personalizado">
+      <section class="segmento-menu" aria-labelledby="menu-seccion-personalizado">
+        <h3 id="menu-seccion-personalizado"><span>PERSONALIZABLE</span></h3>
         <div class="segmento-productos">
-          <button class="producto producto-menu producto-personalizado" data-producto-personalizado type="button" ${!abierto ? "disabled" : ""}>
-            <span class="producto-personalizado-simbolo" aria-hidden="true"><i></i></span>
-            <span class="producto-copy"><small>Venta fuera de catálogo</small><strong>Producto personalizado</strong></span>
+          <button class="producto producto-menu" data-producto-personalizado type="button" aria-label="Producto personalizado. Capturar nombre y precio" ${!abierto ? "disabled" : ""}>
+            <span class="producto-imagen producto-imagen-vacia" aria-hidden="true"><span><b>PP</b><small>Manual</small></span></span>
+            <span class="producto-copy"><small>PP</small><strong>Producto personalizado</strong></span>
           </button>
         </div>
       </section>`;
-    $("#productos").innerHTML = accesoPersonalizado + secciones.map(([segmento, items], indice) => {
+    const seccionesHtml = secciones.map(([segmento, items], indice) => {
       const numeroSeccion = soloBebidas ? "" : indice + 1;
       const idSeccion = numeroSeccion ? `menu-seccion-${numeroSeccion}` : "";
       const idTitulo = numeroSeccion ? `menu-seccion-titulo-${numeroSeccion}` : "";
@@ -1439,7 +1475,9 @@
           </button>`).join("")}
         </div>
       </section>`;
-    }).join("") || '<div class="vacio">No hay opciones disponibles.</div>';
+    }).join("");
+    $("#productos").innerHTML = (seccionesHtml + accesoPersonalizado)
+      || '<div class="vacio">No hay opciones disponibles.</div>';
     configurarAtajosMenu(soloBebidas ? [] : secciones.map(([nombre]) => nombre));
   }
 
