@@ -675,7 +675,9 @@ instalación anterior quedó restaurada; no se perdió configuración ni informa
 
 `dev.6` incorpora `VERSION` al snapshot efímero y añade una regresión de
 infraestructura. La prueba directa del validador completó migraciones, 182 pruebas
-Django, checks de despliegue, respaldo SQLite y host Windows antes de empaquetar.
+Django, checks de despliegue, respaldo SQLite y host Windows. Dos builds idénticos
+y la actualización real de `C:\LosTocayosPOS` quedaron acreditados en
+[EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.6.md](EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.6.md).
 
 ## Corrección de identidad en `0.4.0-dev.5`
 
@@ -778,6 +780,6 @@ superó el reintento completo.
   versionado por sucursal.
 - Mantener `0.4.0-dev.6` como candidata de laboratorio hasta cerrar la aceptación
   física y tomar la decisión de promoción. Las evidencias de `dev.3`, `dev.4` y
-  del rollback seguro de `dev.5` permanecen como antecedentes; el artefacto
-  `dev.6` debe registrar commit, manifiesto, SHA-256, reproducibilidad y resultado
-  de actualización antes de cualquier promoción.
+  del rollback seguro de `dev.5` permanecen como antecedentes. `dev.6` ya registra
+  commit, manifiesto, SHA-256, reproducibilidad y actualización; aún requiere la
+  aceptación física y la decisión expresa de promoción.

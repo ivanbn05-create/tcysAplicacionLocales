@@ -18,7 +18,7 @@ máquina:
 | --- | --- |
 | Repositorio original | `C:\tcysAplicacionLocales` |
 | Candidata activa | worktree `codex/candidata-0.4.0-dev.6` bajo `C:\Users\Srv1\.codex\visualizations\2026\09\14\01a0a104-1066-79f1-9e18-9de37c022fa6\tcys-base-work\base-a-src` |
-| Servicio instalado de laboratorio | `C:\LosTocayosPOS`; el intento `dev.5` falló en validación aislada y el rollback restauró `dev.4`. La siguiente actualización debe acreditar juntos `VERSION` y `/service-worker.js` |
+| Servicio instalado de laboratorio | `C:\LosTocayosPOS` actualizado a `dev.6`; salud `ok`, servicio `Running/Auto`, entorno y datos preservados, y `/service-worker.js` íntegramente en `dev.6` |
 | Instalación limpia aislada | `LAB_DEV3`, evidencia histórica aprobada y detenida después de validar |
 | Perfil de prueba aislada | `127.0.0.1:8001`, base y medios bajo `runtime\prueba`; la conexión TCP real sólo se habilita de forma explícita |
 
@@ -30,9 +30,9 @@ omitía `VERSION`. El actualizador ejecutó su rollback y restauró la instalaci
 `dev.4`; la evidencia quedó en `C:\LosTocayosPOS-lab-actualizaciones\evidencia`.
 
 `dev.6` añade `VERSION` al snapshot efímero y una prueba de regresión. El validador
-exacto ya completó 182 pruebas Django, checks HTTPS/HTTP LAN, 13 pruebas de
-respaldo y 5 del host Windows. Todavía deben registrarse el commit, dos builds
-idénticos y el resultado de la actualización real antes de promover esta candidata.
+exacto completó 182 pruebas Django, checks HTTPS/HTTP LAN, 13 pruebas de
+respaldo y 5 del host Windows. Dos builds idénticos y la actualización real quedaron
+acreditados en `EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.6.md`.
 
 ### Evidencia histórica de dev.5
 
@@ -413,9 +413,9 @@ constituyen el parche B.
 4. **Histórico con rollback seguro:** `dev.5` centralizó `VERSION` y produjo dos
    builds idénticos, pero su primer intento real detectó que el snapshot temporal
    omitía ese archivo; la instalación anterior fue restaurada.
-5. **Candidata vigente:** `dev.6` corrige el snapshot y ya superó el validador
-   aislado exacto. Falta acreditar dos builds idénticos, manifiesto, SHA-256,
-   actualización de `C:\LosTocayosPOS`, salud y contenido HTTP `0.4.0-dev.6`.
+5. **Candidata vigente:** `dev.6` corrige el snapshot, produjo dos builds
+   idénticos y actualizó `C:\LosTocayosPOS`. Salud, manifiesto, SHA-256, datos y el
+   contenido HTTP exacto de `0.4.0-dev.6` quedaron acreditados.
 6. **Pendiente para promoción:** aceptación manual de Ventas, Domicilios, Sucursales,
    Administrador, programados, caja, corte, reimpresión y recuperación, además de
    Android e impresión física.
