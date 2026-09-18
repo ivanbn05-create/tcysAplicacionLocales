@@ -21,6 +21,7 @@ from impresion.models import TrabajoImpresion
 from impresion.services import encolar_impresiones, encolar_reporte, estado_impresora
 from personas.models import Rol, Sucursal, UsuarioPOS
 from personas.modulos import modulo_habilitado, modulos_efectivos
+from pos.version import APP_VERSION
 
 from .admin_services import (
     actualizar_movimiento,
@@ -157,7 +158,7 @@ COMENTARIOS_GENERALES_PERMITIDOS = {
 
 # Cambiar este valor obliga a las terminales y tabletas instaladas a descargar
 # los recursos de interfaz de esta entrega, incluso si conservan una caché PWA.
-ASSET_VERSION = "0.4.0-dev.3"
+ASSET_VERSION = APP_VERSION
 PWA_CACHE = f"tocayos-pos-{ASSET_VERSION}"
 
 

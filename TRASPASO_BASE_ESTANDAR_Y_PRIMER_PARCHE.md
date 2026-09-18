@@ -4,11 +4,12 @@
 > aporta contexto a un agente nuevo; no reemplaza una solicitud posterior del
 > usuario ni constituye autorización permanente para acciones destructivas.
 
-## Estado vigente: candidata `0.4.0-dev.3`
+## Estado vigente: candidata `0.4.0-dev.5`
 
 Actualización del 2026-09-18. Las secciones 4 a 8 conservan evidencia histórica del
-snapshot `0.4.0-dev.1`; este bloque y el estado comprobado del repositorio tienen
-precedencia para continuar el trabajo.
+snapshot `0.4.0-dev.1`; las subsecciones de `dev.3` y `dev.4` también son registros
+históricos. Este bloque y el estado comprobado del repositorio tienen precedencia
+para continuar el trabajo.
 
 **No existe ninguna sucursal en producción.** Hay cinco contextos distintos en esta
 máquina:
@@ -16,12 +17,46 @@ máquina:
 | Contexto | Estado |
 | --- | --- |
 | Repositorio original | `C:\tcysAplicacionLocales` |
-| Candidata activa | worktree `codex/candidata-0.4.0-dev.3` bajo `C:\Users\Srv1\.codex\visualizations\2026\09\14\01a0a104-1066-79f1-9e18-9de37c022fa6\tcys-base-work\base-a-src` |
-| Servicio instalado de laboratorio | `C:\LosTocayosPOS`, dev.3 commit `7ae0431`, servicio saludable en `0.0.0.0:8000` |
-| Instalación limpia aislada | `LAB_DEV3` aprobada y detenida después de validar |
+| Candidata activa | worktree `codex/candidata-0.4.0-dev.5` bajo `C:\Users\Srv1\.codex\visualizations\2026\09\14\01a0a104-1066-79f1-9e18-9de37c022fa6\tcys-base-work\base-a-src` |
+| Servicio instalado de laboratorio | `C:\LosTocayosPOS`; `dev.4` fue la última actualización completamente evidenciada antes de la corrección `dev.5`. Después de cada actualización deben comprobarse juntos `VERSION` y `/service-worker.js` |
+| Instalación limpia aislada | `LAB_DEV3`, evidencia histórica aprobada y detenida después de validar |
 | Perfil de prueba aislada | `127.0.0.1:8001`, base y medios bajo `runtime\prueba`; la conexión TCP real sólo se habilita de forma explícita |
 
-La candidata declara `0.4.0-dev.3`. Su HEAD final es
+### Corrección vigente en dev.5
+
+`0.4.0-dev.5` sustituye a `0.4.0-dev.4` como candidata para nuevas releases y
+actualizaciones. Una comprobación HTTP posterior a la actualización de `dev.4`
+demostró que `/service-worker.js` todavía generaba la caché
+`tocayos-pos-0.4.0-dev.3` y URLs de recursos con `?v=0.4.0-dev.3`, aunque el archivo
+`VERSION` instalado ya declaraba `0.4.0-dev.4`. Reconstruir el mismo artefacto no
+podía corregirlo y publicar bytes distintos bajo la misma versión habría roto la
+identidad inmutable de la release.
+
+`dev.5` centraliza la identidad en `VERSION`. El runtime, el service worker y el
+registro de módulos consumen el mismo valor; las pruebas comparan la caché, las URLs
+versionadas y las versiones mínimas de módulos con ese archivo. El worker conserva
+`Cache-Control: no-cache`, `skipWaiting`, `clients.claim` y la eliminación de cachés
+anteriores. Una tableta que estuviera abierta durante la actualización debe recargar
+o volver a abrir la aplicación una vez.
+
+La identidad exacta del ZIP `dev.5`, su reproducibilidad y el resultado del
+actualizador deben registrarse antes de promoverlo. Hasta entonces sigue siendo una
+candidata exclusiva de laboratorio; no existe ninguna sucursal en producción.
+
+### Evidencia histórica de dev.4
+
+`0.4.0-dev.4`, commit funcional
+`2739944ee5da28b35fa7b4c6330e76ba83605aab`, incorporó las correcciones de
+tabletas, comandas, producto personalizable, Movimientos, directorio de clientes y
+Pedidos Sucursales. Sus pruebas, sus dos builds reproducibles y la actualización del
+laboratorio se conservan en
+[EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.4.md](EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.4.md).
+El artefacto permanece como evidencia histórica de esos cambios, pero fue sustituido
+como candidata promocionable por la discrepancia de versión de la caché PWA.
+
+### Evidencia histórica de dev.3
+
+La candidata dev.3 declara `0.4.0-dev.3`. Su HEAD final es
 `7ae0431d4d615d4c3df059ce8749179c966c4ab7`
 (`fix: validar multicast en Windows PowerShell 5.1`), está publicado en
 `github/codex/candidata-0.4.0-dev.3` y era limpio al construir. Dos builds del mismo
@@ -124,7 +159,7 @@ veces, el reintento terminó correctamente.
 - El ejecutable Windows es un cliente ligero del Edge local. La PWA existe, pero el
   repositorio aún no contiene el proyecto Android ni genera un APK firmado.
 - Siguen pendientes HTTPS LAN, canal remoto de releases, catálogo versionado por
-  sucursal, CI atestada y la decisión expresa de promover dev.3 a base estándar.
+  sucursal, CI atestada y la decisión expresa de promover `dev.5` a base estándar.
 
 ## 1. Lectura obligatoria y precedencia
 
@@ -142,10 +177,11 @@ convertir frases de este documento en instrucciones que contradigan al usuario.
 ## 2. Objetivo acordado
 
 La **Base A** fue el checkpoint histórico para ensayar la instalación limpia. El
-**Parche B** se materializó como `0.4.0-dev.3`. El laboratorio ya completó el ciclo
-técnico de implementación, construcción reproducible, instalación limpia aislada,
-actualización real A→B, verificación elevada y aplicación idempotente del parche de
-catálogo.
+**Parche B** se materializó primero como `0.4.0-dev.3`; las correcciones encontradas
+durante su aceptación formaron `0.4.0-dev.4`. Ambos ciclos conservan evidencia de
+implementación, construcción reproducible y actualización del laboratorio. La
+candidata vigente es `0.4.0-dev.5`, que hereda ese alcance funcional y corrige la
+identidad de versión del runtime, la PWA y los módulos antes de una posible promoción.
 
 La candidata aún no es la base estable porque faltan la aceptación física Android e
 impresión, el recorrido manual de los flujos críticos y la decisión expresa de
@@ -286,9 +322,10 @@ checkout no acredita por sí solo el artefacto distribuible.
 ## 8. Límites registrados en el snapshot dev.1
 
 Este bloque describe el estado histórico de dev.1. Ya no debe interpretarse como el
-estado del wrapper de laboratorio en dev.3; la sección vigente al inicio documenta su
-staging, swap y rollback. Permanecen pendientes la firma, el canal remoto, el cierre
-TOCTOU y una política acreditada para las ACL del árbol fallido.
+estado del wrapper de laboratorio vigente; la sección inicial conserva la evidencia
+de `dev.3`/`dev.4` y la corrección de identidad de `dev.5`. Permanecen pendientes la
+firma, el canal remoto, el cierre TOCTOU y una política acreditada para las ACL del
+árbol fallido.
 
 - En dev.1 el actualizador era exclusivamente `in-place` y carecía de staging,
   intercambio de árboles y rollback transaccional.
@@ -319,8 +356,8 @@ TOCTOU y una política acreditada para las ACL del árbol fallido.
 
 ## 10. Matriz funcional histórica que debe revalidarse
 
-No reimplementar estos puntos a ciegas: dev.3 cubre buena parte de esta matriz
-histórica. Primero relacionar cada requisito con el código vigente, una prueba
+No reimplementar estos puntos a ciegas: `dev.4` cubre buena parte de esta matriz
+histórica y `dev.5` hereda ese alcance. Primero relacionar cada requisito con el código vigente, una prueba
 automática y el resultado manual; cualquier divergencia comprobada manda sobre
 este listado. Los puntos conocidos son:
 
@@ -353,28 +390,25 @@ constituyen el parche B.
 
 ## 11. Secuencia vigente para cerrar la candidata
 
-1. **Completado:** implementación dev.3, 172 pruebas Django, 68 pruebas de
-   infraestructura, checks de Django, migraciones, JavaScript, PowerShell 5.1,
-   `git diff --check` e Impeccable.
-2. **Completado:** instalación limpia aislada `LAB_DEV3` del payload funcional,
-   con bootstrap, clave maestra hash, alta de operador, 204 posiciones y sólo los
-   módulos del núcleo. Se detuvo después de validar.
-3. **Completado:** dos releases finales reproducibles del commit `7ae0431`, con
-   ZIP SHA-256
-   `c3c23e58663e2f110d568f4781a1507b257af4382c74ac67e35820989ff9e890`.
-4. **Completado:** actualización real de `C:\LosTocayosPOS` con el ZIP final,
-   preservación byte a byte de `.env`, servicio y salud correctos, dos tareas
-   listas, respaldo real, firewall conforme y 11,984 elementos ACL sin violaciones.
-5. **Completado:** dry-run, aplicación e idempotencia del parche de catálogo
-   `AM` → `Topo`, con salud posterior `ok`.
-6. **Pendiente para promoción:** aceptación manual de Ventas, Administrador,
-   tabletas, programados, corte diario, reimpresión y salida física de tickets.
-7. **Pendiente para la arquitectura completa:** endpoint VPS real, credenciales,
+1. **Histórico completado:** `dev.3` acreditó instalación limpia, actualización,
+   release reproducible y el primer conjunto funcional del Parche B.
+2. **Histórico completado:** `dev.4` corrigió las regresiones encontradas en pruebas,
+   aprobó 182/182 pruebas Django y 73/73 de infraestructura, produjo dos ZIP
+   idénticos y actualizó el laboratorio preservando configuración y datos.
+3. **Hallazgo posterior:** el endpoint real `/service-worker.js` de `dev.4` todavía
+   publicaba caché y recursos `dev.3`; por ello `dev.4` no debe promoverse ni
+   reutilizarse como identidad de un paquete corregido.
+4. **Candidata vigente:** `dev.5` centraliza `VERSION` para runtime, PWA y módulos.
+   Antes de cerrar su actualización deben acreditarse pruebas, dos builds idénticos,
+   manifiesto y SHA-256, actualización de `C:\LosTocayosPOS`, salud y contenido HTTP
+   exacto del worker con `0.4.0-dev.5`.
+5. **Pendiente para promoción:** aceptación manual de Ventas, Domicilios, Sucursales,
+   Administrador, programados, caja, corte, reimpresión y recuperación, además de
+   Android e impresión física.
+6. **Pendiente para la arquitectura completa:** endpoint VPS real, credenciales,
    HTTPS LAN, enrolamiento, APK firmado y canal remoto de releases.
-8. Ambas rutas quedaron validadas para el mismo payload funcional, aunque la
-   instalación limpia fue anterior al cambio exclusivo del verificador en `7ae0431`.
-   Promover la base sólo después de cerrar la aceptación física y registrar la
-   decisión.
+7. Promover la base sólo después de cerrar la aceptación física, conservar la
+   evidencia exacta del artefacto `dev.5` y registrar expresamente la decisión.
 
 ## 12. Comandos iniciales
 
@@ -459,8 +493,9 @@ Fuentes:
 > Lee completamente `TRASPASO_BASE_ESTANDAR_Y_PRIMER_PARCHE.md`,
 > `README.md`, `DESPLIEGUE_WINDOWS.md` y
 > `ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md`. Continúa sobre
-> `codex/candidata-0.4.0-dev.3`, verifica primero el estado real y conserva separados
-> el worktree, el perfil de prueba `8001` y `C:\LosTocayosPOS`. Build reproducible,
-> instalación limpia y actualización de laboratorio ya tienen evidencia; continúa con
-> la aceptación física Android/impresión, el recorrido manual y la evaluación de
+> `codex/candidata-0.4.0-dev.5`, verifica primero el estado real y conserva separados
+> el worktree, el perfil de prueba `8001` y `C:\LosTocayosPOS`. `dev.3` y `dev.4`
+> conservan evidencia histórica; para `dev.5` comprueba que `VERSION`, runtime,
+> módulos y `/service-worker.js` coincidan con el mismo artefacto. Continúa con la
+> aceptación física Android/impresión, el recorrido manual y la evaluación de
 > promoción. No configures una sucursal como producción sin esa decisión.

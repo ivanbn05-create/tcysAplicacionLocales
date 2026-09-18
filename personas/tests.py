@@ -15,6 +15,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from personas.identidad import normalizar_clave_sucursal, normalizar_nombre_sucursal
 from personas.models import ModuloSucursal, Rol, Sucursal, UsuarioPOS
 from personas.modulos import MODULOS_NUCLEO, configurar_modulos
+from pos.version import APP_VERSION
 from ventas.models import (
     ConfiguracionSucursal,
     Mesa,
@@ -293,6 +294,7 @@ class ModulosSucursalTests(TestCase):
         nucleo = ModuloSucursal.objects.get(
             sucursal=self.sucursal, modulo__clave="pos"
         )
+        self.assertEqual(nucleo.modulo.version_minima, APP_VERSION)
         nucleo.habilitado = False
         nucleo.save(update_fields=["habilitado", "actualizado_en"])
         from personas.modulos import modulo_habilitado

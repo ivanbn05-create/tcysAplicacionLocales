@@ -1724,7 +1724,10 @@ class FlujoPOSTests(TestCase):
         self.assertContains(respuesta, 'class="marca-t-inicial">T</span>ocayos')
         self.assertContains(respuesta, '<sup class="marca-registro" aria-hidden="true">®</sup>')
         self.assertContains(respuesta, 'id="comentario"')
-        self.assertEqual(ASSET_VERSION, "0.4.0-dev.3")
+        declared_version = (Path(settings.BASE_DIR) / "VERSION").read_text(
+            encoding="utf-8-sig"
+        ).strip()
+        self.assertEqual(ASSET_VERSION, declared_version)
         self.assertContains(respuesta, f"app.css?v={ASSET_VERSION}")
         self.assertContains(respuesta, f"brand-pos.css?v={ASSET_VERSION}")
         self.assertContains(respuesta, f"app.js?v={ASSET_VERSION}")

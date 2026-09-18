@@ -2,10 +2,12 @@ from collections import OrderedDict
 
 from django.db import transaction
 
+from pos.version import APP_VERSION
+
 from .models import Modulo, ModuloSucursal
 
 
-VERSION_MODULOS = "0.4.0-dev.3"
+VERSION_MODULOS = APP_VERSION
 
 CATALOGO_MODULOS = OrderedDict(
     (

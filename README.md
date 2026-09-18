@@ -4,12 +4,13 @@ Primera versión local del punto de venta de Los Tocayos. Permite operar pedidos
 comedor, domicilio y sucursales, capturar partidas por comensal, procesar la orden,
 cobrarla y generar comandas/cuentas térmicas en modo ráster.
 
-> **Estado al 18 de septiembre de 2026:** `0.4.0-dev.3` sigue siendo una candidata
-> validada de laboratorio; no existe ninguna sucursal en producción. La validación
-> automatizada, la construcción reproducible, la instalación limpia aislada
-> `LAB_DEV3` y la actualización real de `C:\LosTocayosPOS` terminaron
-> correctamente. Aún faltan la aceptación física en Android y de impresión, el VPS
-> real y la decisión explícita de promover esta candidata como base estándar.
+> **Estado al 18 de septiembre de 2026:** `0.4.0-dev.5` es la candidata vigente de
+> laboratorio; no existe ninguna sucursal en producción. `0.4.0-dev.4` conserva su
+> evidencia funcional, pero fue sustituida para nuevas releases porque la respuesta
+> real de `/service-worker.js` aún publicaba la caché y los recursos de
+> `0.4.0-dev.3`. `dev.5` toma `VERSION` como fuente única para el runtime, la PWA y
+> el registro de módulos. Aún faltan la aceptación física en Android y de impresión,
+> el VPS real y la decisión explícita de promover una candidata como base estándar.
 
 La dirección futura de paquete único, módulos por sucursal, actualización segura,
 sincronización y servidor central Hostinger KVM 2 está documentada en
@@ -665,7 +666,29 @@ forman ese núcleo y no se deshabilitan. Las dependencias se activan automática
 la decisión de cada sucursal queda en `ModuloSucursal`; `pedidos_sucursales`, incluida
 la configuración histórica de Arboledas, no se activa por defecto.
 
-## Cambios principales de `0.4.0-dev.3`
+## Corrección de identidad en `0.4.0-dev.5`
+
+`0.4.0-dev.5` sustituye a `0.4.0-dev.4` como candidata para cualquier paquete o
+actualización nueva. La comprobación HTTP del servicio instalado encontró que el
+archivo `VERSION` declaraba `dev.4`, pero el service worker dinámico conservaba una
+constante `dev.3`; por ello, el nombre de caché y las URLs versionadas de CSS y
+JavaScript no correspondían al artefacto instalado.
+
+La versión se lee ahora una sola vez desde `VERSION` y se reutiliza en el runtime,
+el service worker y las versiones mínimas del registro de módulos. Las pruebas
+comparan esos valores con el archivo, para evitar que una nueva release vuelva a
+quedar ligada a una constante anterior. El ciclo del worker conserva
+`skipWaiting`, `clients.claim` y la eliminación de cachés con otra versión. Después
+de instalar una release nueva, las tabletas deben recargar o volver a abrir la
+aplicación una vez para tomar los recursos vigentes.
+
+Los cambios funcionales y la evidencia de distribución de `dev.4` se conservan en
+[EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.4.md](EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.4.md).
+Ese artefacto sigue siendo una referencia histórica reproducible, pero no debe
+promoverse como base por la discrepancia de caché descubierta después de su
+instalación.
+
+## Evidencia histórica: cambios principales de `0.4.0-dev.3`
 
 - Clave maestra inicial `0000`, usuarios elevados y atribución de operador en Ventas.
 - Corte diario con instantánea reimprimible, purga de detalle y control de efectivo,
@@ -742,6 +765,8 @@ superó el reintento completo.
   genera un APK.
 - Cerrar enrolamiento de equipos, HTTPS LAN, canal remoto de releases y catálogo
   versionado por sucursal.
-- Mantener `0.4.0-dev.3` como candidata de laboratorio hasta cerrar la aceptación
-  física y tomar la decisión de promoción. La construcción, la instalación limpia y
-  la ruta de actualización ya cuentan con evidencia.
+- Mantener `0.4.0-dev.5` como candidata de laboratorio hasta cerrar la aceptación
+  física y tomar la decisión de promoción. Las evidencias de construcción e
+  instalación de `dev.3` y `dev.4` permanecen como antecedentes; cada artefacto
+  `dev.5` que se considere para promoción debe registrar su commit, manifiesto,
+  SHA-256, reproducibilidad y resultado de actualización.
