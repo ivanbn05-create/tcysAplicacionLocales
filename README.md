@@ -4,12 +4,11 @@ Primera versión local del punto de venta de Los Tocayos. Permite operar pedidos
 comedor, domicilio y sucursales, capturar partidas por comensal, procesar la orden,
 cobrarla y generar comandas/cuentas térmicas en modo ráster.
 
-> **Estado al 18 de septiembre de 2026:** `0.4.0-dev.6` es la candidata vigente de
-> laboratorio; no existe ninguna sucursal en producción. `dev.5` centralizó
-> `VERSION`, pero su primer intento de actualización se revirtió de forma segura
-> porque el snapshot efímero del instalador omitía ese archivo. `dev.6` corrige el
-> contrato del validador e incluye `VERSION`. Aún faltan la aceptación física en
-> Android y de impresión, el VPS real y la decisión explícita de promover una
+> **Estado al 19 de septiembre de 2026:** `0.4.0-dev.8` es la candidata vigente de
+> laboratorio; no existe ninguna sucursal en producción. La instalación y actualización
+> reales preservaron configuración y datos, y la impresión TCP fue aceptada con una
+> hoja correcta cuyo contenido coincidió con la comanda. Siguen pendientes la aceptación
+> física en Android, el nuevo frente del VPS y la decisión explícita de promover una
 > candidata como base estándar.
 
 La dirección futura de paquete único, módulos por sucursal, actualización segura,
@@ -700,11 +699,12 @@ aislada y activó el rollback automático. La copia temporal incluía el código
 omitía el archivo raíz `VERSION` que ahora es parte del contrato de runtime. La
 instalación anterior quedó restaurada; no se perdió configuración ni información.
 
-`dev.6` incorpora `VERSION` al snapshot efímero y añade una regresión de
-infraestructura. La prueba directa del validador completó migraciones, 182 pruebas
-Django, checks de despliegue, respaldo SQLite y host Windows. Dos builds idénticos
-y la actualización real de `C:\LosTocayosPOS` quedaron acreditados en
-[EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.6.md](EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.6.md).
+`dev.8` es la evidencia vigente: completó 192 pruebas Django, 13 pruebas de respaldo
+SQLite, 5 del host Windows y 85 de infraestructura. Dos builds idénticos, la
+actualización real de `C:\LosTocayosPOS`, el respaldo privado de configuración y
+la impresión física aceptada quedaron acreditados en
+[EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.8.md](EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.8.md).
+Las evidencias de `dev.3`, `dev.4` y `dev.6` se conservan como antecedentes.
 
 ## Corrección de identidad en `0.4.0-dev.5`
 
@@ -788,25 +788,16 @@ superó el reintento completo.
 
 ## Brechas pendientes antes de fijar la base
 
-- Completar la aceptación manual en una tableta Android y una impresión física. La
-  instalación permanece deliberadamente en modo `archivo`;
-  `192.168.0.33:9100` responde por TCP, pero aún no se ha enviado ni confirmado un
-  ticket físico desde el servicio instalado.
+- Completar la aceptación manual en una tableta Android real.
 - Recorrer manualmente Ventas, Administrador, programados, corte diario, reimpresión
   y recuperación sobre el equipo y los dispositivos que se usarán para aceptar la
   base.
-- Implementar, desplegar y autenticar el endpoint real del VPS; hoy sólo existe el
-  contrato Edge y sus pruebas con respuestas simuladas.
-- Convertir el wrapper reversible de laboratorio en un canal remoto firmado y
-  endurecido: cerrar la ventana TOCTOU del ZIP local, definir las ACL/retención del
-  árbol fallido y probar la recuperación fuera del laboratorio.
-- Construir el proyecto Android envolvente, firmar el APK y probar instalación por
-  USB-C. La PWA funciona como interfaz web instalable, pero el repositorio aún no
-  genera un APK.
-- Cerrar enrolamiento de equipos, HTTPS LAN, canal remoto de releases y catálogo
-  versionado por sucursal.
-- Mantener `0.4.0-dev.6` como candidata de laboratorio hasta cerrar la aceptación
-  física y tomar la decisión de promoción. Las evidencias de `dev.3`, `dev.4` y
-  del rollback seguro de `dev.5` permanecen como antecedentes. `dev.6` ya registra
-  commit, manifiesto, SHA-256, reproducibilidad y actualización; aún requiere la
-  aceptación física y la decisión expresa de promoción.
+- Construir el proyecto Android envolvente, firmar el APK e instalarlo por USB-C. La
+  PWA funciona, pero el repositorio aún no genera un APK.
+- Cerrar HTTPS LAN y probar el cliente Windows final en una segunda computadora.
+- Documentar la decisión explícita de promover `0.4.0-dev.8` como base. La impresión
+  física ya fue aceptada; el artefacto, sus hashes y su manifiesto permanecen
+  inmutables.
+- Para el producto multisucursal completo siguen pendientes el enrolamiento, el
+  backend central del VPS, catálogo y módulos publicados, consolidación idempotente,
+  canal remoto firmado de releases, respaldos externos y observabilidad.

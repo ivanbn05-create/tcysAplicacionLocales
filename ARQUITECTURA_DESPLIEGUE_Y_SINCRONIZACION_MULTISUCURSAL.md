@@ -7,13 +7,13 @@ POS local de Los Tocayos en un producto instalable, actualizable y administrable
 en varias sucursales. Está pensado como material de continuidad para otro agente
 o para retomar el trabajo sin depender de conversaciones anteriores.
 
-**Estado a 2026-09-15:** dirección arquitectónica aceptada. Se eligió Hostinger
-KVM 2 como infraestructura central inicial prevista; el backend central, su
-aprovisionamiento y la sincronización general todavía no están implementados.
-La candidata A `0.4.0-dev.1` ya acreditó instalación limpia y la candidata
-provisional B `0.4.0-dev.2` acreditó una actualización real en el equipo de
-laboratorio. B no es todavía la base funcional aceptada ni se ha integrado al
-repositorio principal.
+**Estado a 2026-09-19:** dirección arquitectónica aceptada. El Hostinger KVM 2 ya
+fue contratado y se seleccionó Ubuntu Server sin interfaz gráfica; falta confirmar
+la versión exacta y aprovisionarlo. El backend central y la sincronización general
+todavía no están implementados. La candidata local `0.4.0-dev.8` acreditó
+construcción reproducible, actualización real de laboratorio, preservación de datos
+e impresión física aceptada. No existe ninguna sucursal en producción y la candidata
+sigue pendiente de una decisión expresa de promoción.
 
 Este documento complementa a:
 
@@ -120,13 +120,12 @@ operativa, sincronización, impresión, seguridad, soporte y recuperación.
 
 ### 3.2 Estado actual de producción
 
-La aplicación entró a un entorno denominado producción, pero el negocio aún no
-la utiliza de manera activa. Las operaciones realizadas han sido simulaciones.
-Mientras continúe esta condición, es aceptable detener o levantar el servicio y,
-con autorización expresa, reiniciar los datos para validar una instalación
-limpia. Esta tolerancia es temporal: una vez iniciada la operación real, ningún
-instalador, actualizador o sincronizador podrá borrar o reiniciar datos como parte
-de un proceso normal.
+No existe ninguna sucursal en producción. `C:\LosTocayosPOS` es una instalación
+de laboratorio y las operaciones realizadas hasta ahora son pruebas controladas.
+En esta etapa se puede detener o levantar el servicio y, con autorización expresa,
+reiniciar datos de prueba para validar una instalación limpia. Esta tolerancia es
+temporal: una vez iniciada la operación real, ningún instalador, actualizador o
+sincronizador podrá borrar o reiniciar datos como parte de un proceso normal.
 
 ### 3.3 Topología local actual
 
@@ -407,7 +406,7 @@ autoridad: las decisiones se guardan en el VPS y se distribuyen a los Edge.
 KVM 2 alojará un backend central independiente del POS local. La línea base
 recomendada es:
 
-- sistema operativo Linux LTS aún por seleccionar;
+- Ubuntu Server sin interfaz gráfica; la versión LTS exacta se confirmará en el primer inventario por SSH;
 - proxy inverso con TLS y exposición pública exclusiva por HTTPS;
 - Django y Gunicorn para panel y API versionada;
 - PostgreSQL accesible sólo desde el propio servidor o una red privada;
@@ -1136,8 +1135,8 @@ canónico de instalación.
 
 ### Fase 4. VPS y Administrador General
 
-- contratar y aprovisionar Hostinger KVM 2 cuando las fases locales previas estén
-  listas para una prueba integral;
+- aprovisionar el Hostinger KVM 2 ya contratado como entorno de piloto cuando las
+  fases locales previas estén listas para una prueba integral;
 - crear un despliegue central separado del `docker-compose.yml` local;
 - configurar dominio, DNS, TLS, firewall, acceso SSH limitado y PostgreSQL interno;
 - implementar identidad de Edge y API versionada;
@@ -1235,9 +1234,9 @@ Antes de implementar deberán confirmarse:
 7. Hora que define el inicio del día operativo por sucursal.
 8. Frecuencia de sincronización adicional después de la consulta inicial diaria.
 9. Si los cambios urgentes pueden entrar durante el turno o sólo al día siguiente.
-10. Dominio, DNS, región, sistema operativo, contenedores frente a `systemd` y
-    autenticación Edge-VPS. El proveedor y tamaño inicial ya están decididos:
-    Hostinger KVM 2.
+10. Dominio, DNS, región, versión exacta de Ubuntu Server, contenedores frente a
+    `systemd` y autenticación Edge-VPS. El proveedor, tamaño inicial y familia de
+    sistema operativo ya están decididos: Hostinger KVM 2 con Ubuntu Server sin GUI.
 11. Disponibilidad y calidad real de Internet en cada sucursal.
 12. Si SQLite seguirá siendo la base del Edge durante la primera expansión o se
     migrará a PostgreSQL local.
@@ -1251,8 +1250,7 @@ Antes de implementar deberán confirmarse:
 20. Canal de alertas y responsables ante fallo de respaldo, disco, TLS o
     sincronización.
 21. Alcance mínimo de datos personales de clientes que se consolidará.
-22. Fecha de compra y aprovisionamiento de KVM 2; no contratarlo antes de que una
-    fase del plan pueda aprovecharlo.
+22. Fecha de aprovisionamiento y ventana del piloto del KVM 2 ya contratado.
 23. Umbrales de CPU, RAM, disco, latencia y cola que justificarán subir de plan.
 24. Cuenta de emergencia, rotación de llaves SSH y política de revocación al
     terminar cada intervención.

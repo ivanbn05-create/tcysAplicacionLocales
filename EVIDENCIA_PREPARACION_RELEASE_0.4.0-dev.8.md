@@ -11,7 +11,7 @@ La candidata `0.4.0-dev.8` se construyo de forma reproducible y se instalo corre
 
 Al terminar la actualizacion se observo un `TimeoutError` contra `192.168.0.33:9100`; un escaneo de la red local `/24` tampoco encontro inicialmente un equipo con ese puerto abierto. El hallazgo quedo resuelto al encender o reconectar la impresora. Entre las 07:31 y las 07:32, caja, cocina y barra respondieron correctamente en `192.168.0.33:9100`. El diagnostico fue seguro: `envio_de_datos=false`.
 
-Despues se ejecuto una unica prueba controlada. El trabajo de caja termino tecnicamente en estado `impreso`, con un intento y archivo generado; el ticket temporal quedo cancelado. Falta que una persona confirme visualmente si la hoja salio y si su contenido fue legible. Hasta registrar esa confirmacion y la decision expresa de promocion, `0.4.0-dev.8` permanece como candidata de laboratorio.
+Despues se ejecuto una unica prueba controlada. El trabajo de caja termino tecnicamente en estado `impreso`, con un intento y archivo generado; el ticket temporal quedo cancelado. El usuario confirmo que salio una sola hoja, que la impresion fue perfecta y que el contenido correspondio con lo ingresado en las comandas. La validacion funcional de impresion queda aprobada. Hasta registrar una decision expresa de promocion, `0.4.0-dev.8` permanece como candidata de laboratorio.
 
 ## Identidad de la candidata
 
@@ -152,15 +152,11 @@ El runner externo devolvio codigo `1` solamente por una comprobacion HTTP simpli
 - `/salud/` respondio HTTP `200` con `{"estado":"ok"}`;
 - el socket `192.168.0.33:9100` acepto conexion sin que la comprobacion enviara datos.
 
-El registro tecnico demuestra que el trabajo paso por el backend y termino en `impreso`. Todavia no existe confirmacion visual humana de que la hoja haya salido ni de que su contenido sea correcto.
+El registro tecnico demuestra que el trabajo paso por el backend y termino en `impreso`. El usuario confirmo visualmente que salio una sola hoja, que la impresion fue perfecta y que su contenido correspondio con lo ingresado en las comandas.
 
 ## Criterio de promocion a version base
 
-Para promover esta candidata como version base de las sucursales falta:
-
-1. confirmar visualmente si salio una sola hoja y si su contenido fue legible;
-2. registrar esa confirmacion o, si no salio correctamente, abrir una correccion en una version posterior;
-3. documentar la decision explicita de promocion sin modificar los artefactos ya emitidos.
+La impresion fisica ya fue aceptada. Para promover esta candidata como version base de las sucursales falta documentar la decision explicita de promocion sin modificar los artefactos ya emitidos.
 
 Tambien conviene corregir la comprobacion HTTP simplificada del runner de prueba para evitar que futuras ejecuciones correctas terminen con un falso codigo de error.
 
