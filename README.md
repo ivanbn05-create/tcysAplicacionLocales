@@ -480,6 +480,15 @@ con cero trabajos
 histórica se convierta en una impresión física al reiniciar. Si encuentra trabajos,
 restaura el servicio sin modificar `.env` y exige resolver la cola en el backend actual.
 
+Antes de enviar papel, identifica la IP autorizada de la impresora en la subred `/24`
+de la sucursal y ejecuta el diagnóstico de socket sin datos. Si ningún host autorizado
+responde en TCP `9100`, registra la impresora como fuera de línea o inalcanzable y no
+crees, reintentes ni reimprimas un trabajo físico. Revisa alimentación, cable, dirección
+IP y puerto; conserva `.env`, la cola y los datos mientras se resuelve la incidencia.
+Sólo después de que el diagnóstico apruebe, envía un único ticket controlado y conserva
+la evidencia técnica y la confirmación visual del papel. El procedimiento completo,
+incluido el rollback, está en `PROTOCOLO_RELEASE_ACTUALIZACION_REUTILIZABLE.md`.
+
 El servicio `impresion` consume la cola de trabajos, renderiza PNG monocromático de
 576 píxeles (80 mm) y envía comandos ESC/POS ráster por TCP. Conserva el PNG como
 evidencia incluso cuando imprime por red. La aceptación final requiere una única

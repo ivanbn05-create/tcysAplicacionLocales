@@ -213,6 +213,30 @@ ESC/POS. Los diagnósticos antes y después de actualizar deben ejecutarse sin p
 leer configuración redactada, inspeccionar cola/estado y probar únicamente
 conectividad. Un ticket físico de prueba requiere autorización operativa explícita.
 
+Antes de gastar papel se aplica esta puerta obligatoria:
+
+1. Identificar la IP autorizada de la impresora y confirmar que pertenece a la
+   subred IPv4 `/24` esperada para la sucursal. No explorar la red ni adoptar como
+   impresora un host desconocido sólo porque tenga un puerto abierto.
+2. Ejecutar primero `diagnosticar_impresoras` y conservar su JSON redactado. La
+   evidencia debe mostrar el destino, el puerto `9100`, `alcanzable=true` y
+   `envio_de_datos=false`; esta prueba abre y cierra el socket sin transmitir bytes.
+3. Si ningún host autorizado de esa `/24` responde en TCP `9100`, considerar la
+   impresora fuera de línea o inalcanzable y no crear, reintentar ni reimprimir un
+   trabajo físico. Revisar alimentación, cable, dirección IP y puerto, y repetir sólo
+   el diagnóstico sin datos.
+4. Sólo después de aprobar esa puerta, enviar un único ticket controlado y registrar
+   el identificador del trabajo, el resultado técnico y la confirmación visual del
+   papel.
+
+Una impresora fuera de línea no autoriza a cambiar `.env`, vaciar la cola ni restaurar
+otra base. Se conserva la configuración y todos los datos; el incidente queda en la
+evidencia y la aceptación física permanece pendiente. Si falla la activación TCP antes
+de esa prueba, `configurar_impresion_instalada.ps1` restaura `.env` byte por byte y
+recupera el servicio. Si el fallo pertenece a la actualización, se usa el rollback del
+árbol descrito en la sección 8 y se conservan tanto el respaldo como la candidata
+fallida para diagnóstico.
+
 ### Incidencia dev.7: activación de impresión TCP
 
 La actualización preserva `.env` y no activa TCP. Cambiar una instalación de
