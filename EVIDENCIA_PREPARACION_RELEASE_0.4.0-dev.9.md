@@ -24,8 +24,9 @@ su servicio de Windows, su `.env`, su base y sus colas permanecieron intactos.
 | --- | --- |
 | Version | `0.4.0-dev.9` |
 | Rama | `codex/candidata-0.4.0-dev.9` |
-| Commit fuente limpio | **PENDIENTE DE CONGELAR** |
-| Commit documental posterior | **PENDIENTE DE CONGELAR** |
+| Commit funcional validado | `8b20ae7196cf406686848eb40393eec9c9cbe0bc` |
+| Commit documental posterior | punta publicada de la rama; no cambia codigo funcional |
+| `SOURCE_DATE_EPOCH` del commit funcional | `1790008260` |
 | Artefacto ZIP instalable | **NO CONSTRUIDO EN ESTA ETAPA** |
 | Reproducibilidad de artefacto | **NO EVALUADA EN ESTA ETAPA** |
 | Instalacion / actualizacion | **NO EJECUTADA POR ALCANCE** |
@@ -110,6 +111,7 @@ de sincronizacion futura con el VPS.
 | Contrato instalador Windows | **APROBADO CON -SkipAcl** | variante ACL completa aplazada: la sesion actual no es elevada |
 | JavaScript / Python | **APROBADA** | `node --check` en `app.js` y `admin.js`; `compileall` correcto |
 | Calidad Git | **APROBADA** | `git diff --check` sin errores; avisos CRLF informativos |
+| Preflight del commit funcional | **APROBADO** | `status: ok`; version, rama y commit coinciden con `8b20ae7196cf406686848eb40393eec9c9cbe0bc` |
 | Impeccable | **SIN HALLAZGOS BLOQUEANTES** | 10 avisos de fuentes heredadas; sin anti-patrones nuevos |
 | Seguridad del diff | **APROBADA** | sin secretos/archivos accidentales; instalador/updater sin cambios |
 | Concurrencia | **APROBADA** | locks, 409 estable y recuperacion sin reenvio automatico cubiertos por pruebas |
