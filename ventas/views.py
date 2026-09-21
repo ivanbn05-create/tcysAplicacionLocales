@@ -36,6 +36,7 @@ from .admin_services import (
     crear_corte_caja,
     crear_corte_sucursal,
     crear_liquidacion_repartidor,
+    crear_previa_corte_caja,
     crear_reporte_parcial,
     desprogramar_ticket,
     eliminar_movimiento,
@@ -63,6 +64,7 @@ from .consolidacion import consolidar_periodo
 from .clientes import (
     ErrorCliente,
     buscar_clientes,
+    buscar_clientes_directorio,
     cliente_payload,
     duplicados_por_nombre,
     guardar_cliente,
@@ -115,6 +117,7 @@ from .services import (
     crear_ticket_repetido,
     guardar_ticket,
     procesar_ticket,
+    reactivar_ticket_sucursal,
     reiniciar_folios,
     registrar_evento,
     validar_limite_productos_por_nombre,
@@ -390,6 +393,9 @@ def _operador_actual_pos(request, sucursal):
 def _respuesta_error_venta(error, device_id=""):
     status = getattr(error, "status_code", 400)
     payload = {"error": str(error)}
+    codigo = getattr(error, "codigo", "")
+    if codigo:
+        payload["codigo"] = codigo
     ticket = getattr(error, "ticket", None)
     if ticket is not None:
         payload["ticket"] = _ticket_payload(ticket, device_id)
@@ -869,9 +875,11 @@ def api_identificar_operador(request):
     if limite_agotado(clave_limite):
         return respuesta_limite()
     try:
+        datos = _json(request)
+        clave = datos.get("clave")
         perfil = identificar_usuario_ventas(
             sucursal,
-            _json(request).get("clave"),
+            clave,
             perfil_administrador=getattr(request, "pos_user", None),
         )
     except ErrorVenta as exc:
@@ -880,16 +888,39 @@ def api_identificar_operador(request):
             return respuesta_limite()
         return JsonResponse({"error": str(exc)}, status=400)
 
+    puede_acceder_movimientos = False
+    try:
+        autenticar_acceso_administrador(sucursal, clave)
+    except ErrorVenta:
+        pass
+    else:
+        puede_acceder_movimientos = True
+
     limpiar_fallos(clave_limite)
     request.session["mesero_pos_id"] = str(perfil.id)
     request.session["mesero_pos_nombre"] = perfil.nombre
-    return JsonResponse({"operador": usuario_payload(perfil)})
+    request.session["mesero_pos_puede_acceder_movimientos"] = puede_acceder_movimientos
+    operador = usuario_payload(perfil)
+    operador["puede_acceder_movimientos"] = puede_acceder_movimientos
+    return JsonResponse({"operador": operador})
+
+@require_GET
+def api_operador_actual(request):
+    perfil = _operador_actual_pos(request, _sucursal())
+    if perfil is None:
+        return JsonResponse({"operador": None})
+    operador = usuario_payload(perfil)
+    operador["puede_acceder_movimientos"] = bool(
+        request.session.get("mesero_pos_puede_acceder_movimientos", False)
+    )
+    return JsonResponse({"operador": operador})
 
 
 @require_POST
 def api_salir_operador(request):
     request.session.pop("mesero_pos_id", None)
     request.session.pop("mesero_pos_nombre", None)
+    request.session.pop("mesero_pos_puede_acceder_movimientos", None)
     return JsonResponse({"ok": True})
 
 
@@ -1112,6 +1143,20 @@ def api_agregar_comanda(request, ticket_id):
         datos = _json(request)
         with transaction.atomic():
             ticket_origen = _ticket(ticket_id)
+            # La repetición puede abrir otra posición y compite con el corte.
+            # Conservamos el orden global Sucursal -> Ticket -> Mesa desde el
+            # caller exterior, antes de que el lease bloquee el ticket.
+            sucursal_bloqueada = Sucursal.objects.select_for_update().get(
+                pk=ticket_origen.sucursal_id,
+            )
+            try:
+                ticket_origen = Ticket.objects.select_for_update().get(
+                    pk=ticket_origen.pk,
+                    sucursal=sucursal_bloqueada,
+                )
+            except Ticket.DoesNotExist as exc:
+                raise Http404("Ticket no encontrado") from exc
+            ticket_origen.sucursal = sucursal_bloqueada
             ticket_origen, device_id = _asegurar_edicion_ticket(request, ticket_origen, datos)
             if ticket_origen.canal in {Mesa.Canal.DOMICILIO, Mesa.Canal.RECOGER}:
                 ticket, creado = crear_ticket_repetido(
@@ -1149,6 +1194,15 @@ def api_buscar_clientes(request):
         if len(consulta) > 180:
             raise ErrorSolicitudJSON("La búsqueda es demasiado larga.")
         limite = int(datos.get("limite", 10))
+        if "pagina" in datos:
+            return JsonResponse(
+                buscar_clientes_directorio(
+                    _sucursal(),
+                    consulta,
+                    pagina=datos.get("pagina", 1),
+                    limite=limite,
+                )
+            )
         return JsonResponse({"resultados": buscar_clientes(_sucursal(), consulta, limite)})
     except ErrorSolicitudJSON as exc:
         return JsonResponse({"error": str(exc)}, status=400)
@@ -1543,6 +1597,29 @@ def api_completar_sucursal(request, ticket_id):
             _validar_clave_admin_datos(ticket.sucursal, datos)
             ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
             ticket = completar_ticket_sucursal(ticket)
+        return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
+    except ErrorVenta as exc:
+        return _respuesta_error_venta(exc, device_id)
+
+
+@require_POST
+@requiere_modulo("pedidos_sucursales")
+def api_reactivar_sucursal(request, ticket_id):
+    device_id = ""
+    try:
+        datos = _json(request)
+        with transaction.atomic():
+            ticket = _ticket(ticket_id)
+            nivel, perfil_elevado = autenticar_acceso_administrador(
+                ticket.sucursal,
+                datos.get("clave_administrador"),
+            )
+            ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
+            ticket = reactivar_ticket_sucursal(
+                ticket,
+                reactivado_por=perfil_elevado,
+                nivel_acceso=nivel,
+            )
         return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
     except ErrorVenta as exc:
         return _respuesta_error_venta(exc, device_id)
@@ -2073,6 +2150,21 @@ def api_admin_consolidacion_mensual(request):
         )
     except ErrorVenta as exc:
         return JsonResponse({"error": str(exc)}, status=400)
+
+@require_POST
+@acceso_administrador
+def api_admin_previa_corte_caja(request):
+    try:
+        _json(request)
+        # La transacción exterior conserva el lock de Sucursal adquirido por
+        # el servicio hasta que el trabajo de impresión queda en la cola. Así
+        # un corte real no puede purgar la previa en esa ventana.
+        with transaction.atomic():
+            reporte = crear_previa_corte_caja(_sucursal())
+            return _respuesta_reporte(reporte, {"es_previa": True})
+    except ErrorVenta as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
 
 @require_POST
 @acceso_administrador

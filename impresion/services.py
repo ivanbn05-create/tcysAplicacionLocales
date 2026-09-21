@@ -7,6 +7,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from .models import TrabajoImpresion
@@ -25,6 +26,38 @@ from .render import (
 logger = logging.getLogger(__name__)
 _purga_lock = threading.Lock()
 _ultima_purga = 0.0
+
+
+def trabajo_procesando_abandonado(trabajo, ahora=None):
+    """Indica si el lease temporal de un trabajo PROCESANDO ya venció."""
+
+    if trabajo.estado != TrabajoImpresion.Estado.PROCESANDO:
+        return False
+    ahora = ahora or timezone.now()
+    limite = ahora - timedelta(
+        seconds=int(getattr(settings, "PRINT_PROCESSING_TIMEOUT_SECONDS", 300))
+    )
+    return trabajo.procesado_en is None or trabajo.procesado_en <= limite
+
+
+def _recuperar_trabajos_abandonados(ahora):
+    limite = ahora - timedelta(
+        seconds=int(getattr(settings, "PRINT_PROCESSING_TIMEOUT_SECONDS", 300))
+    )
+    ids = list(
+        TrabajoImpresion.objects.select_for_update(skip_locked=True)
+        .filter(estado=TrabajoImpresion.Estado.PROCESANDO)
+        .filter(Q(procesado_en__isnull=True) | Q(procesado_en__lte=limite))
+        .order_by("procesado_en", "creado_en")
+        .values_list("pk", flat=True)[:100]
+    )
+    if ids:
+        TrabajoImpresion.objects.filter(pk__in=ids).update(
+            estado=TrabajoImpresion.Estado.PENDIENTE,
+            procesado_en=None,
+            error="El procesamiento anterior se interrumpió; se reintentará.",
+        )
+    return len(ids)
 
 
 def purgar_vistas_previas(forzar=False):
@@ -203,6 +236,8 @@ def estado_impresora(destino="caja"):
 
 @transaction.atomic
 def reclamar_siguiente():
+    ahora = timezone.now()
+    _recuperar_trabajos_abandonados(ahora)
     trabajo = (
         TrabajoImpresion.objects.select_for_update(skip_locked=True)
         .filter(estado=TrabajoImpresion.Estado.PENDIENTE)
@@ -212,7 +247,11 @@ def reclamar_siguiente():
     if trabajo:
         trabajo.estado = TrabajoImpresion.Estado.PROCESANDO
         trabajo.intentos += 1
-        trabajo.save(update_fields=["estado", "intentos"])
+        trabajo.procesado_en = ahora
+        trabajo.error = ""
+        trabajo.save(
+            update_fields=["estado", "intentos", "procesado_en", "error"]
+        )
     return trabajo
 
 
@@ -221,7 +260,11 @@ def procesar_trabajo(trabajo):
         trabajo.estado = TrabajoImpresion.Estado.PROCESANDO
         if trabajo.intentos == 0:
             trabajo.intentos = 1
-        trabajo.save(update_fields=["estado", "intentos"])
+        trabajo.procesado_en = timezone.now()
+        trabajo.error = ""
+        trabajo.save(
+            update_fields=["estado", "intentos", "procesado_en", "error"]
+        )
         ticket = trabajo.ticket
         if trabajo.reporte_id:
             imagen = render_reporte_administrativo(trabajo.reporte)
@@ -260,5 +303,6 @@ def procesar_trabajo(trabajo):
         logger.warning("Falló un trabajo de impresión (%s).", type(exc).__name__)
         trabajo.estado = TrabajoImpresion.Estado.ERROR
         trabajo.error = "No fue posible completar la impresión."
-        trabajo.save(update_fields=["estado", "error"])
+        trabajo.procesado_en = timezone.now()
+        trabajo.save(update_fields=["estado", "error", "procesado_en"])
     return trabajo

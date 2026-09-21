@@ -59,6 +59,8 @@ $env:DB_ENGINE = "sqlite"
 $env:SQLITE_PATH = "runtime/prueba/db.sqlite3"
 $env:PEDIDOS_SUCURSALES_FUENTE = "desactivada"
 $env:PEDIDOS_SUCURSALES_AUTO_SYNC = "false"
+$env:VPS_CONSOLIDACION_URL = ""
+$env:VPS_CONSOLIDACION_TOKEN = ""
 $env:PRINT_BACKEND = "archivo"
 $env:PRINT_SYNC = "true"
 

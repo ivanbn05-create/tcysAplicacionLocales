@@ -16,6 +16,9 @@ from ventas.promociones import configuracion_promocion
 
 ANCHO = 576
 MARGEN = 22
+CODIGOS_CONSOME = frozenset({"CO8", "CO05", "CO1"})
+ALTO_SEPARADOR_COMENSALES = 48
+TAMANO_NOMBRE_LLEVAR = 40
 
 
 def _ruta_fuente(negrita=False, cursiva=False):
@@ -109,6 +112,18 @@ def _dibujar_segmentos(draw, y, grupos, ancho, alto_linea=34):
     return y + alto_linea
 
 
+def _dibujar_separador_comensales(draw, y, alto=ALTO_SEPARADOR_COMENSALES):
+    """Separa visualmente grupos de seis sin convertir la linea en un borde."""
+
+    centro = y + alto // 2
+    x = MARGEN
+    limite = ANCHO - MARGEN
+    while x < limite:
+        draw.line((x, centro, min(x + 10, limite), centro), fill=0, width=2)
+        x += 18
+    return y + alto
+
+
 def _logo_actual():
     ruta = Path(settings.BASE_DIR) / "ventas" / "static" / "ventas" / "brand" / "logoactual.jpeg"
     if not ruta.is_file():
@@ -133,6 +148,56 @@ def _es_promocion(partida):
     return not _es_personalizada(partida) and bool(
         configuracion_promocion(partida.producto)
     )
+
+
+def _es_bebida(partida):
+    return bool(
+        not _es_personalizada(partida)
+        and partida.producto.categoria.nombre.casefold() == "bebidas"
+    )
+
+
+def _es_consome(partida):
+    return bool(
+        not _es_personalizada(partida)
+        and partida.producto.codigo.upper() in CODIGOS_CONSOME
+    )
+
+
+def _es_complemento_global(partida):
+    return _es_bebida(partida) or _es_consome(partida)
+
+
+def _agrupar_complementos_globales(partidas):
+    """Suma bebidas y consomes sin conservar atribucion por comensal."""
+
+    agrupados = {}
+    for partida in ordenar_partidas(partidas):
+        if not _es_complemento_global(partida):
+            continue
+        clave = _clave_visual_partida(partida)
+        if clave not in agrupados:
+            agrupados[clave] = {
+                "nombre": partida.nombre_corto,
+                "cantidad": Decimal("0"),
+            }
+        agrupados[clave]["cantidad"] += partida.cantidad
+    return list(agrupados.values())
+
+
+def _dibujar_complementos_globales(draw, y, complementos, fuente_titulo, fuente_items):
+    if not complementos:
+        return y
+    draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
+    y += 12
+    _centrado(draw, y, "CONSOM\u00c9S Y BEBIDAS", fuente_titulo)
+    y += 32
+    cantidades = defaultdict(Decimal)
+    for item in complementos:
+        cantidades[item["nombre"]] += item["cantidad"]
+    segmentos = _segmentos_bebidas(cantidades, fuente_items, fuente_items)
+    y = _dibujar_segmentos(draw, y, segmentos, ANCHO - MARGEN * 2, alto_linea=38)
+    return y + 8
 
 
 def _clave_visual_partida(partida):
@@ -325,7 +390,13 @@ def _datos_comanda_por_nombres(ticket, comanda_numero=None):
 
     contexto = _contexto_comanda(ticket, comanda_numero) if comanda_numero is not None else {}
     nombres = contexto.get("nombres_comensales", ticket.nombres_comensales) or {}
-    personas = sorted({partida.comensal for partida in partidas})
+    personas = sorted(
+        {
+            partida.comensal
+            for partida in partidas
+            if not _es_complemento_global(partida)
+        }
+    )
     filas = [
         {
             "persona": persona,
@@ -347,7 +418,27 @@ def _datos_comanda_por_nombres(ticket, comanda_numero=None):
         }
         for persona, conceptos in sorted(extras_por_persona.items())
     ]
-    return {"columnas": columnas, "filas": filas, "extras": extras}
+    extras_barbacoa_por_persona = defaultdict(lambda: defaultdict(Decimal))
+    for partida in complementos:
+        if not _es_complemento_global(partida):
+            extras_barbacoa_por_persona[partida.comensal][partida.nombre_corto] += partida.cantidad
+    extras_barbacoa = [
+        {
+            "persona": persona,
+            "nombre": str(nombres.get(str(persona), "")).strip() or f"PERSONA {persona}",
+            "conceptos": conceptos,
+        }
+        for persona, conceptos in sorted(extras_barbacoa_por_persona.items())
+    ]
+    return {
+        "columnas": columnas,
+        "filas": filas,
+        # Se conserva la estructura anterior para consumidores internos. El
+        # render nuevo usa las dos colecciones semanticamente separadas.
+        "extras": extras,
+        "extras_barbacoa": extras_barbacoa,
+        "complementos_globales": _agrupar_complementos_globales(complementos),
+    }
 
 
 def _dibujar_comanda_por_nombres(draw, y, ticket, comanda_numero=None):
@@ -389,7 +480,7 @@ def _dibujar_comanda_por_nombres(draw, y, ticket, comanda_numero=None):
             linea_y += 22
         y += alto
 
-    for fila in datos["filas"]:
+    for indice_fila, fila in enumerate(datos["filas"], start=1):
         alto_fila = 60
         draw.rectangle((MARGEN, y, ANCHO - MARGEN, y + alto_fila), outline=0, width=1)
         draw.text((MARGEN + 6, y + 6), fila["nombre"].upper()[:18], font=f_nombre, fill=0)
@@ -408,12 +499,14 @@ def _dibujar_comanda_por_nombres(draw, y, ticket, comanda_numero=None):
                     fill=0,
                 )
         y += alto_fila
+        if indice_fila % 6 == 0 and indice_fila < len(datos["filas"]):
+            y = _dibujar_separador_comensales(draw, y)
 
-    if datos["extras"]:
+    if datos["extras_barbacoa"]:
         draw.rectangle((MARGEN, y, ANCHO - MARGEN, y + 38), outline=0, width=2)
-        _centrado(draw, y + 7, "CONSOMÉS Y BEBIDAS", f_encabezado)
+        _centrado(draw, y + 7, "BARBACOA", f_encabezado)
         y += 38
-        for extra in datos["extras"]:
+        for extra in datos["extras_barbacoa"]:
             segmentos = " * ".join(
                 f"{_cantidad_matriz(cantidad)} {nombre.upper()}"
                 for nombre, cantidad in extra["conceptos"].items()
@@ -428,6 +521,13 @@ def _dibujar_comanda_por_nombres(draw, y, ticket, comanda_numero=None):
                 draw.text((MARGEN + ancho_nombre + 7, linea_y), linea, font=f_extras, fill=0)
                 linea_y += 28
             y += alto
+    y = _dibujar_complementos_globales(
+        draw,
+        y,
+        datos["complementos_globales"],
+        f_encabezado,
+        f_extras,
+    )
     return y + 24
 
 
@@ -448,6 +548,9 @@ def render_comanda(ticket, destino, comanda_numero=None):
     # La fila de promociones sólo es una ayuda de captura en la comanda virtual.
     # En cocina se imprimen exclusivamente los productos que la componen.
     partidas = [partida for partida in partidas_destino if not _es_promocion(partida)]
+    partidas_matriz = [
+        partida for partida in partidas if not _es_complemento_global(partida)
+    ]
     bebidas = (
         list(
             ticket.partidas.select_related("producto__categoria").filter(
@@ -461,11 +564,15 @@ def render_comanda(ticket, destino, comanda_numero=None):
     modificadores = list(
         ticket.modificadores.filter(comanda_numero=comanda_numero)
     )
-    ultimo_comensal = max([p.comensal for p in partidas] + [m.comensal for m in modificadores] + [1])
+    ultimo_comensal = max(
+        [p.comensal for p in partidas_matriz]
+        + [m.comensal for m in modificadores]
+        + [1]
+    )
     bloques = max(1, min(4, (ultimo_comensal + 5) // 6))
-    bebidas_agrupadas = defaultdict(Decimal)
-    for bebida in ordenar_partidas(bebidas):
-        bebidas_agrupadas[bebida.nombre_corto] += bebida.cantidad
+    complementos_globales = _agrupar_complementos_globales(
+        [*partidas, *bebidas]
+    )
     contacto_nombre, contacto_telefono = _contacto_pedido(ticket, contexto)
     contacto_pedido = " ".join(parte for parte in [contacto_nombre, contacto_telefono] if parte)
     imagen = Image.new("L", (ANCHO, 6000), 255)
@@ -479,6 +586,7 @@ def render_comanda(ticket, destino, comanda_numero=None):
     f_matriz_numero = fuente(30, negrita=True)
     f_chico = fuente(21)
     f_bebidas = fuente(29, negrita=True)
+    f_nombre_llevar = fuente(TAMANO_NOMBRE_LLEVAR, negrita=True)
 
     y = 24
     titulo = "Los Tocayos Tacos de Barbacoa"
@@ -517,9 +625,14 @@ def render_comanda(ticket, destino, comanda_numero=None):
         y += 46
         if canal == "llevar":
             cliente_nombre = contexto.get("cliente_nombre", ticket.cliente_nombre)
-            for linea in _ajustar(draw, f"LLEVAR: {cliente_nombre}".upper(), f_bold, ANCHO - MARGEN * 2):
-                _centrado(draw, y, linea, f_bold)
-                y += 34
+            for linea in _ajustar(
+                draw,
+                f"LLEVAR: {cliente_nombre}".upper(),
+                f_nombre_llevar,
+                ANCHO - MARGEN * 2,
+            ):
+                _centrado(draw, y, linea, f_nombre_llevar)
+                y += 48
             y += 5
     else:
         draw.text((MARGEN, y), f"{local.strftime('%d/%m/%Y')} {_hora_corta(local)}", font=f_normal, fill=0)
@@ -543,7 +656,7 @@ def render_comanda(ticket, destino, comanda_numero=None):
         )
     else:
         agrupadas = {}
-        for partida in partidas:
+        for partida in partidas_matriz:
             clave = _clave_visual_partida(partida)
             if clave not in agrupadas:
                 agrupadas[clave] = {"nombre": partida.nombre_corto, "cantidades": defaultdict(Decimal)}
@@ -612,7 +725,10 @@ def render_comanda(ticket, destino, comanda_numero=None):
                 draw.line((ANCHO - MARGEN, y, ANCHO - MARGEN, y + 46), fill=0, width=1)
                 draw.line((MARGEN, y + 46, ANCHO - MARGEN, y + 46), fill=145, width=1)
                 y += 48
-            y += 26
+            if bloque < bloques - 1:
+                y = _dibujar_separador_comensales(draw, y)
+            else:
+                y += MARGEN
 
     if contacto_pedido:
         draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
@@ -629,12 +745,14 @@ def render_comanda(ticket, destino, comanda_numero=None):
             _centrado(draw, y, linea, f_bold)
             y += 36
 
-    if bebidas_agrupadas and not captura_por_nombres:
-        draw.line((MARGEN, y, ANCHO - MARGEN, y), fill=0, width=2)
-        y += 12
-        segmentos = _segmentos_bebidas(bebidas_agrupadas, f_bebidas, f_bebidas)
-        y = _dibujar_segmentos(draw, y, segmentos, ANCHO - MARGEN * 2, alto_linea=38)
-        y += 8
+    if not captura_por_nombres:
+        y = _dibujar_complementos_globales(
+            draw,
+            y,
+            complementos_globales,
+            f_tabla_bold,
+            f_bebidas,
+        )
 
     salsas = _texto_salsas(ticket, contexto)
     if salsas:

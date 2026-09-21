@@ -309,8 +309,20 @@ PRINT_BACKEND = os.getenv("PRINT_BACKEND", "archivo").lower()
 if PRINT_BACKEND not in {"tcp", "archivo"}:
     raise ImproperlyConfigured("PRINT_BACKEND debe ser 'tcp' o 'archivo'.")
 PRINT_SYNC = env_bool("PRINT_SYNC", DEBUG)
+try:
+    PRINT_PROCESSING_TIMEOUT_SECONDS = int(
+        os.getenv("PRINT_PROCESSING_TIMEOUT_SECONDS", "300")
+    )
+except ValueError as exc:
+    raise ImproperlyConfigured(
+        "PRINT_PROCESSING_TIMEOUT_SECONDS debe ser un entero entre 30 y 3600."
+    ) from exc
 PRINTER_PORT = int(os.getenv("PRINTER_PORT", "9100"))
 PRINTER_TIMEOUT = float(os.getenv("PRINTER_TIMEOUT", "5"))
+if not 30 <= PRINT_PROCESSING_TIMEOUT_SECONDS <= 3600:
+    raise ImproperlyConfigured(
+        "PRINT_PROCESSING_TIMEOUT_SECONDS debe ser un entero entre 30 y 3600."
+    )
 if not 1 <= PRINTER_PORT <= 65535:
     raise ImproperlyConfigured("PRINTER_PORT debe estar entre 1 y 65535.")
 if not 0 < PRINTER_TIMEOUT <= 60:

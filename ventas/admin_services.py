@@ -8,7 +8,7 @@ from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
-from personas.models import Rol, UsuarioPOS
+from personas.models import Rol, Sucursal, UsuarioPOS
 from personas.modulos import modulo_habilitado
 
 from .models import (
@@ -235,14 +235,19 @@ def guardar_usuario(sucursal, datos, usuario=None):
     return usuario
 
 
+def _instante_hasta(valor):
+    instante = valor
+    if isinstance(instante, date) and not isinstance(instante, datetime):
+        instante = datetime.combine(instante, time.max)
+    if timezone.is_naive(instante):
+        instante = timezone.make_aware(instante)
+    return instante
+
+
 def _limite_turno(sucursal, ahora=None):
     cortes = CorteCaja.objects.filter(sucursal=sucursal)
     if ahora is not None:
-        instante = ahora
-        if isinstance(instante, date) and not isinstance(instante, datetime):
-            instante = datetime.combine(instante, time.max)
-        if timezone.is_naive(instante):
-            instante = timezone.make_aware(instante)
+        instante = _instante_hasta(ahora)
         cortes = cortes.filter(fin__lte=instante)
     ultimo = cortes.order_by("-fin").first()
     return ultimo.fin if ultimo else None
@@ -254,6 +259,12 @@ def _tickets_turno(sucursal, ahora=None):
     if limite is not None:
         tickets = tickets.filter(
             Q(creado_en__gt=limite) | Q(activado_programado_en__gt=limite),
+        )
+    if ahora is not None:
+        instante = _instante_hasta(ahora)
+        tickets = tickets.filter(
+            Q(activado_programado_en__isnull=True, creado_en__lte=instante)
+            | Q(activado_programado_en__lte=instante)
         )
     return tickets
 
@@ -279,11 +290,13 @@ def inicio_turno(sucursal, ahora=None):
     return min(candidatos) if candidatos else None
 
 
-def _movimientos_turno(sucursal):
+def _movimientos_turno(sucursal, ahora=None):
     movimientos = MovimientoCaja.objects.filter(sucursal=sucursal)
-    limite = _limite_turno(sucursal)
+    limite = _limite_turno(sucursal, ahora)
     if limite is not None:
         movimientos = movimientos.filter(creado_en__gt=limite)
+    if ahora is not None:
+        movimientos = movimientos.filter(creado_en__lte=_instante_hasta(ahora))
     return movimientos
 
 
@@ -313,6 +326,7 @@ def activar_programados(sucursal, ahora=None):
     # PROGRAMADO intacto y no convierte una lectura en un error 500.
     from .consolidacion import exigir_mes_operativo
 
+    sucursal = Sucursal.objects.select_for_update().get(pk=sucursal.pk)
     try:
         exigir_mes_operativo(sucursal)
     except ErrorVenta:
@@ -418,10 +432,14 @@ def programar_ticket(ticket, fecha_programada, hora_programada):
 
 @transaction.atomic
 def desprogramar_ticket(ticket):
-    ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    sucursal = Sucursal.objects.select_for_update().get(pk=ticket.sucursal_id)
+    ticket = Ticket.objects.select_for_update().get(
+        pk=ticket.pk,
+        sucursal=sucursal,
+    )
     if ticket.estado != Ticket.Estado.PROGRAMADO:
         raise ErrorVenta("El pedido ya no está programado.")
-    posicion = _posicion_libre(ticket.sucursal, ticket.canal, ticket=ticket)
+    posicion = _posicion_libre(sucursal, ticket.canal, ticket=ticket)
     if posicion is None:
         raise ErrorVenta(
             f"No hay posiciones de {ticket.get_canal_display().lower()} disponibles."
@@ -802,9 +820,12 @@ def _normalizar_apps(valores):
     return resultado
 
 
-def control_efectivo_dia(sucursal, fecha=None):
+def control_efectivo_dia(sucursal, fecha=None, *, bloquear=False):
     fecha = fecha or timezone.localdate()
-    control = ControlEfectivoDia.objects.filter(
+    controles = ControlEfectivoDia.objects
+    if bloquear:
+        controles = controles.select_for_update()
+    control = controles.filter(
         sucursal=sucursal,
         fecha=fecha,
     ).first()
@@ -893,6 +914,7 @@ def control_efectivo_payload(sucursal, control=None):
 
 @transaction.atomic
 def guardar_control_efectivo(sucursal, datos):
+    sucursal = Sucursal.objects.select_for_update().get(pk=sucursal.pk)
     control = ControlEfectivoDia.objects.select_for_update().filter(
         sucursal=sucursal,
         fecha=timezone.localdate(),
@@ -922,6 +944,7 @@ def guardar_control_efectivo(sucursal, datos):
 
 @transaction.atomic
 def agregar_movimiento(sucursal, tipo, concepto, importe):
+    sucursal = Sucursal.objects.select_for_update().get(pk=sucursal.pk)
     tipo, concepto, importe = _datos_movimiento(tipo, concepto, importe)
     return MovimientoCaja.objects.create(
         sucursal=sucursal,
@@ -952,6 +975,7 @@ def _datos_movimiento(tipo, concepto, importe):
 
 @transaction.atomic
 def actualizar_movimiento(sucursal, movimiento, tipo, concepto, importe):
+    sucursal = Sucursal.objects.select_for_update().get(pk=sucursal.pk)
     movimiento = MovimientoCaja.objects.select_for_update().get(
         pk=movimiento.pk,
         sucursal=sucursal,
@@ -968,6 +992,7 @@ def actualizar_movimiento(sucursal, movimiento, tipo, concepto, importe):
 
 @transaction.atomic
 def eliminar_movimiento(sucursal, movimiento):
+    sucursal = Sucursal.objects.select_for_update().get(pk=sucursal.pk)
     movimiento = MovimientoCaja.objects.select_for_update().get(
         pk=movimiento.pk,
         sucursal=sucursal,
@@ -976,8 +1001,7 @@ def eliminar_movimiento(sucursal, movimiento):
         raise ErrorVenta("El movimiento pertenece a un corte y ya no puede eliminarse.")
     movimiento.delete()
 
-def bloqueos_corte(sucursal):
-    tickets = list(_tickets_reporte(sucursal).select_related("repartidor"))
+def _bloqueos_corte_tickets(tickets):
     bloqueos = []
     ordinarios = [
         ticket
@@ -1019,6 +1043,11 @@ def bloqueos_corte(sucursal):
     return bloqueos
 
 
+def bloqueos_corte(sucursal):
+    tickets = list(_tickets_reporte(sucursal).select_related("repartidor"))
+    return _bloqueos_corte_tickets(tickets)
+
+
 def _purgar_detalle_diario(
     sucursal,
     detalle_turno,
@@ -1053,6 +1082,18 @@ def _purgar_detalle_diario(
             sucursal=sucursal,
             tipo=ReporteAdministrativo.Tipo.PARCIAL,
             creado_en__gte=limite_reportes,
+        ).values_list("id", flat=True)
+    )
+    # Las previas son documentos transitorios del turno: el corte real elimina
+    # tanto su registro como sus trabajos/archivos, incluso si se imprimieron
+    # antes del primer ticket que fijó ``inicio``.
+    reporte_ids.update(
+        ReporteAdministrativo.objects.filter(
+            sucursal=sucursal,
+            tipo=ReporteAdministrativo.Tipo.CORTE_CAJA,
+            corte_caja__isnull=True,
+            datos__es_previa=True,
+            creado_en__lte=corte.fin,
         ).values_list("id", flat=True)
     )
     rutas = list(
@@ -1097,29 +1138,9 @@ def _purgar_detalle_diario(
         )
 
 
-@transaction.atomic
-def crear_corte_caja(sucursal):
-    bloqueos = bloqueos_corte(sucursal)
-    if bloqueos:
-        raise ErrorVenta(" ".join(bloqueos))
-    inicio = inicio_turno(sucursal)
-    fin = timezone.now()
-    detalle_turno = list(
-        _tickets_turno(sucursal)
-        .select_for_update()
-        .select_related("mesa__cliente_sucursal")
-        .exclude(estado=Ticket.Estado.PROGRAMADO)
-    )
-    tickets = [
-        ticket
-        for ticket in detalle_turno
-        if ticket.estado != Ticket.Estado.CANCELADO
-    ]
-    movimientos = list(
-        _movimientos_turno(sucursal).select_for_update().filter(
-            cortes_caja__isnull=True
-        )
-    )
+def _resumen_corte_caja(sucursal, tickets, movimientos, control, inicio, fin):
+    """Calcula el comprobante sin cambiar el estado operativo del turno."""
+
     totales = {
         canal: sum(
             (ticket.total for ticket in tickets if ticket.canal == canal),
@@ -1155,9 +1176,16 @@ def crear_corte_caja(sucursal):
         (totales[canal] for canal in CANALES_PARCIAL),
         Decimal("0.00"),
     )
-    control = control_efectivo_dia(sucursal, timezone.localdate(fin))
-    fondo_anterior = _total_conteo(control.fondo_anterior or {})
-    fondo_siguiente = _total_conteo(control.fondo_siguiente or {})
+    fondo_anterior_conteo = {
+        **_conteo_vacio(),
+        **(control.fondo_anterior or {}),
+    }
+    fondo_siguiente_conteo = {
+        **_conteo_vacio(),
+        **(control.fondo_siguiente or {}),
+    }
+    fondo_anterior = _total_conteo(fondo_anterior_conteo)
+    fondo_siguiente = _total_conteo(fondo_siguiente_conteo)
     total_caja = (
         fondo_anterior
         + ingresos
@@ -1191,10 +1219,12 @@ def crear_corte_caja(sucursal):
         "fin": fin.isoformat(),
         "canales": {canal: str(valor) for canal, valor in totales.items()},
         "fondo_anterior": str(fondo_anterior),
+        "fondo_anterior_desglose": fondo_anterior_conteo,
         "ingresos": str(ingresos),
         "gastos": str(gastos),
         "terminales": str(terminales),
         "fondo_siguiente": str(fondo_siguiente),
+        "fondo_siguiente_desglose": fondo_siguiente_conteo,
         "entradas": str(ingresos),
         "salidas": str(gastos),
         "total_ventas": str(total_ventas),
@@ -1210,50 +1240,199 @@ def crear_corte_caja(sucursal):
             for movimiento in movimientos
         ],
     }
-    reporte = ReporteAdministrativo.objects.create(
+    return {
+        "datos": datos,
+        "totales": totales,
+        "ingresos": ingresos,
+        "gastos": gastos,
+        "terminales": terminales,
+        "total_ventas": total_ventas,
+        "fondo_anterior": fondo_anterior,
+        "fondo_anterior_conteo": fondo_anterior_conteo,
+        "fondo_siguiente": fondo_siguiente,
+        "fondo_siguiente_conteo": fondo_siguiente_conteo,
+        "ventas_apps": ventas_apps,
+        "totales_sucursales": totales_sucursales,
+        "total_caja": total_caja,
+    }
+
+
+def _detalle_turno_para_corte(sucursal, *, bloquear=False, hasta=None):
+    consulta = _tickets_turno(sucursal, hasta)
+    if bloquear:
+        consulta = consulta.select_for_update()
+    return list(
+        consulta.select_related("mesa__cliente_sucursal").exclude(
+            estado=Ticket.Estado.PROGRAMADO
+        )
+    )
+
+
+def _movimientos_para_corte(sucursal, *, bloquear=False, hasta=None):
+    consulta = _movimientos_turno(sucursal, hasta)
+    if bloquear:
+        consulta = consulta.select_for_update()
+    return list(consulta.filter(cortes_caja__isnull=True))
+
+
+def _snapshot_corte_bloqueado(sucursal, fin):
+    """Captura bajo lock el conjunto exacto que alimenta previa o corte."""
+
+    detalle_turno = _detalle_turno_para_corte(
+        sucursal,
+        bloquear=True,
+        hasta=fin,
+    )
+    tickets = [
+        ticket
+        for ticket in detalle_turno
+        if ticket.estado != Ticket.Estado.CANCELADO
+    ]
+    bloqueos = _bloqueos_corte_tickets(tickets)
+    if bloqueos:
+        raise ErrorVenta(" ".join(bloqueos))
+    movimientos = _movimientos_para_corte(
+        sucursal,
+        bloquear=True,
+        hasta=fin,
+    )
+    control = control_efectivo_dia(
+        sucursal,
+        timezone.localdate(fin),
+        bloquear=True,
+    )
+    return {
+        "detalle_turno": detalle_turno,
+        "tickets": tickets,
+        "movimientos": movimientos,
+        "control": control,
+        "inicio": inicio_turno(sucursal, fin),
+    }
+
+
+@transaction.atomic
+def crear_previa_corte_caja(sucursal):
+    """Crea un comprobante imprimible sin cerrar ni purgar el turno."""
+
+    sucursal = Sucursal.objects.select_for_update().get(pk=sucursal.pk)
+    fin = timezone.now()
+    snapshot = _snapshot_corte_bloqueado(sucursal, fin)
+    resumen = _resumen_corte_caja(
+        sucursal,
+        snapshot["tickets"],
+        snapshot["movimientos"],
+        snapshot["control"],
+        snapshot["inicio"],
+        fin,
+    )
+    datos = dict(resumen["datos"])
+    datos.update(
+        {
+            "titulo": "PREVIA DE CORTE DE CAJA",
+            "es_previa": True,
+        }
+    )
+    return ReporteAdministrativo.objects.create(
         sucursal=sucursal,
         tipo=ReporteAdministrativo.Tipo.CORTE_CAJA,
         datos=datos,
     )
-    corte = CorteCaja.objects.create(
-        sucursal=sucursal,
-        inicio=inicio,
-        fin=fin,
-        reporte=reporte,
-        totales_canales={canal: str(valor) for canal, valor in totales.items()},
-        total_ventas=total_ventas,
-        total_entradas=ingresos,
-        total_salidas=gastos,
-        total_fondo_anterior=fondo_anterior,
-        total_terminales=terminales,
-        total_fondo_siguiente=fondo_siguiente,
-        ventas_apps=ventas_apps,
-        totales_sucursales=totales_sucursales,
-        total_caja=total_caja,
+
+
+def _validar_corte_no_duplicado_vacio(sucursal, snapshot, resumen):
+    """Evita cerrar otra vez el turno recién reiniciado sin actividad nueva."""
+
+    if not CorteCaja.objects.filter(sucursal=sucursal).exists():
+        return
+    if snapshot["detalle_turno"] or snapshot["movimientos"]:
+        return
+    tiene_fondo_nuevo = resumen["fondo_siguiente"] != Decimal("0.00")
+    tiene_ventas_apps = any(
+        Decimal(str(importe)) != Decimal("0.00")
+        for importe in resumen["ventas_apps"].values()
+    )
+    if tiene_fondo_nuevo or tiene_ventas_apps:
+        return
+    raise ErrorVenta(
+        "No hay operaciones nuevas desde el último corte. "
+        "No se puede generar un corte duplicado vacío."
     )
 
+
+@transaction.atomic
+def crear_corte_caja(sucursal):
+    sucursal = Sucursal.objects.select_for_update().get(pk=sucursal.pk)
+    fin = timezone.now()
+    snapshot = _snapshot_corte_bloqueado(sucursal, fin)
+    resumen = _resumen_corte_caja(
+        sucursal,
+        snapshot["tickets"],
+        snapshot["movimientos"],
+        snapshot["control"],
+        snapshot["inicio"],
+        fin,
+    )
+    _validar_corte_no_duplicado_vacio(sucursal, snapshot, resumen)
+    reporte = ReporteAdministrativo.objects.create(
+        sucursal=sucursal,
+        tipo=ReporteAdministrativo.Tipo.CORTE_CAJA,
+        datos=resumen["datos"],
+    )
+    corte = CorteCaja.objects.create(
+        sucursal=sucursal,
+        inicio=snapshot["inicio"],
+        fin=fin,
+        reporte=reporte,
+        totales_canales={
+            canal: str(valor) for canal, valor in resumen["totales"].items()
+        },
+        total_ventas=resumen["total_ventas"],
+        total_entradas=resumen["ingresos"],
+        total_salidas=resumen["gastos"],
+        total_fondo_anterior=resumen["fondo_anterior"],
+        total_terminales=resumen["terminales"],
+        total_fondo_siguiente=resumen["fondo_siguiente"],
+        ventas_apps=resumen["ventas_apps"],
+        totales_sucursales=resumen["totales_sucursales"],
+        total_caja=resumen["total_caja"],
+    )
+
+    # El fondo pertenece al siguiente turno, aunque éste empiece el mismo día.
+    # También se prepara el siguiente día natural para conservar el flujo
+    # existente cuando la reapertura ocurre después de medianoche.
+    fondo_nuevo_turno = dict(resumen["fondo_siguiente_conteo"])
+    conteo_vacio = _conteo_vacio()
+    apps_vacias = {app: "0.00" for app in ControlEfectivoDia.APPS}
     fecha_siguiente = timezone.localdate(fin) + timedelta(days=1)
     siguiente, _ = ControlEfectivoDia.objects.select_for_update().get_or_create(
         sucursal=sucursal,
         fecha=fecha_siguiente,
         defaults={
-            "fondo_anterior": dict(control.fondo_siguiente or _conteo_vacio()),
-            "fondo_siguiente": _conteo_vacio(),
-            "ventas_apps": {
-                app: "0.00" for app in ControlEfectivoDia.APPS
-            },
+            "fondo_anterior": fondo_nuevo_turno,
+            "fondo_siguiente": conteo_vacio,
+            "ventas_apps": apps_vacias,
         },
     )
-    siguiente.fondo_anterior = dict(
-        control.fondo_siguiente or _conteo_vacio()
-    )
+    siguiente.fondo_anterior = fondo_nuevo_turno
     siguiente.save(update_fields=["fondo_anterior", "actualizado_en"])
+
+    snapshot["control"].fondo_anterior = fondo_nuevo_turno
+    snapshot["control"].fondo_siguiente = conteo_vacio
+    snapshot["control"].ventas_apps = apps_vacias
+    snapshot["control"].save(
+        update_fields=[
+            "fondo_anterior",
+            "fondo_siguiente",
+            "ventas_apps",
+            "actualizado_en",
+        ]
+    )
 
     _purgar_detalle_diario(
         sucursal,
-        detalle_turno,
-        movimientos,
-        inicio,
+        snapshot["detalle_turno"],
+        snapshot["movimientos"],
+        snapshot["inicio"],
         corte,
     )
     return corte, reporte

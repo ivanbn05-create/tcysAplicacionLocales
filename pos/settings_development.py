@@ -35,6 +35,9 @@ os.environ["PRINT_BACKEND"] = _backend_impresion
 os.environ["PRINT_SYNC"] = "true"
 os.environ["PEDIDOS_SUCURSALES_AUTO_SYNC"] = "false"
 os.environ["PEDIDOS_SUCURSALES_FUENTE"] = "desactivada"
+# Una prueba local nunca debe heredar el destino ni el secreto del VPS.
+os.environ["VPS_CONSOLIDACION_URL"] = ""
+os.environ["VPS_CONSOLIDACION_TOKEN"] = ""
 # El perfil de prueba no hereda TLS, confianza de proxy ni la decisión de exponer
 # HTTP que pudiera existir en el .env de producción.
 os.environ["DJANGO_HTTPS"] = "false"

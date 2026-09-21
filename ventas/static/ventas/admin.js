@@ -609,8 +609,10 @@
   function actualizarBotonPantallaCompleta() {
     const boton = $("#pantalla-completa-admin");
     const activo = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+    const etiqueta = activo ? "Salir de pantalla completa" : "Entrar a pantalla completa";
     boton.setAttribute("aria-pressed", String(activo));
-    boton.querySelector("span").textContent = activo ? "Salir de pantalla completa" : "Pantalla completa";
+    boton.setAttribute("aria-label", etiqueta);
+    boton.title = etiqueta;
   }
 
   async function ejecutarLote(boton) {
@@ -705,6 +707,14 @@
     const total = canales.reduce((suma, canal) => suma + Number(totales[canal] || 0), 0);
     canales.forEach(canal => { $(`#total-${canal}`).textContent = dinero(totales[canal]); });
     $("#total-general").textContent = dinero(total);
+    const vistaPrevia = $("#vista-previa-corte");
+    const bloqueos = estado.administrador.bloqueos_corte || [];
+    if (vistaPrevia) {
+      vistaPrevia.disabled = bloqueos.length > 0;
+      vistaPrevia.title = bloqueos.length
+        ? "Resuelve los requisitos del corte antes de imprimir la vista previa."
+        : "Imprimir el corte sin cerrar el turno.";
+    }
     renderBloqueos("#bloqueos-reporte");
   }
 
@@ -1292,6 +1302,14 @@
       return;
     }
     const accionGeneral = evento.target.closest("[data-accion]")?.dataset.accion;
+    if (accionGeneral === "vista-previa-corte") {
+      await ejecutarAccion({
+        url: "/api/administrador/corte-caja/previa/",
+        mensaje: "Vista previa del corte enviada a impresión. El turno sigue abierto.",
+        control: $("#vista-previa-corte"),
+      });
+      return;
+    }
     if (accionGeneral === "reporte-parcial") {
       await ejecutarAccion({ url: "/api/administrador/reportes/parcial/", mensaje: "Reporte parcial enviado a impresión." });
       return;

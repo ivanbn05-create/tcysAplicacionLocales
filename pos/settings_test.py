@@ -24,6 +24,9 @@ os.environ["PRINT_BACKEND"] = "archivo"
 os.environ["PRINT_SYNC"] = "true"
 os.environ["PEDIDOS_SUCURSALES_AUTO_SYNC"] = "false"
 os.environ["PEDIDOS_SUCURSALES_FUENTE"] = "desactivada"
+# La suite no debe heredar credenciales ni un destino VPS del host.
+os.environ["VPS_CONSOLIDACION_URL"] = ""
+os.environ["VPS_CONSOLIDACION_TOKEN"] = ""
 # La suite tampoco debe heredar el perfil HTTPS/proxy de una instalación real.
 os.environ["DJANGO_HTTPS"] = "false"
 os.environ["WAITRESS_HOST"] = "127.0.0.1"

@@ -186,6 +186,76 @@ def buscar_clientes(sucursal, consulta, limite=10):
     return resultados[: max(1, min(int(limite), 20))]
 
 
+def buscar_clientes_directorio(sucursal, consulta="", pagina=1, limite=30):
+    """Lista el directorio local con búsqueda amplia y paginación estable.
+
+    Esta consulta está separada de buscar_clientes porque la selección para un
+    domicilio prioriza coincidencias y devuelve pocos resultados, mientras que
+    el directorio debe poder recorrer todos los clientes de la sucursal.
+    """
+
+    consulta = str(consulta or "").strip()
+    texto = normalizar_texto(consulta)
+    digitos = normalizar_telefono(consulta)
+    try:
+        pagina = max(1, int(pagina))
+    except (TypeError, ValueError):
+        pagina = 1
+    try:
+        limite = max(1, min(int(limite), 50))
+    except (TypeError, ValueError):
+        limite = 30
+
+    clientes = _clientes_con_datos(sucursal).order_by(
+        "nombre_normalizado", "clave_corta", "id"
+    )
+    if consulta:
+        filtros = Q(clave_corta__icontains=consulta)
+        if texto:
+            filtros |= Q(nombre_normalizado__contains=texto)
+            filtros |= Q(domicilios__normalizado__contains=texto)
+        filtros |= Q(notas__icontains=consulta)
+        filtros |= Q(telefonos__numero__icontains=consulta)
+        filtros |= Q(telefonos__etiqueta__icontains=consulta)
+        filtros |= Q(domicilios__etiqueta__icontains=consulta)
+        filtros |= Q(domicilios__calle__icontains=consulta)
+        filtros |= Q(domicilios__numero_exterior__icontains=consulta)
+        filtros |= Q(domicilios__numero_interior__icontains=consulta)
+        filtros |= Q(domicilios__colonia__icontains=consulta)
+        filtros |= Q(domicilios__codigo_postal__icontains=consulta)
+        filtros |= Q(domicilios__municipio__icontains=consulta)
+        filtros |= Q(domicilios__referencia__icontains=consulta)
+        if digitos:
+            filtros |= Q(telefonos__normalizado__contains=digitos)
+        clientes = clientes.filter(filtros).distinct()
+
+    total = clientes.count()
+    inicio = (pagina - 1) * limite
+    clientes_pagina = list(clientes[inicio : inicio + limite])
+    resultados = []
+    for cliente in clientes_pagina:
+        telefonos = list(cliente.telefonos.all())
+        domicilios = list(cliente.domicilios.all())
+        resultado = _resultado(
+            cliente,
+            telefonos[0] if telefonos else None,
+            domicilios[0] if domicilios else None,
+            "Registro del directorio",
+            0,
+        )
+        resultado["notas"] = cliente.notas
+        resultado["telefonos"] = [telefono_payload(item) for item in telefonos]
+        resultado["domicilios"] = [domicilio_payload(item) for item in domicilios]
+        resultados.append(resultado)
+
+    return {
+        "resultados": resultados,
+        "pagina": pagina,
+        "total": total,
+        "hay_mas": inicio + len(resultados) < total,
+    }
+
+
 def duplicados_por_nombre(sucursal, nombre, excluir=None):
     consulta = Cliente.objects.filter(
         sucursal=sucursal,

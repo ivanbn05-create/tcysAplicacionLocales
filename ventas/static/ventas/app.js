@@ -1,6 +1,136 @@
 (() => {
   "use strict";
 
+  const patronUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const mensajeConflictoVersion = () => (
+    "El pedido cambió en otra terminal. Ya mostramos la versión más reciente; "
+    + "revisa la comanda y vuelve a confirmar la operación."
+  );
+
+  function esUuid(valor) {
+    return patronUuid.test(String(valor || ""));
+  }
+
+  function ticketIdDeMutacion(url, ticketActualId = "") {
+    const ruta = String(url).split(/[?#]/, 1)[0];
+    const coincidenciaTicket = ruta.match(/^\/api\/tickets\/([^/]+)(?:\/|$)/);
+    if (coincidenciaTicket && esUuid(coincidenciaTicket[1])) return coincidenciaTicket[1];
+    const coincidenciaPartida = ruta.match(/^\/api\/partidas\/([^/]+)(?:\/|$)/);
+    if (coincidenciaPartida && esUuid(coincidenciaPartida[1]) && esUuid(ticketActualId)) {
+      return String(ticketActualId);
+    }
+    return "";
+  }
+
+  function requiereContratoTicket(url, metodo, ticketId = "") {
+    const metodoNormalizado = String(metodo || "GET").toUpperCase();
+    if (!esUuid(ticketId) || ["GET", "HEAD"].includes(metodoNormalizado)) return false;
+    if (String(url).includes(`/api/tickets/${ticketId}/bloqueo/`)) return false;
+    return String(url).includes(`/api/tickets/${ticketId}/`) || String(url).startsWith("/api/partidas/");
+  }
+
+  function cuerpoConContratoTicket(body, ticket, deviceId, edicionProgramada = false) {
+    let datos = {};
+    if (typeof body === "string" && body.trim()) {
+      datos = JSON.parse(body);
+    } else if (body && typeof body === "object") {
+      datos = { ...body };
+    }
+    if (!datos || typeof datos !== "object" || Array.isArray(datos)) return body;
+    return JSON.stringify({
+      ...datos,
+      device_id: deviceId,
+      version_entidad: ticket.version_entidad,
+      ...(edicionProgramada ? { edicion_programada: true } : {}),
+    });
+  }
+
+  async function despacharSolicitud(fetchImpl, url, opciones = {}, contexto = {}) {
+    const ticketId = String(contexto.ticketId || "");
+    let body = opciones.body;
+    if (ticketId) {
+      if (!contexto.ticket || String(contexto.ticket.id) !== ticketId) {
+        const error = new Error("La operación pendiente pertenecía a otro pedido y no se envió.");
+        error.codigo = "contexto_ticket_cambio";
+        throw error;
+      }
+      body = cuerpoConContratoTicket(
+        body,
+        contexto.ticket,
+        contexto.deviceId,
+        contexto.edicionProgramada,
+      );
+    }
+    return fetchImpl(url, { ...opciones, body });
+  }
+
+  async function solicitarJson(fetchImpl, url, opciones = {}, contexto = {}) {
+    const respuesta = await despacharSolicitud(fetchImpl, url, opciones, contexto);
+    let datos;
+    try { datos = await respuesta.json(); } catch { datos = {}; }
+    return { respuesta, datos };
+  }
+
+  function adoptarTicketRespuesta(estadoAplicacion, datos, ticketId) {
+    const ticket = datos?.ticket;
+    if (
+      !ticket
+      || String(ticket.id) !== String(ticketId)
+      || String(estadoAplicacion.ticket?.id) !== String(ticketId)
+    ) return false;
+    estadoAplicacion.ticket = ticket;
+    return true;
+  }
+
+  function resolverGuardadoNombreClienteLlevar({
+    nombreEnviado,
+    nombreConfirmado,
+    nombreActual,
+    revisionEnviada,
+    revisionActual,
+  }) {
+    const edicionPosterior = (
+      Number(revisionActual) !== Number(revisionEnviada)
+      || String(nombreActual) !== String(nombreEnviado)
+    );
+    return {
+      edicionPosterior,
+      nombreVisible: String(edicionPosterior ? nombreActual : nombreConfirmado),
+    };
+  }
+
+  function clasificarPartidasPorNombres(partidas, esBebidaPartida) {
+    const codigosBarbacoa = new Set(["BBQ05", "BBQ1"]);
+    const codigosConsome = new Set(["CO8", "CO05", "CO1"]);
+    const resultado = { principales: [], barbacoa: [], complementosGlobales: [] };
+    for (const partida of partidas || []) {
+      if (partida.es_promocion) continue;
+      const codigo = String(partida.codigo || "").toUpperCase();
+      if (codigosBarbacoa.has(codigo)) resultado.barbacoa.push(partida);
+      else if (codigosConsome.has(codigo) || esBebidaPartida(partida)) {
+        resultado.complementosGlobales.push(partida);
+      } else resultado.principales.push(partida);
+    }
+    return resultado;
+  }
+
+  const contratoFrontend = {
+    adoptarTicketRespuesta,
+    clasificarPartidasPorNombres,
+    cuerpoConContratoTicket,
+    despacharSolicitud,
+    mensajeConflictoVersion,
+    requiereContratoTicket,
+    resolverGuardadoNombreClienteLlevar,
+    solicitarJson,
+    ticketIdDeMutacion,
+  };
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = contratoFrontend;
+    return;
+  }
+
   const productos = JSON.parse(document.getElementById("datos-productos").textContent);
   const posiciones = JSON.parse(document.getElementById("datos-posiciones").textContent);
   const permisos = JSON.parse(document.getElementById("datos-permisos").textContent);
@@ -87,7 +217,18 @@
     objetivoModificador: { tipo: "persona", persona: 1 },
     edicion: null,
     colaEdicion: Promise.resolve(),
-    colaMutacionesTicket: Promise.resolve(),
+    colasMutacionesTicket: new Map(),
+    directorioActivo: false,
+    directorioResultados: [],
+    directorioPagina: 1,
+    directorioHayMas: false,
+    directorioTotal: null,
+    directorioConsulta: "",
+    directorioCargando: false,
+    directorioError: "",
+    temporizadorDirectorio: null,
+    tokenDirectorio: 0,
+    clienteFormularioContexto: "pedido",
     errorEdicion: null,
     tickets: {},
     programados: [],
@@ -104,7 +245,9 @@
     temporizadorClienteLlevar: null,
     colaGuardadoClienteLlevar: Promise.resolve(),
     clienteLlevarGuardado: "",
+    clienteLlevarBorrador: "",
     clienteLlevarTicketId: "",
+    revisionClienteLlevar: 0,
     errorClienteLlevar: null,
     temporizadorBloqueo: null,
     temporizadorSucursales: null,
@@ -246,33 +389,49 @@
     if (estado.ticket?.canal === "domicilio") renderClienteDomicilio(ticket);
   }
 
+  function ticketParaContrato(ticketId) {
+    if (estado.ticket && String(estado.ticket.id) === String(ticketId)) return estado.ticket;
+    const error = new Error("La operación pendiente pertenecía a otro pedido y no se envió.");
+    error.codigo = "contexto_ticket_cambio";
+    throw error;
+  }
+
   async function api(url, opciones = {}) {
     const metodo = (opciones.method || "GET").toUpperCase();
-    const conContratoTicket = requiereContratoTicket(url, metodo);
-    if (!conContratoTicket) return ejecutarApi(url, opciones, false);
-    const ejecutar = () => ejecutarApi(url, opciones, true);
-    const actual = estado.colaMutacionesTicket.then(ejecutar, ejecutar);
-    estado.colaMutacionesTicket = actual.catch(() => {});
+    const ticketId = ticketIdDeMutacion(url, estado.ticket?.id || "");
+    const conContratoTicket = requiereContratoTicket(url, metodo, ticketId);
+    if (!conContratoTicket) return ejecutarApi(url, opciones);
+    const contrato = { ticketId: String(ticketId) };
+    const colaAnterior = estado.colasMutacionesTicket.get(contrato.ticketId) || Promise.resolve();
+    const ejecutar = () => ejecutarApi(url, opciones, contrato);
+    const actual = colaAnterior.then(ejecutar, ejecutar);
+    const colaSilenciada = actual.catch(() => {});
+    estado.colasMutacionesTicket.set(contrato.ticketId, colaSilenciada);
+    colaSilenciada.finally(() => {
+      if (estado.colasMutacionesTicket.get(contrato.ticketId) === colaSilenciada) {
+        estado.colasMutacionesTicket.delete(contrato.ticketId);
+      }
+    });
     return actual;
   }
 
-  async function ejecutarApi(url, opciones = {}, conContratoTicket = false) {
-    const metodo = (opciones.method || "GET").toUpperCase();
-    let body = opciones.body;
-    if (conContratoTicket || requiereContratoTicket(url, metodo)) {
-      body = cuerpoConContratoTicket(body);
-    }
-    const respuesta = await fetch(url, {
+  async function ejecutarApi(url, opciones = {}, contrato = null) {
+    const ticketContrato = contrato ? ticketParaContrato(contrato.ticketId) : null;
+    const { respuesta, datos } = await solicitarJson(fetch, url, {
       cache: "no-store",
       credentials: "same-origin",
       ...opciones,
-      body,
       headers: {
         "Content-Type": "application/json",
         "X-CSRFToken": csrf(),
         "X-POS-Device-ID": estado.deviceId,
         ...(opciones.headers || {}),
       },
+    }, {
+      ticketId: contrato?.ticketId || "",
+      ticket: ticketContrato,
+      deviceId: estado.deviceId,
+      edicionProgramada: estado.edicionProgramada,
     });
     if (respuesta.status === 401) {
       if (estado.edicionProgramada || url.includes("/editar-programado/")) {
@@ -282,41 +441,33 @@
       window.location.replace(`/acceso/?next=${siguiente}`);
       throw new Error("La sesión expiró. Inicia sesión nuevamente.");
     }
-    let datos;
-    try { datos = await respuesta.json(); } catch { datos = {}; }
+    if (contrato) ticketParaContrato(contrato.ticketId);
+    const ticketAdoptado = contrato
+      ? adoptarTicketRespuesta(estado, datos, contrato.ticketId)
+      : false;
     if (!respuesta.ok) {
-      if ([409, 423].includes(respuesta.status) && datos.ticket && estado.ticket?.id === datos.ticket.id) {
-        estado.ticket = datos.ticket;
+      const conflictoVersion = Boolean(
+        ticketAdoptado
+        && respuesta.status === 409
+        && datos.codigo === "version_entidad_desactualizada"
+      );
+      if (conflictoVersion) {
+        mostrarTicket({ descartarBorradorClienteLlevar: true });
+      } else if (ticketAdoptado && [409, 423].includes(respuesta.status)) {
         actualizarVistaPorBloqueo();
       }
-      const error = new Error(datos.error || "No fue posible completar la operación.");
+      const error = new Error(
+        conflictoVersion
+          ? mensajeConflictoVersion()
+          : (datos.error || "No fue posible completar la operación."),
+      );
       error.datos = datos;
       error.status = respuesta.status;
+      error.codigo = datos.codigo || "";
+      error.requiereConfirmacion = conflictoVersion;
       throw error;
     }
     return datos;
-  }
-
-  function requiereContratoTicket(url, metodo) {
-    if (!estado.ticket || ["GET", "HEAD"].includes(metodo)) return false;
-    if (url.includes(`/api/tickets/${estado.ticket.id}/bloqueo/`)) return false;
-    return url.includes(`/api/tickets/${estado.ticket.id}/`) || url.startsWith("/api/partidas/");
-  }
-
-  function cuerpoConContratoTicket(body) {
-    let datos = {};
-    if (typeof body === "string" && body.trim()) {
-      datos = JSON.parse(body);
-    } else if (body && typeof body === "object") {
-      return body;
-    }
-    if (!datos || typeof datos !== "object" || Array.isArray(datos)) return body;
-    return JSON.stringify({
-      ...datos,
-      device_id: estado.deviceId,
-      version_entidad: datos.version_entidad ?? estado.ticket.version_entidad,
-      ...(estado.edicionProgramada ? { edicion_programada: true } : {}),
-    });
   }
 
   function ticketActivo(ticket = estado.ticket) {
@@ -530,6 +681,28 @@
     const operador = estado.operador?.nombre?.trim() || "";
     nombre.textContent = operador;
     contenedor.hidden = !operador;
+    const accesoMovimientos = Boolean(estado.operador?.puede_acceder_movimientos);
+    const botonMovimientos = $("#abrir-movimientos");
+    if (botonMovimientos) botonMovimientos.hidden = !operador || !accesoMovimientos;
+  }
+
+  async function reanudarSesionOperador() {
+    if (modoTableta || idProgramadoSolicitado()) return false;
+    try {
+      const datos = await api("/api/operador/actual/");
+      if (!datos.operador) return false;
+      estado.operador = datos.operador;
+      $("#pantalla-acceso")?.classList.add("oculto");
+      $("main").classList.remove("oculto");
+      document.body.classList.add("en-operacion");
+      document.body.classList.remove("en-ticket");
+      renderOperadorActual();
+      await cargarEstado(estado.canal === "sucursales");
+      programarSincronizacionSucursales();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async function entrarComoMesero({ mostrarPantalla = true } = {}) {
@@ -570,7 +743,7 @@
     }
   }
 
-  async function abrirAdministrador() {
+  async function abrirAdministrador(panel = "") {
     const clave = await pedirClavePos("Clave de administrador", "Autoriza el acceso a la gestión del turno de esta sucursal.");
     if (!clave) return;
     try {
@@ -578,7 +751,8 @@
         method: "POST",
         body: JSON.stringify({ clave_administrador: clave }),
       });
-      window.location.assign(datos.destino || "/administrador/");
+      const destino = datos.destino || "/administrador/";
+      window.location.assign(panel ? destino.replace(/#.*$/, "") + "#" + panel : destino);
     } catch (error) {
       toast(error.message, true);
     }
@@ -596,6 +770,7 @@
           "cancelar-orden": "Cancelando orden…",
           "ticket-cuenta": "Imprimiendo ticket…",
           "agregar-comanda": "Creando comanda…",
+          "reactivar-sucursal": "Reactivando pedido…",
         };
         boton.dataset.textoCarga = etiquetas[boton.id] || "Cargando…";
         boton.dataset.ariaOperacionOriginal = boton.getAttribute("aria-label") || "";
@@ -933,7 +1108,7 @@
     }
   }
 
-  function mostrarTicket() {
+  function mostrarTicket({ descartarBorradorClienteLlevar = false } = {}) {
     const ticket = estado.ticket;
     const esSucursal = ticket.canal === "sucursales";
     const editandoProgramado = esEdicionProgramada(ticket);
@@ -963,12 +1138,29 @@
     const esLlevar = ticket.canal === "llevar";
     if (esLlevar) {
       clearTimeout(estado.temporizadorClienteLlevar);
-      estado.clienteLlevarGuardado = ticket.cliente?.nombre || "";
-      estado.clienteLlevarTicketId = String(ticket.id);
+      const ticketId = String(ticket.id);
+      const nombreServidor = String(ticket.cliente?.nombre || "");
+      const conservaBorrador = Boolean(
+        !descartarBorradorClienteLlevar
+        && ticketId === estado.clienteLlevarTicketId
+        && estado.clienteLlevarBorrador !== estado.clienteLlevarGuardado
+      );
+      estado.clienteLlevarGuardado = nombreServidor;
+      estado.clienteLlevarTicketId = ticketId;
+      if (!conservaBorrador) {
+        estado.clienteLlevarBorrador = nombreServidor;
+        if (descartarBorradorClienteLlevar) estado.revisionClienteLlevar += 1;
+      }
+      ticket.cliente = {
+        ...(ticket.cliente || {}),
+        nombre: estado.clienteLlevarBorrador,
+      };
       estado.errorClienteLlevar = null;
     } else {
       estado.clienteLlevarGuardado = "";
+      estado.clienteLlevarBorrador = "";
       estado.clienteLlevarTicketId = "";
+      estado.revisionClienteLlevar += 1;
       estado.errorClienteLlevar = null;
     }
     const esEntrega = esDomicilio || esRecoger;
@@ -1138,7 +1330,7 @@
       mostrarTicket();
       if (activo) $("#nombre-persona").focus();
     } catch (error) {
-      $("#switch-modo-nombres").checked = !activo;
+      if (!error.requiereConfirmacion) $("#switch-modo-nombres").checked = !activo;
       toast(error.message, true);
     } finally { bloquear(false); }
   }
@@ -1514,14 +1706,17 @@
       const prefijo = ticket.canal === "recoger" ? "R" : "";
       return `
         <div><span>${formatoFechaComanda(ticket.creado_en).split(" ")[0]}</span><strong>Ticket: ${ticket.folio}, ${prefijo}${ticket.posicion_numero}</strong></div>
-        <div><span>${escapar(textoEntregaComanda(ticket))}</span><strong>${dinero(ticket.total)}</strong></div>
+        <div><span>${escapar(textoEntregaComanda(ticket))}</span><strong class="comanda-total">${dinero(ticket.total)}</strong></div>
         ${ticket.cliente?.nombre ? `<b class="comanda-cliente-directo">${escapar(ticket.cliente.nombre)}${ticket.canal === "recoger" && ticket.cliente.telefono ? ` · ${escapar(ticket.cliente.telefono)}` : ""}</b>` : ""}`;
     }
     if (["comedor", "llevar"].includes(ticket.canal)) {
       const clienteLlevarEditable = comandaVisibleEditable() && !bloqueoDeOtro() && !estado.operando;
+      const nombreClienteLlevar = String(ticket.id) === estado.clienteLlevarTicketId
+        ? estado.clienteLlevarBorrador
+        : String(ticket.cliente?.nombre || "");
       const clienteLlevarSinGuardar = (
         String(ticket.id) === estado.clienteLlevarTicketId
-        && String(ticket.cliente?.nombre || "") !== estado.clienteLlevarGuardado
+        && nombreClienteLlevar !== estado.clienteLlevarGuardado
       );
       const estadoClienteLlevar = !clienteLlevarEditable
         ? { texto: "Sólo lectura", clase: "lectura" }
@@ -1531,19 +1726,22 @@
             ? { texto: "Pendiente de guardar", clase: "pendiente" }
             : { texto: "Guardado", clase: "guardado" };
       const clienteLlevar = ticket.canal === "llevar"
-        ? `<label class="comanda-cliente-llevar"><span>Cliente</span><input data-cliente-llevar maxlength="180" autocomplete="name" aria-label="Nombre del cliente para llevar" value="${escapar(ticket.cliente?.nombre || "")}" placeholder="Nombre para la comanda" ${clienteLlevarEditable ? "" : "disabled"}><small data-estado-cliente-llevar class="${estadoClienteLlevar.clase}" role="status" aria-live="polite">${estadoClienteLlevar.texto}</small></label>`
+        ? `<label class="comanda-cliente-llevar"><span>Cliente</span><input data-cliente-llevar maxlength="180" autocomplete="name" aria-label="Nombre del cliente para llevar" value="${escapar(nombreClienteLlevar)}" placeholder="Nombre para la comanda" ${clienteLlevarEditable ? "" : "disabled"}><small data-estado-cliente-llevar class="${estadoClienteLlevar.clase}" role="status" aria-live="polite">${estadoClienteLlevar.texto}</small></label>`
         : "";
       return `
         <div><span>${formatoFechaComanda(ticket.creado_en)}</span><strong>${escapar(ticket.mesa)}</strong></div>
-        <div><strong>Ticket: ${ticket.folio}</strong><strong>${dinero(ticket.total)}</strong></div>
+        <div><strong>Ticket: ${ticket.folio}</strong><strong class="comanda-total">${dinero(ticket.total)}</strong></div>
         ${clienteLlevar}`;
     }
-    return `<div><span>${formatoFechaComanda(ticket.creado_en)}</span><strong>Ticket: ${ticket.folio}</strong></div><b>${dinero(ticket.total)}</b>`;
+    return `<div><span>${formatoFechaComanda(ticket.creado_en)}</span><strong>Ticket: ${ticket.folio}</strong></div><b class="comanda-total">${dinero(ticket.total)}</b>`;
   }
 
   function renderComandaPorNombres(ticket, contenedor) {
-    const esComplemento = partida => esBebida(partida) || productosAlFinal.has(partida.codigo);
-    const principales = ticket.partidas.filter(partida => !partida.es_promocion && !esComplemento(partida));
+    const {
+      principales,
+      barbacoa,
+      complementosGlobales,
+    } = clasificarPartidasPorNombres(ticket.partidas, esBebida);
     const columnas = [];
     const indiceColumnas = new Map();
     for (const partida of principales) {
@@ -1566,7 +1764,9 @@
     }
     while (columnas.length < 4) columnas.push(null);
     const nombres = ticket.nombres_comensales || {};
-    const personasUsadas = new Set(ticket.partidas.filter(partida => !partida.es_promocion).map(partida => partida.comensal));
+    const personasUsadas = new Set(
+      [...principales, ...barbacoa].map(partida => partida.comensal),
+    );
     Object.keys(nombres).forEach(numero => personasUsadas.add(Number(numero)));
     if (!personasUsadas.size) personasUsadas.add(estado.persona);
     const personas = [...personasUsadas].sort((a, b) => a - b);
@@ -1585,13 +1785,49 @@
       }).join("");
       return `<button class="comanda-nombre-persona" data-seleccionar-persona="${persona}" type="button"><b>${persona}. ${escapar(nombres[String(persona)] || "SIN NOMBRE")}</b><small>${escapar(preparacion.get(persona) || "")}</small></button>${celdas}`;
     }).join("");
+    const barbacoaPorPersona = new Map();
+    for (const partida of barbacoa) {
+      const persona = Number(partida.comensal);
+      if (!barbacoaPorPersona.has(persona)) barbacoaPorPersona.set(persona, new Map());
+      const conceptos = barbacoaPorPersona.get(persona);
+      const clave = clavePartidaEdicion(partida);
+      if (!conceptos.has(clave)) {
+        conceptos.set(clave, {
+          clave,
+          productoId: partida.producto_id,
+          termino: partida.termino || "",
+          nombre: nombrePartida(partida),
+          cantidad: 0,
+        });
+      }
+      conceptos.get(clave).cantidad += Number(partida.cantidad);
+    }
+    const filasBarbacoa = [...barbacoaPorPersona.entries()]
+      .sort(([personaA], [personaB]) => personaA - personaB)
+      .map(([persona, conceptos]) => {
+        const botones = [...conceptos.values()].map(item => {
+          const seleccionada = estado.edicion?.clave === item.clave && estado.edicion?.persona === persona;
+          const valor = seleccionada ? estado.edicion.cantidadPantalla : item.cantidad;
+          return `<button class="comanda-barbacoa-concepto ${seleccionada ? "seleccionado" : ""}" data-celda-producto="${item.productoId}" data-celda-persona="${persona}" data-celda-termino="${escapar(item.termino)}" type="button"><b>${cantidad(valor)}</b><span>${escapar(item.nombre)}</span></button>`;
+        }).join("");
+        return `
+          <div class="comanda-barbacoa-fila">
+            <button class="comanda-barbacoa-persona" data-seleccionar-persona="${persona}" type="button">${persona}. ${escapar(nombres[String(persona)] || `PERSONA ${persona}`)}</button>
+            <div class="comanda-barbacoa-conceptos">${botones}</div>
+          </div>`;
+      })
+      .join("");
     const complementos = new Map();
-    for (const partida of ticket.partidas.filter(partida => !partida.es_promocion && esComplemento(partida))) {
-      const clave = `${partida.comensal}:${partida.producto_id}`;
-      if (!complementos.has(clave)) complementos.set(clave, { persona: partida.comensal, nombre: partida.nombre_corto, cantidad: 0 });
+    for (const partida of complementosGlobales) {
+      const clave = String(partida.producto_id);
+      if (!complementos.has(clave)) {
+        complementos.set(clave, { nombre: nombrePartida(partida), cantidad: 0 });
+      }
       complementos.get(clave).cantidad += Number(partida.cantidad);
     }
-    const extras = [...complementos.values()].map(item => `${escapar(nombres[String(item.persona)] || `Persona ${item.persona}`)}: ${item.cantidad > 1 ? `${cantidad(item.cantidad)} ` : ""}${escapar(item.nombre)}`).join(" · ");
+    const extras = [...complementos.values()]
+      .map(item => `${item.cantidad > 1 ? `${cantidad(item.cantidad)} ` : ""}${escapar(item.nombre)}`)
+      .join(" · ");
     const generalTexto = (ticket.comentarios_generales || []).map(item => item.nombre).join(" · ");
     const salsasTexto = textoSalsas(ticket.salsas_verduras);
     $("#orden-resumen").textContent = `${ticket.partidas.length} ${ticket.partidas.length === 1 ? "partida" : "partidas"}`;
@@ -1607,6 +1843,11 @@
           ${columnas.slice(0, 4).map(columna => `<span class="encabezado-producto">${columna ? escapar(columna.nombre) : "PRODUCTO"}</span>`).join("")}
           ${filas}
         </div>
+        ${filasBarbacoa ? `
+          <section class="comanda-barbacoa-nombres" aria-label="Barbacoa por persona">
+            <strong class="comanda-barbacoa-titulo">Barbacoa</strong>
+            ${filasBarbacoa}
+          </section>` : ""}
         <button class="comanda-extras-nombres" data-modo-menu="bebidas" type="button"><strong>Consomés y bebidas</strong><span>${extras || "Sin complementos"}</span></button>
         <button class="comanda-salsas" data-modo-menu="salsas" type="button"><strong>Salsas y verduras</strong><span>${escapar(salsasTexto || "Toca aquí para elegir salsas y verduras")}</span></button>
         ${ticket.comentario_general ? `<p class="comanda-comentario-general">${escapar(ticket.comentario_general)}</p>` : ""}
@@ -1639,7 +1880,7 @@
         </header>
         <div class="encabezado-lista-sucursal"><span>Concepto</span><span>Cantidad</span><span>Precio</span><span>Importe</span></div>
         <div class="partidas-sucursal">${filas || '<p class="vacio">Selecciona productos para comenzar el pedido.</p>'}</div>
-        <footer><span>Total del pedido</span><strong>${dinero(ticket.total)}</strong></footer>
+        <footer><span>Total del pedido</span><strong class="comanda-total">${dinero(ticket.total)}</strong></footer>
       </section>`;
   }
 
@@ -1831,6 +2072,140 @@
     }
   }
 
+  function renderDirectorio() {
+    const lista = $("#directorio-lista");
+    const estadoVacio = $("#directorio-estado");
+    const cargarMas = $("#directorio-cargar-mas");
+    const conteo = $("#directorio-conteo");
+    if (!lista || !estadoVacio || !cargarMas || !conteo) return;
+    const visibles = estado.directorioResultados.length;
+    const total = Number.isFinite(Number(estado.directorioTotal))
+      ? Number(estado.directorioTotal)
+      : null;
+    conteo.textContent = total === null
+      ? visibles + (visibles === 1 ? " cliente visible" : " clientes visibles")
+      : visibles + " de " + total + (total === 1 ? " cliente" : " clientes");
+    lista.setAttribute("aria-busy", String(estado.directorioCargando));
+    if (!visibles) {
+      lista.innerHTML = "";
+      estadoVacio.textContent = estado.directorioError || (estado.directorioCargando
+        ? "Buscando clientes…"
+        : (estado.directorioConsulta
+          ? "No hay coincidencias. Prueba con otro dato del registro."
+          : "El directorio todavía no tiene clientes."));
+      estadoVacio.hidden = false;
+    } else {
+      estadoVacio.textContent = estado.directorioError;
+      estadoVacio.hidden = !estado.directorioError;
+      lista.innerHTML = estado.directorioResultados.map((cliente, indice) => {
+        const telefono = cliente.telefono?.numero
+          || cliente.telefonos?.[0]?.numero
+          || "Sin teléfono";
+        const domicilio = cliente.domicilio?.texto
+          || cliente.domicilios?.[0]?.texto
+          || "Sin domicilio";
+        const id = cliente.cliente_id || cliente.id || "";
+        return '<article class="directorio-cliente" data-directorio-indice="' + indice + '">' +
+          '<div class="directorio-cliente-identidad"><strong>' + escapar(cliente.nombre || "Cliente") + '</strong>' +
+          '<span>' + escapar(cliente.clave_corta || "Sin clave") + '</span></div>' +
+          '<p><b>' + escapar(telefono) + '</b><span>' + escapar(domicilio) + '</span></p>' +
+          '<button class="boton secundario" data-editar-cliente-directorio="' + escapar(id) + '" type="button" aria-label="Editar a ' + escapar(cliente.nombre || "cliente") + '">Editar</button>' +
+        '</article>';
+      }).join("");
+    }
+    cargarMas.hidden = !estado.directorioHayMas;
+    cargarMas.disabled = estado.directorioCargando;
+    cargarMas.toggleAttribute("aria-busy", estado.directorioCargando);
+  }
+
+  async function cargarDirectorio({ reiniciar = false } = {}) {
+    if (!$("#directorio-lista") || (estado.directorioCargando && !reiniciar)) return;
+    if (reiniciar) {
+      estado.directorioConsulta = $("#directorio-buscar").value.trim();
+      estado.directorioPagina = 0;
+      estado.directorioResultados = [];
+      estado.directorioHayMas = false;
+      estado.directorioTotal = null;
+      estado.directorioError = "";
+    }
+    const pagina = estado.directorioPagina + 1;
+    const token = ++estado.tokenDirectorio;
+    estado.directorioCargando = true;
+    renderDirectorio();
+    try {
+      const datos = await api("/api/clientes/buscar/", {
+        method: "POST",
+        body: JSON.stringify({
+          q: estado.directorioConsulta,
+          limite: 20,
+          pagina,
+        }),
+      });
+      if (token !== estado.tokenDirectorio || !estado.directorioActivo) return;
+      estado.directorioError = "";
+      const nuevos = Array.isArray(datos.resultados) ? datos.resultados : [];
+      const combinados = reiniciar ? nuevos : estado.directorioResultados.concat(nuevos);
+      const unicos = new Map();
+      combinados.forEach(cliente => unicos.set(String(cliente.cliente_id || cliente.id), cliente));
+      estado.directorioResultados = [...unicos.values()];
+      estado.directorioPagina = Number(datos.pagina || pagina);
+      estado.directorioTotal = datos.total === null || datos.total === undefined
+        ? null
+        : Number(datos.total);
+      estado.directorioHayMas = typeof datos.hay_mas === "boolean"
+        ? datos.hay_mas
+        : nuevos.length >= 20;
+    } catch (error) {
+      if (token === estado.tokenDirectorio) {
+        estado.directorioError = error.message;
+        $("#directorio-estado").textContent = error.message;
+        $("#directorio-estado").hidden = false;
+        toast(error.message, true);
+      }
+    } finally {
+      if (token === estado.tokenDirectorio) {
+        estado.directorioCargando = false;
+        renderDirectorio();
+      }
+    }
+  }
+
+  function programarBusquedaDirectorio() {
+    clearTimeout(estado.temporizadorDirectorio);
+    estado.temporizadorDirectorio = setTimeout(() => cargarDirectorio({ reiniciar: true }), 250);
+  }
+
+  function abrirDirectorio() {
+    if (estado.ticket || modoTableta) return;
+    estado.directorioActivo = true;
+    document.body.classList.add("en-directorio");
+    $("#vista-posiciones").classList.add("oculto");
+    $("#vista-directorio").classList.remove("oculto");
+    cargarDirectorio({ reiniciar: true });
+    requestAnimationFrame(() => $("#directorio-buscar")?.focus());
+  }
+
+  function cerrarDirectorio() {
+    if (!estado.directorioActivo) return;
+    estado.directorioActivo = false;
+    estado.tokenDirectorio += 1;
+    clearTimeout(estado.temporizadorDirectorio);
+    document.body.classList.remove("en-directorio");
+    $("#vista-directorio").classList.add("oculto");
+    $("#vista-posiciones").classList.remove("oculto");
+    $("#abrir-directorio")?.focus();
+  }
+
+  async function editarClienteDirectorio(clienteId) {
+    if (!clienteId) return;
+    try {
+      const datos = await api("/api/clientes/" + encodeURIComponent(clienteId) + "/");
+      abrirFormularioCliente(datos.cliente, "directorio");
+    } catch (error) {
+      toast(error.message, true);
+    }
+  }
+
   async function asignarCliente(clienteId, telefonoId, domicilioId) {
     const datos = await api(`/api/tickets/${estado.ticket.id}/cliente/`, {
       method: "POST",
@@ -1872,8 +2247,9 @@
     </div>`;
   }
 
-  function abrirFormularioCliente(cliente = null) {
+  function abrirFormularioCliente(cliente = null, contexto = "pedido") {
     estado.clienteEditando = cliente;
+    estado.clienteFormularioContexto = contexto;
     $("#titulo-form-cliente").textContent = cliente ? `Editar ${cliente.nombre}` : "Nuevo cliente";
     $("#cliente-form-id").value = cliente?.id || "";
     $("#cliente-form-nombre").value = cliente?.nombre || "";
@@ -1934,9 +2310,18 @@
         body: JSON.stringify(datosFormularioCliente(confirmarDuplicado)),
       });
       const cliente = datos.cliente;
+      $("#dialogo-cliente").close();
+      if (estado.clienteFormularioContexto === "directorio") {
+        await cargarDirectorio({ reiniciar: true });
+        toast(`Cliente ${cliente.nombre} guardado en el directorio.`);
+        return;
+      }
+      if (!estado.ticket) {
+        toast(`Cliente ${cliente.nombre} guardado.`);
+        return;
+      }
       const telefonoActual = cliente.telefonos.find(item => item.id === estado.ticket.cliente.telefono_id) || cliente.telefonos[0];
       const domicilioActual = cliente.domicilios.find(item => item.id === estado.ticket.cliente.domicilio_id) || cliente.domicilios[0];
-      $("#dialogo-cliente").close();
       await asignarCliente(
         cliente.id,
         telefonoActual?.id || "",
@@ -1977,6 +2362,7 @@
     const muestraTicket = cobrable && !enEdicion && ["comedor", "llevar", "recoger", "domicilio"].includes(estado.ticket.canal);
     const muestraAgregar = !enEdicion && Boolean(estado.ticket.puede_agregar_comanda);
     const muestraCobro = cobrable && !esDomicilio;
+    const muestraReactivarSucursal = esSucursal && cobrable && !enEdicion;
     const editable = abierto && !bloqueoAjeno && !estado.operando;
     const operable = !bloqueoAjeno && !estado.operando;
     const cobroBloqueado = muestraCobro && enEdicion;
@@ -1992,18 +2378,21 @@
     $("#ticket-cuenta").classList.toggle("oculto", !muestraTicket);
     $("#agregar-comanda").classList.toggle("oculto", !muestraAgregar);
     $("#cobrar").classList.toggle("oculto", !muestraCobro);
+    $("#reactivar-sucursal").classList.toggle("oculto", !muestraReactivarSucursal);
     acciones.classList.toggle("con-ticket", muestraTicket);
     acciones.classList.toggle("con-agregar", muestraAgregar);
     acciones.classList.toggle("con-cobro-bloqueado", cobroBloqueado && abierto);
+    acciones.classList.toggle("con-reactivar", muestraReactivarSucursal);
     acciones.classList.toggle("solo-agregar", muestraAgregar && !muestraTicket && !muestraCobro);
     acciones.classList.toggle(
       "oculto",
-      editandoProgramado || (!abierto && !muestraCancelar && !muestraTicket && !muestraAgregar && !muestraCobro),
+      editandoProgramado || (!abierto && !muestraCancelar && !muestraTicket && !muestraAgregar && !muestraReactivarSucursal && !muestraCobro),
     );
     $("#procesar").disabled = !editable;
     $("#cancelar-orden").disabled = !operable;
     $("#ticket-cuenta").disabled = !operable;
     $("#agregar-comanda").disabled = !operable || !estado.ticket.puede_agregar_comanda;
+    $("#reactivar-sucursal").disabled = !operable;
     $("#cobrar").disabled = !operable || cobroBloqueado;
     if (cobroBloqueado) {
       $("#cobrar").setAttribute("aria-label", "Cobrar; primero procesa la comanda actual");
@@ -2521,7 +2910,10 @@
       const ticket = estado.ticket;
       if (!ticket || ticket.canal !== "llevar") return true;
       const ticketId = String(ticket.id);
-      const nombre = String(ticket.cliente?.nombre || "");
+      const nombre = ticketId === estado.clienteLlevarTicketId
+        ? estado.clienteLlevarBorrador
+        : String(ticket.cliente?.nombre || "");
+      const revisionEnviada = estado.revisionClienteLlevar;
       if (ticketId === estado.clienteLlevarTicketId && nombre === estado.clienteLlevarGuardado) {
         estado.errorClienteLlevar = null;
         actualizarEstadoNombreClienteLlevar("Guardado", "guardado");
@@ -2534,27 +2926,56 @@
           body: JSON.stringify({ cliente_nombre: nombre, cliente_telefono: "" }),
         });
         if (String(estado.ticket?.id) !== ticketId) return true;
-        const nombreConfirmado = datos.ticket?.cliente?.nombre ?? nombre;
+        const nombreConfirmado = String(datos.ticket?.cliente?.nombre ?? nombre);
+        const nombreActual = ticketId === estado.clienteLlevarTicketId
+          ? estado.clienteLlevarBorrador
+          : String(estado.ticket.cliente?.nombre || "");
+        const resolucion = resolverGuardadoNombreClienteLlevar({
+          nombreEnviado: nombre,
+          nombreConfirmado,
+          nombreActual,
+          revisionEnviada,
+          revisionActual: estado.revisionClienteLlevar,
+        });
         estado.ticket.version_entidad = datos.ticket?.version_entidad ?? estado.ticket.version_entidad;
         estado.clienteLlevarGuardado = nombreConfirmado;
+        estado.clienteLlevarBorrador = resolucion.nombreVisible;
         estado.clienteLlevarTicketId = ticketId;
         estado.errorClienteLlevar = null;
-        if (String(estado.ticket.cliente?.nombre || "") === nombre) {
-          estado.ticket.cliente.nombre = nombreConfirmado;
-          $("#cliente-directo-nombre").value = nombreConfirmado;
-          const campo = $("[data-cliente-llevar]");
-          if (campo) campo.value = nombreConfirmado;
-          actualizarEstadoNombreClienteLlevar("Guardado", "guardado");
-        } else {
+        estado.ticket.cliente = {
+          ...(estado.ticket.cliente || {}),
+          nombre: resolucion.nombreVisible,
+        };
+        $("#cliente-directo-nombre").value = resolucion.nombreVisible;
+        const campo = $("[data-cliente-llevar]");
+        if (campo) campo.value = resolucion.nombreVisible;
+        if (resolucion.edicionPosterior) {
           programarGuardadoNombreClienteLlevar();
+          return false;
         }
+        actualizarEstadoNombreClienteLlevar("Guardado", "guardado");
         return true;
       } catch (error) {
+        if (error.requiereConfirmacion) {
+          estado.errorClienteLlevar = error;
+          actualizarEstadoNombreClienteLlevar(
+            "Pedido actualizado · revisa el nombre antes de volver a escribirlo",
+            "error",
+          );
+          toast(error.message, true);
+          return false;
+        }
         if (String(estado.ticket?.id) === ticketId) {
-          estado.ticket.cliente = { ...(estado.ticket.cliente || {}), nombre };
-          $("#cliente-directo-nombre").value = nombre;
+          const nombrePendiente = ticketId === estado.clienteLlevarTicketId
+            ? estado.clienteLlevarBorrador
+            : nombre;
+          estado.ticket.cliente = {
+            ...(estado.ticket.cliente || {}),
+            nombre: nombrePendiente,
+          };
+          $("#cliente-directo-nombre").value = nombrePendiente;
           const campo = $("[data-cliente-llevar]");
-          if (campo) campo.value = nombre;
+          if (campo) campo.value = nombrePendiente;
           estado.errorClienteLlevar = error;
           actualizarEstadoNombreClienteLlevar("Sin guardar · Presiona Enter para reintentar", "error");
         }
@@ -2635,6 +3056,29 @@
       await volver(true);
     } catch (error) { toast(error.message, true); }
     finally { bloquear(false); }
+  }
+
+  async function reactivarSucursal() {
+    if (!estado.ticket || estado.ticket.canal !== "sucursales") return;
+    const claveAdministrador = await pedirClavePos(
+      "Reactivar pedido de sucursal",
+      "Autoriza que el pedido vuelva a edición con una clave elevada o de administrador.",
+    );
+    if (!claveAdministrador) return;
+    bloquear(true, $("#reactivar-sucursal"));
+    try {
+      const datos = await api("/api/tickets/" + estado.ticket.id + "/reactivar-sucursal/", {
+        method: "POST",
+        body: JSON.stringify({ clave_administrador: claveAdministrador }),
+      });
+      estado.ticket = datos.ticket;
+      mostrarTicket();
+      toast("Pedido de sucursal reactivado. Ya puedes editarlo.");
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      bloquear(false);
+    }
   }
 
   async function imprimirTicketCuenta() {
@@ -2767,7 +3211,9 @@
     await liberarBloqueoActual();
     estado.idempotenciaAgregar = "";
     estado.clienteLlevarGuardado = "";
+    estado.clienteLlevarBorrador = "";
     estado.clienteLlevarTicketId = "";
+    estado.revisionClienteLlevar += 1;
     estado.errorClienteLlevar = null;
     estado.ticket = null;
     document.body.classList.remove("en-ticket");
@@ -2777,6 +3223,7 @@
   }
 
   async function salirModoMesero() {
+    if (estado.directorioActivo) cerrarDirectorio();
     if (estado.edicionProgramada) {
       await volver();
       return;
@@ -2786,7 +3233,9 @@
     await liberarBloqueoActual();
     estado.idempotenciaAgregar = "";
     estado.clienteLlevarGuardado = "";
+    estado.clienteLlevarBorrador = "";
     estado.clienteLlevarTicketId = "";
+    estado.revisionClienteLlevar += 1;
     estado.errorClienteLlevar = null;
     estado.ticket = null;
     document.body.classList.remove("en-ticket");
@@ -2816,24 +3265,11 @@
   function actualizarEstadoPantallaCompleta() {
     const activa = estaEnPantallaCompleta();
     const boton = $("#pantalla-completa");
-    const texto = $("#pantalla-completa-texto");
-    const aviso = $("#estado-pantalla-completa");
-    if (boton) {
-      const etiqueta = activa ? "Salir de pantalla completa" : "Activar pantalla completa";
-      boton.setAttribute("aria-label", etiqueta);
-      boton.title = etiqueta;
-    }
-    if (texto) texto.textContent = activa ? "Pantalla completa activa" : "Pantalla completa";
-    if (!aviso) return;
-    aviso.hidden = activa;
-    if (activa) {
-      aviso.textContent = "";
-      return;
-    }
-    const disponible = Boolean(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
-    aviso.textContent = disponible
-      ? "El navegador requiere una interacción para ocultar sus controles. Toca «Pantalla completa» si no se activa con tu primer toque."
-      : "Este navegador no permite ocultar sus controles. Instala o abre la PWA para usar la vista sin barras.";
+    if (!boton) return;
+    const etiqueta = activa ? "Salir de pantalla completa" : "Activar pantalla completa";
+    boton.setAttribute("aria-label", etiqueta);
+    boton.title = etiqueta;
+    boton.setAttribute("aria-pressed", String(activa));
   }
 
   async function solicitarPantallaCompleta({ silencioso = false } = {}) {
@@ -2905,7 +3341,7 @@
 
   $$(".canal").forEach(boton => boton.addEventListener("click", () => cambiarCanal(boton.dataset.canal)));
   $("#entrar-mesero")?.addEventListener("click", () => entrarComoMesero());
-  $("#entrar-administrador")?.addEventListener("click", abrirAdministrador);
+  $("#entrar-administrador")?.addEventListener("click", () => abrirAdministrador());
   $("#form-clave-pos")?.addEventListener("submit", evento => {
     evento.preventDefault();
     const clave = $("#clave-pos").value.trim();
@@ -2933,6 +3369,16 @@
   $("#toast-cerrar")?.addEventListener("click", cerrarToast);
   $$('[data-salir-mesero]').forEach(boton => boton.addEventListener("click", salirModoMesero));
   $("#pantalla-completa")?.addEventListener("click", alternarPantallaCompleta);
+  $("#abrir-directorio")?.addEventListener("click", abrirDirectorio);
+  $("#cerrar-directorio")?.addEventListener("click", cerrarDirectorio);
+  $("#directorio-nuevo-cliente")?.addEventListener("click", () => abrirFormularioCliente(null, "directorio"));
+  $("#directorio-buscar")?.addEventListener("input", programarBusquedaDirectorio);
+  $("#directorio-cargar-mas")?.addEventListener("click", () => cargarDirectorio());
+  $("#directorio-lista")?.addEventListener("click", evento => {
+    const editar = evento.target.closest("[data-editar-cliente-directorio]");
+    if (editar) editarClienteDirectorio(editar.dataset.editarClienteDirectorio);
+  });
+  $("#abrir-movimientos")?.addEventListener("click", () => abrirAdministrador("movimientos"));
   $("#salir-tableta")?.addEventListener("click", salirModoTableta);
   $("#rejilla-posiciones").addEventListener("click", evento => {
     const teclaPin = evento.target.closest("[data-tecla-pin-tableta]");
@@ -3120,7 +3566,7 @@
     }
     if (evento.target.closest("[data-editar-cliente]")) await editarClienteSeleccionado();
   });
-  $("#nuevo-cliente").addEventListener("click", () => abrirFormularioCliente());
+  $("#nuevo-cliente").addEventListener("click", () => abrirFormularioCliente(null, "pedido"));
   $("#agregar-telefono").addEventListener("click", () => $("#telefonos-form").insertAdjacentHTML("beforeend", filaTelefono()));
   $("#agregar-domicilio").addEventListener("click", () => $("#domicilios-form").insertAdjacentHTML("beforeend", filaDomicilio()));
   $("#form-cliente").addEventListener("click", evento => {
@@ -3172,6 +3618,9 @@
   $("#comanda-papel-preview").addEventListener("input", evento => {
     const campo = evento.target.closest("[data-cliente-llevar]");
     if (!campo || estado.ticket?.canal !== "llevar" || !comandaVisibleEditable()) return;
+    estado.revisionClienteLlevar += 1;
+    estado.clienteLlevarBorrador = campo.value;
+    estado.clienteLlevarTicketId = String(estado.ticket.id);
     estado.ticket.cliente.nombre = campo.value;
     $("#cliente-directo-nombre").value = campo.value;
     estado.errorClienteLlevar = null;
@@ -3188,6 +3637,11 @@
   });
   $("#cliente-directo-nombre").addEventListener("input", evento => {
     if (!estado.ticket || !["recoger", "llevar"].includes(estado.ticket.canal)) return;
+    if (estado.ticket.canal === "llevar") {
+      estado.revisionClienteLlevar += 1;
+      estado.clienteLlevarBorrador = evento.currentTarget.value;
+      estado.clienteLlevarTicketId = String(estado.ticket.id);
+    }
     estado.ticket.cliente.nombre = evento.currentTarget.value;
     renderComanda();
   });
@@ -3222,8 +3676,16 @@
   });
   $("#ticket-cuenta").addEventListener("click", imprimirTicketCuenta);
   $("#agregar-comanda").addEventListener("click", crearComandaAdicional);
+  $("#reactivar-sucursal").addEventListener("click", reactivarSucursal);
   $("#comanda-anterior").addEventListener("click", () => cambiarComandaVisible(-1));
   $("#comanda-siguiente").addEventListener("click", () => cambiarComandaVisible(1));
+
+  async function iniciarAplicacion() {
+    const sesionReanudada = await reanudarSesionOperador();
+    if (!sesionReanudada || idProgramadoSolicitado()) {
+      await abrirProgramadoDesdeEnlace();
+    }
+  }
 
   window.addEventListener("online", () => {
     if (bloqueoPropio()) renovarBloqueoTicket();
@@ -3244,5 +3706,5 @@
   renderMenu();
   iniciarActualizacionEstadoLan();
   iniciarPantallaCompletaPredeterminada();
-  abrirProgramadoDesdeEnlace();
+  iniciarAplicacion();
 })();

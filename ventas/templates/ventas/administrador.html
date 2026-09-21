@@ -39,7 +39,6 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
     </div>
     <button class="boton-topbar" id="pantalla-completa-admin" type="button" aria-label="Entrar a pantalla completa" aria-pressed="false">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M8 21H3v-5"/></svg>
-      <span>Pantalla completa</span>
     </button>
     <a class="boton-topbar" href="{% url 'ventas:inicio' %}" aria-label="Volver al POS">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></svg>
@@ -286,6 +285,8 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
           <section class="hoja">
             <header class="hoja-titulo"><div><h2>Acciones de cierre</h2></div></header>
             <div class="botones-apilados">
+              <button class="boton secundario" id="vista-previa-corte" data-accion="vista-previa-corte" type="button">Imprimir vista previa del corte</button>
+              <p class="nota-operativa">La vista previa no cierra el turno. Puedes registrar un movimiento y luego realizar el corte definitivo.</p>
               <button class="boton primario" data-accion="reporte-parcial" type="button">Imprimir reporte parcial</button>
               <button class="boton oscuro" data-accion="corte-caja" type="button">Realizar corte de caja</button>
             </div>

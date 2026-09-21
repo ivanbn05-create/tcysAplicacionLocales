@@ -308,7 +308,7 @@ class FlujoPOSTests(TestCase):
         chile = ProductoSucursal.objects.get(sucursal=self.sucursal, origen_id=7)
         respuesta = self.client.post(
             f"/api/tickets/{ticket.id}/partidas/",
-            data=json.dumps({"producto_sucursal_id": str(chile.id), "cantidad": "30.000"}),
+            data=json.dumps({"producto_sucursal_id": str(chile.id), "cantidad": "1.000"}),
             content_type="application/json",
         )
         self.assertEqual(respuesta.status_code, 200)

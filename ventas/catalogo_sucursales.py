@@ -24,13 +24,13 @@ SUCURSALES_PEDIDO = (
 
 # origen_id, nombre, nombre ticket base, unidad, cantidad por precio
 PRODUCTOS_SUCURSALES = (
-    (1, "LITRO DE BARBACOA", "BARBACOA", "KG", "1.000"),
+    (1, "LITRO DE BARBACOA", "BARBACOA", "LT", "1.000"),
     (2, "TORTILLA ESPECIAL", "TORTILLA", "KG", "1.000"),
     (3, "BOLILLO", "BOLILLO", "PZA", "1.000"),
     (4, "QUESO", "QUESO", "KG", "1.000"),
     (5, "CEBOLLA BLANCA", "C. PICADA", "KG", "1.000"),
     (6, "CEBOLLA GUISADA", "C. GUISADA", "KG", "1.000"),
-    (7, "CHILE GÜERO", "CHILE", "PZA", "30.000"),
+    (7, "CHILE GÜERO", "CHILE", "KG", "1.000"),
     (8, "SALSA DE TOMATE", "S. ROJA", "LT", "1.000"),
     (9, "SALSA DE AGUACATE", "S. AGUACATE", "LT", "1.000"),
     (10, "SALSA DE CHIPOTLE", "S. CHIPOTLE", "LT", "1.000"),

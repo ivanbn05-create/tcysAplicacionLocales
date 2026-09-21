@@ -123,12 +123,25 @@ class ContratosDespliegueTests(unittest.TestCase):
     def test_plantilla_no_apunta_a_impresoras_reales(self):
         lineas = (RAIZ / ".env.example").read_text(encoding="utf-8").splitlines()
         self.assertIn("PRINT_BACKEND=archivo", lineas)
+        self.assertIn("PRINT_PROCESSING_TIMEOUT_SECONDS=300", lineas)
         for nombre in ("PRINTER_CAJA_HOST", "PRINTER_COCINA_HOST", "PRINTER_BARRA_HOST"):
             self.assertIn(f"{nombre}=", lineas)
         self.assertIn("VPS_CONSOLIDACION_URL=", lineas)
         self.assertIn("VPS_CONSOLIDACION_TOKEN=", lineas)
         self.assertIn("VPS_CONSOLIDACION_TIMEOUT=10", lineas)
 
+    def test_perfiles_de_prueba_anulan_vps_heredado(self):
+        for ruta in (
+            RAIZ / "pos" / "settings_development.py",
+            RAIZ / "pos" / "settings_test.py",
+        ):
+            contenido = ruta.read_text(encoding="utf-8")
+            self.assertIn('os.environ["VPS_CONSOLIDACION_URL"] = ""', contenido)
+            self.assertIn('os.environ["VPS_CONSOLIDACION_TOKEN"] = ""', contenido)
+
+        iniciador = (RAIZ / "iniciar-prueba-lan.ps1").read_text(encoding="utf-8")
+        self.assertIn('$env:VPS_CONSOLIDACION_URL = ""', iniciador)
+        self.assertIn('$env:VPS_CONSOLIDACION_TOKEN = ""', iniciador)
     def _importar_settings(
         self,
         clave,
@@ -201,6 +214,31 @@ class ContratosDespliegueTests(unittest.TestCase):
         )
         self.assertEqual(heredado.returncode, 0, heredado.stderr)
         self.assertEqual(heredado.stdout.strip(), "django.db.backends.sqlite3")
+
+    def test_settings_valida_timeout_de_recuperacion_de_impresion(self):
+        predeterminado = self._importar_settings(
+            "NORTE",
+            expresion="s.PRINT_PROCESSING_TIMEOUT_SECONDS",
+        )
+        self.assertEqual(predeterminado.returncode, 0, predeterminado.stderr)
+        self.assertEqual(predeterminado.stdout.strip(), "300")
+
+        for valor in ("29", "3601", "no-numero"):
+            with self.subTest(valor=valor):
+                invalido = self._importar_settings(
+                    "NORTE",
+                    extra_env={"PRINT_PROCESSING_TIMEOUT_SECONDS": valor},
+                )
+                self.assertNotEqual(invalido.returncode, 0)
+                self.assertIn("entero entre 30 y 3600", invalido.stderr)
+
+        valido = self._importar_settings(
+            "NORTE",
+            expresion="s.PRINT_PROCESSING_TIMEOUT_SECONDS",
+            extra_env={"PRINT_PROCESSING_TIMEOUT_SECONDS": "60"},
+        )
+        self.assertEqual(valido.returncode, 0, valido.stderr)
+        self.assertEqual(valido.stdout.strip(), "60")
 
     def test_settings_valida_consolidacion_vps_opcional(self):
         desactivada = self._importar_settings(

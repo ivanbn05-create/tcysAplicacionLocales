@@ -16,6 +16,7 @@ urlpatterns = [
     path("service-worker.js", views.service_worker, name="service_worker"),
     path("catalogo/productos/<uuid:producto_id>/imagen.webp", views.imagen_producto, name="imagen_producto"),
     path("api/estado/", views.api_estado, name="api_estado"),
+    path("api/operador/actual/", views.api_operador_actual, name="api_operador_actual"),
     path("api/operador/identificar/", views.api_identificar_operador, name="api_identificar_operador"),
     path("api/operador/salir/", views.api_salir_operador, name="api_salir_operador"),
     path(
@@ -52,6 +53,11 @@ urlpatterns = [
         "api/tickets/<uuid:ticket_id>/completar-sucursal/",
         views.api_completar_sucursal,
         name="api_completar_sucursal",
+    ),
+    path(
+        "api/tickets/<uuid:ticket_id>/reactivar-sucursal/",
+        views.api_reactivar_sucursal,
+        name="api_reactivar_sucursal",
     ),
     path("api/tickets/<uuid:ticket_id>/cancelar/", views.api_cancelar, name="api_cancelar"),
     path("api/tickets/<uuid:ticket_id>/imprimir/", views.api_imprimir, name="api_imprimir"),
@@ -138,6 +144,11 @@ urlpatterns = [
         "api/administrador/consolidacion-mensual/",
         views.api_admin_consolidacion_mensual,
         name="api_admin_consolidacion_mensual",
+    ),
+    path(
+        "api/administrador/corte-caja/previa/",
+        views.api_admin_previa_corte_caja,
+        name="api_admin_previa_corte_caja",
     ),
     path("api/administrador/corte-caja/", views.api_admin_corte_caja, name="api_admin_corte_caja"),
     path(

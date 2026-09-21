@@ -1,9 +1,10 @@
 from datetime import date, time, timedelta
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Q
 from django.utils import timezone
 
 from catalogo.models import Producto
@@ -49,6 +50,7 @@ class TicketBloqueado(ErrorVenta):
 
 class VersionEntidadDesactualizada(ErrorVenta):
     status_code = 409
+    codigo = "version_entidad_desactualizada"
 
     def __init__(self, ticket, device_id=""):
         self.ticket = ticket
@@ -64,6 +66,7 @@ CANALES_CONVERSION = {
 }
 ESTADOS_ACTIVOS = (Ticket.Estado.ABIERTO, Ticket.Estado.PROCESADO, Ticket.Estado.COBRAR)
 ESTADOS_BLOQUEABLES = (*ESTADOS_ACTIVOS, Ticket.Estado.PROGRAMADO)
+CODIGOS_COMPLEMENTOS_GLOBALES = frozenset({"CO8", "CO05", "CO1"})
 TICKET_LOCK_FIELDS = [
     "bloqueo_device_id",
     "bloqueo_operador",
@@ -361,6 +364,15 @@ def validar_limite_productos_por_nombre(ticket):
     return partidas
 
 
+def _es_complemento_global(partida):
+    if partida.personalizada or partida.producto_id is None:
+        return False
+    return (
+        partida.producto.codigo.upper() in CODIGOS_COMPLEMENTOS_GLOBALES
+        or partida.producto.categoria.nombre.casefold() == "bebidas"
+    )
+
+
 def validar_captura_por_nombres(ticket):
     partidas = validar_limite_productos_por_nombre(ticket)
     if partidas is None:
@@ -370,6 +382,7 @@ def validar_captura_por_nombres(ticket):
         partida.comensal
         for partida in partidas
         if not configuracion_promocion(partida.producto)
+        and not _es_complemento_global(partida)
     }
     faltantes = [numero for numero in sorted(comensales) if not str(nombres.get(str(numero), "")).strip()]
     if faltantes:
@@ -394,6 +407,25 @@ def _evento(ticket, tipo, datos=None):
 
 def registrar_evento(ticket, tipo, datos=None):
     _evento(ticket, tipo, datos)
+
+
+def _eliminar_archivos_impresion_descartados(rutas):
+    """Borra vistas previas huérfanas sin permitir salir de MEDIA_ROOT."""
+
+    raiz = Path(settings.MEDIA_ROOT).resolve()
+    for valor in rutas:
+        relativa = Path(str(valor or ""))
+        if not valor or relativa.is_absolute() or ".." in relativa.parts:
+            continue
+        destino = (raiz / relativa).resolve(strict=False)
+        if not destino.is_relative_to(raiz) or not destino.is_file():
+            continue
+        try:
+            destino.unlink()
+        except OSError:
+            # El trabajo ya quedó invalidado; un fallo físico no debe reabrir
+            # la transacción operativa que terminó correctamente.
+            continue
 
 
 def _consecutivo_folio_bloqueado(sucursal):
@@ -544,7 +576,10 @@ def _reasignar_componentes_promocion(ticket):
 
 @transaction.atomic
 def abrir_ticket(mesa, atendio=_ATENDIO_AUTOMATICO):
-    mesa = Mesa.objects.select_for_update().get(pk=mesa.pk)
+    # La sucursal es la barrera común con el corte de caja: mientras se crea
+    # una orden, ningún cierre puede fijar su instante final y viceversa.
+    sucursal = Sucursal.objects.select_for_update().get(pk=mesa.sucursal_id)
+    mesa = Mesa.objects.select_for_update().get(pk=mesa.pk, sucursal=sucursal)
     activo = Ticket.objects.filter(
         mesa=mesa,
         estado__in=[Ticket.Estado.ABIERTO, Ticket.Estado.PROCESADO, Ticket.Estado.COBRAR],
@@ -553,12 +588,12 @@ def abrir_ticket(mesa, atendio=_ATENDIO_AUTOMATICO):
         return activo, False
     from .consolidacion import exigir_mes_operativo
 
-    exigir_mes_operativo(mesa.sucursal)
-    consecutivo = _consecutivo_folio_bloqueado(mesa.sucursal)
+    exigir_mes_operativo(sucursal)
+    consecutivo = _consecutivo_folio_bloqueado(sucursal)
     consecutivo.ultimo += 1
     consecutivo.save(update_fields=["ultimo", "actualizado_en"])
     if atendio is _ATENDIO_AUTOMATICO:
-        atendio = UsuarioPOS.objects.filter(sucursal=mesa.sucursal, activo=True).first()
+        atendio = UsuarioPOS.objects.filter(sucursal=sucursal, activo=True).first()
     elif atendio is not None and (
         not atendio.activo or atendio.sucursal_id != mesa.sucursal_id
     ):
@@ -572,7 +607,7 @@ def abrir_ticket(mesa, atendio=_ATENDIO_AUTOMATICO):
             "entrega_aproximada": entrega.time().replace(second=0, microsecond=0),
         }
     ticket = Ticket.objects.create(
-        sucursal=mesa.sucursal,
+        sucursal=sucursal,
         mesa=mesa,
         atendio=atendio,
         folio=consecutivo.ultimo,
@@ -1087,10 +1122,20 @@ def agregar_comanda(ticket):
 def crear_ticket_repetido(ticket, clave_idempotencia, atendio=None):
     """Crea un pedido vacío del mismo cliente sin copiar estado transaccional."""
 
+    # El corte usa Sucursal como barrera común. Debe tomarse antes del ticket
+    # y de las posiciones para conservar el mismo orden de locks en todos los
+    # flujos que pueden crear trabajo para el turno.
+    sucursal = Sucursal.objects.select_for_update().get(pk=ticket.sucursal_id)
     ticket = (
         Ticket.objects.select_for_update()
-        .select_related("mesa", "cliente", "telefono_cliente", "domicilio_cliente", "atendio")
-        .get(pk=ticket.pk)
+        .select_related(
+            "mesa",
+            "cliente",
+            "telefono_cliente",
+            "domicilio_cliente",
+            "atendio",
+        )
+        .get(pk=ticket.pk, sucursal=sucursal)
     )
     if ticket.canal not in {Mesa.Canal.DOMICILIO, Mesa.Canal.RECOGER}:
         raise ErrorVenta("Este canal agrega una comanda al pedido actual.")
@@ -1115,7 +1160,7 @@ def crear_ticket_repetido(ticket, clave_idempotencia, atendio=None):
 
     posiciones = list(
         Mesa.objects.select_for_update()
-        .filter(sucursal=ticket.sucursal, canal=ticket.canal, activa=True)
+        .filter(sucursal=sucursal, canal=ticket.canal, activa=True)
         .order_by("orden", "nombre")
     )
     ocupadas = set(
@@ -1156,7 +1201,7 @@ def crear_ticket_repetido(ticket, clave_idempotencia, atendio=None):
     guardar_ticket(nuevo, campos)
 
     SolicitudRepeticionTicket.objects.create(
-        sucursal=ticket.sucursal,
+        sucursal=sucursal,
         ticket_origen=ticket,
         ticket_nuevo=nuevo,
         clave_idempotencia=clave,
@@ -1283,6 +1328,103 @@ def completar_ticket_sucursal(ticket):
     ticket.pagado_en = timezone.now()
     guardar_ticket(ticket, ["estado", "pagado_en"], limpiar_bloqueo=True)
     _evento(ticket, "ticket.sucursal_completado", {"total": str(ticket.total)})
+    return ticket
+
+
+@transaction.atomic
+def reactivar_ticket_sucursal(ticket, reactivado_por=None, nivel_acceso=""):
+    """Devuelve a edición un pedido de sucursal ya procesado.
+
+    La autorización se valida en la vista. Esta transición conserva las
+    impresiones completadas, descarta las que aún no salieron y mantiene el
+    bloqueo del dispositivo que solicita la reactivación.
+    """
+
+    ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    if ticket.canal != Mesa.Canal.SUCURSALES:
+        raise ErrorVenta("La orden no pertenece al módulo de sucursales.")
+    if ticket.estado != Ticket.Estado.PROCESADO:
+        raise ErrorVenta("Sólo se puede reactivar un pedido de sucursal procesado.")
+    if ticket.cortes_sucursal.exists() or ticket.cortes_caja.exists():
+        raise ErrorVenta("El pedido ya pertenece a un corte y no puede reactivarse.")
+    if reactivado_por is not None and (
+        not reactivado_por.activo
+        or reactivado_por.sucursal_id != ticket.sucursal_id
+    ):
+        raise ErrorVenta("El usuario que reactiva no está activo en esta sucursal.")
+
+    from impresion.models import TrabajoImpresion
+    from impresion.services import trabajo_procesando_abandonado
+
+    trabajos = list(
+        TrabajoImpresion.objects.select_for_update()
+        .filter(
+            ticket=ticket,
+            formato=TrabajoImpresion.Formato.SUCURSAL,
+        )
+        .filter(
+            Q(comanda_numero=ticket.comanda_actual)
+            | Q(comanda_numero__isnull=True)
+        )
+    )
+    ahora = timezone.now()
+    procesando_vigentes = [
+        trabajo
+        for trabajo in trabajos
+        if trabajo.estado == TrabajoImpresion.Estado.PROCESANDO
+        and not trabajo_procesando_abandonado(trabajo, ahora=ahora)
+    ]
+    if procesando_vigentes:
+        raise ErrorVenta(
+            "La impresión del pedido sigue en curso. Espera a que termine antes de reactivarlo."
+        )
+    abandonados = [
+        trabajo
+        for trabajo in trabajos
+        if trabajo_procesando_abandonado(trabajo, ahora=ahora)
+    ]
+    descartables = [
+        trabajo
+        for trabajo in trabajos
+        if trabajo.estado != TrabajoImpresion.Estado.IMPRESO
+    ]
+    rutas_descartadas = [trabajo.archivo for trabajo in descartables if trabajo.archivo]
+    if descartables:
+        TrabajoImpresion.objects.filter(
+            pk__in=[trabajo.pk for trabajo in descartables]
+        ).delete()
+        if rutas_descartadas:
+            transaction.on_commit(
+                lambda rutas=tuple(rutas_descartadas): (
+                    _eliminar_archivos_impresion_descartados(rutas)
+                )
+            )
+
+    ticket.estado = Ticket.Estado.ABIERTO
+    ticket.comanda_en_edicion = True
+    ticket.procesado_en = None
+    ticket.partidas.filter(comanda_numero=ticket.comanda_actual).update(
+        procesada=False
+    )
+    guardar_ticket(
+        ticket,
+        ["estado", "comanda_en_edicion", "procesado_en"],
+    )
+    _evento(
+        ticket,
+        "ticket.sucursal_reactivado",
+        {
+            "nivel_acceso": str(nivel_acceso or ""),
+            "reactivado_por_id": (
+                str(reactivado_por.id) if reactivado_por is not None else ""
+            ),
+            "reactivado_por_nombre": (
+                reactivado_por.nombre if reactivado_por is not None else "Administrador"
+            ),
+            "impresiones_descartadas": len(descartables),
+            "impresiones_abandonadas": len(abandonados),
+        },
+    )
     return ticket
 
 

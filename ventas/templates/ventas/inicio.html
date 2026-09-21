@@ -67,10 +67,14 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
     <div class="controles-tableta{% if not modo_tableta %} controles-escritorio{% endif %}">
       <button id="pantalla-completa" class="control-operacion pantalla-completa" type="button" aria-label="Abrir pantalla completa" title="Pantalla completa">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
-        <span id="pantalla-completa-texto">Pantalla completa</span>
       </button>
-      <p id="estado-pantalla-completa" class="estado-pantalla-completa" role="status" aria-live="polite" hidden></p>
       {% if not modo_tableta %}
+        <button id="abrir-directorio" class="control-operacion" type="button" aria-label="Abrir directorio de clientes" title="Directorio de clientes">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 7h5M18.5 4.5v5"/></svg>
+        </button>
+        <button id="abrir-movimientos" class="control-operacion" type="button" aria-label="Abrir movimientos" title="Movimientos" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h14M14 3l4 4-4 4M20 17H6M10 13l-4 4 4 4"/></svg>
+        </button>
         <button class="control-operacion salir-mesero salir-mesero-cabecera" data-salir-mesero type="button" aria-label="Salir al menú principal" title="Salir al menú principal">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></svg><span>Salir</span>
         </button>
@@ -105,6 +109,30 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
         <div id="rejilla-posiciones" class="rejilla-posiciones" aria-live="polite" aria-label="Posiciones de Comedor"></div>
       </div>
     </section>
+
+    {% if not modo_tableta %}
+      <section id="vista-directorio" class="vista-directorio oculto" aria-labelledby="directorio-titulo">
+        <header class="directorio-cabecera">
+          <button id="cerrar-directorio" class="boton icono" type="button" aria-label="Volver a ventas" title="Volver a ventas">←</button>
+          <div>
+            <h1 id="directorio-titulo">Directorio de clientes</h1>
+            <p>Consulta y corrige los datos propios de esta sucursal.</p>
+          </div>
+          <button id="directorio-nuevo-cliente" class="boton primario" type="button">Nuevo cliente</button>
+        </header>
+        <div class="directorio-herramientas">
+          <label for="directorio-buscar">Buscar en el directorio</label>
+          <div class="directorio-busqueda">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg>
+            <input id="directorio-buscar" type="search" autocomplete="off" placeholder="Nombre, clave, teléfono, domicilio, referencia o nota">
+          </div>
+          <output id="directorio-conteo" for="directorio-buscar" aria-live="polite">Cargando clientes…</output>
+        </div>
+        <div id="directorio-estado" class="directorio-estado" role="status" aria-live="polite"></div>
+        <div id="directorio-lista" class="directorio-lista" aria-busy="false"></div>
+        <button id="directorio-cargar-mas" class="boton secundario directorio-cargar-mas" type="button" hidden>Cargar más clientes</button>
+      </section>
+    {% endif %}
 
     <section id="vista-ticket" class="vista-ticket oculto">
       <div class="ticket-top">
@@ -209,6 +237,7 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
             <button id="cancelar-orden" class="boton accion-cancelar" type="button">Cancelar orden</button>
             <button id="ticket-cuenta" class="boton accion-ticket oculto" type="button">Ticket</button>
             <button id="agregar-comanda" class="boton accion-agregar oculto" type="button">Agregar</button>
+            <button id="reactivar-sucursal" class="boton accion-reactivar oculto" type="button">Reactivar</button>
             <button id="cobrar" class="boton cobro oculto" type="button">Cobrar</button>
           </div>
         </aside>
