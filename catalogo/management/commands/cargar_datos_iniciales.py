@@ -7,7 +7,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from catalogo.configuracion_menu import configuracion_producto
-from catalogo.models import Categoria, Precio, Producto
+from catalogo.models import Categoria, Precio, Producto, PublicacionCatalogoCentral
 from personas.models import Rol, Sucursal
 from ventas.bootstrap import inicializar_posiciones_operativas
 from ventas.catalogo_sucursales import (
@@ -90,6 +90,15 @@ class Command(BaseCommand):
                 "La base debe contener únicamente la sucursal ARBOLEDAS activa y ya "
                 "aprovisionada antes de cargar datos históricos."
             )
+        if PublicacionCatalogoCentral.objects.filter(
+            sucursal=sucursal,
+            estado=PublicacionCatalogoCentral.Estado.APLICADA,
+        ).exists():
+            raise CommandError(
+                "El catalogo ya esta administrado por una publicacion Central aplicada. "
+                "Se cancelo la carga inicial para no sobrescribir la ultima version valida."
+            )
+
         rol, _ = Rol.objects.update_or_create(
             sucursal=sucursal,
             nombre="Encargado",

@@ -514,8 +514,8 @@ un procedimiento de desinstalación, nunca mediante una limpieza del repositorio
   Después de cerrar el diseño conviene mover la selección vigente a
   `docs/design/` y archivar las alternativas descartadas fuera del repositorio.
 - `propuesta_arquitectura_pos_multisucursal.md` es un antecedente extenso y
-  `TRASPASO_BASE_ESTANDAR_Y_PRIMER_PARCHE.md` es un snapshot. Conviene conservarlos
-  bajo `docs/historico/` y mantener un índice corto de documentos vigentes.
+  `docs/historico/handoffs/TRASPASO_BASE_ESTANDAR_Y_PRIMER_PARCHE.md` es un snapshot.
+  Ambos se conservan bajo `docs/historico/`; el índice vigente está en `docs/README.md`.
 
 ### 11.3 Archivos que conviene modularizar
 

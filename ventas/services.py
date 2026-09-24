@@ -396,13 +396,18 @@ def validar_captura_por_nombres(ticket):
 
 
 def _evento(ticket, tipo, datos=None):
-    EventoOutbox.objects.create(
+    evento = EventoOutbox.objects.create(
         sucursal=ticket.sucursal,
         agregado="ticket",
         agregado_id=ticket.id,
         tipo=tipo,
         datos={"ticket_id": str(ticket.id), "folio": ticket.folio, **(datos or {})},
     )
+    from .sincronizacion_central import TIPOS_CIERRE_VENTA, convertir_evento_venta_central
+
+    if tipo in TIPOS_CIERRE_VENTA:
+        convertir_evento_venta_central(evento, ticket, tipo, datos)
+    return evento
 
 
 def registrar_evento(ticket, tipo, datos=None):
@@ -518,13 +523,31 @@ def _reasignar_componentes_promocion(ticket):
     consolidadas = {}
     for partida in regulares:
         clave = (partida.producto_id, partida.comensal, partida.termino)
-        precio = partida.producto.precio_actual()
-        if not precio:
-            raise ErrorVenta(f"{partida.producto.nombre} ya no tiene un precio activo.")
+        precio_lista = partida.precio_lista_capturado
+        if precio_lista is None:
+            # Backfill seguro para líneas anteriores a dev.10: conserva el importe
+            # capturado si no era un componente bonificado; en otro caso toma una
+            # sola vez el precio vigente y lo deja congelado desde este momento.
+            if partida.promocion_aplicada_id is None and partida.precio_unitario > 0:
+                precio_lista = partida.precio_unitario
+            else:
+                precio = partida.producto.precio_actual()
+                if not precio:
+                    raise ErrorVenta(
+                        f"{partida.producto.nombre} ya no tiene un precio activo."
+                    )
+                precio_lista = precio.importe
+            partida.precio_lista_capturado = precio_lista
         if clave not in consolidadas:
             partida.promocion_aplicada = None
-            partida.precio_unitario = precio.importe
-            partida.save(update_fields=["promocion_aplicada", "precio_unitario"])
+            partida.precio_unitario = precio_lista
+            partida.save(
+                update_fields=[
+                    "promocion_aplicada",
+                    "precio_unitario",
+                    "precio_lista_capturado",
+                ]
+            )
             consolidadas[clave] = partida
             continue
         principal = consolidadas[clave]
@@ -562,6 +585,7 @@ def _reasignar_componentes_promocion(ticket):
                     comensal=partida.comensal,
                     cantidad=faltante,
                     precio_unitario=Decimal("0.00"),
+                    precio_lista_capturado=partida.precio_lista_capturado,
                     nombre_producto=partida.nombre_producto,
                     nombre_corto=partida.nombre_corto,
                     termino=partida.termino,
@@ -586,14 +610,16 @@ def abrir_ticket(mesa, atendio=_ATENDIO_AUTOMATICO):
     ).first()
     if activo:
         return activo, False
-    from .consolidacion import exigir_mes_operativo
 
-    exigir_mes_operativo(sucursal)
     consecutivo = _consecutivo_folio_bloqueado(sucursal)
     consecutivo.ultimo += 1
     consecutivo.save(update_fields=["ultimo", "actualizado_en"])
     if atendio is _ATENDIO_AUTOMATICO:
-        atendio = UsuarioPOS.objects.filter(sucursal=sucursal, activo=True).first()
+        atendio = UsuarioPOS.objects.filter(
+            sucursal=sucursal,
+            activo=True,
+            es_sistema=False,
+        ).first()
     elif atendio is not None and (
         not atendio.activo or atendio.sucursal_id != mesa.sucursal_id
     ):
@@ -745,6 +771,7 @@ def agregar_partida(
         comensal=comensal,
         cantidad=cantidad,
         precio_unitario=precio.importe,
+        precio_lista_capturado=precio.importe,
         nombre_producto=nombre_producto,
         nombre_corto=nombre_corto,
         termino=termino,
@@ -793,6 +820,7 @@ def agregar_partida_sucursal(ticket, producto, cantidad=Decimal("1.000")):
         comensal=1,
         cantidad=cantidad,
         precio_unitario=precio.importe,
+        precio_lista_capturado=precio.importe,
         cantidad_por_precio=producto.cantidad_por_precio,
         unidad=producto.unidad,
         nombre_producto=precio.nombre_ticket or producto.nombre_ticket or producto.nombre,
@@ -845,6 +873,7 @@ def agregar_partida_personalizada(
         comensal=comensal,
         cantidad=cantidad,
         precio_unitario=precio_unitario,
+        precio_lista_capturado=precio_unitario,
         nombre_producto=nombre,
         nombre_corto=nombre[:24],
     )
@@ -983,12 +1012,21 @@ def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar
             raise ErrorVenta("La cantidad acumulada no puede superar 9999.")
     duplicadas = partidas[1:] + duplicadas_destino
     if principal.promocion_aplicada_id:
-        precio = principal.producto.precio_actual()
-        if not precio:
-            raise ErrorVenta("El producto no tiene un precio activo.")
+        precio_lista = principal.precio_lista_capturado
+        campos = ["promocion_aplicada", "precio_unitario"]
+        if precio_lista is None:
+            # Compatibilidad acotada con partidas creadas antes de que existiera
+            # precio_lista_capturado. La consulta se hace una sola vez y su
+            # resultado queda congelado para las ediciones siguientes.
+            precio = principal.producto.precio_actual()
+            if not precio:
+                raise ErrorVenta("El producto no tiene un precio activo.")
+            precio_lista = precio.importe
+            principal.precio_lista_capturado = precio_lista
+            campos.append("precio_lista_capturado")
         principal.promocion_aplicada = None
-        principal.precio_unitario = precio.importe
-        principal.save(update_fields=["promocion_aplicada", "precio_unitario"])
+        principal.precio_unitario = precio_lista
+        principal.save(update_fields=campos)
     if duplicadas:
         Partida.objects.filter(id__in=[partida.id for partida in duplicadas]).delete()
     principal = actualizar_partida(principal, cantidad, termino, validar_componente=False)
@@ -1270,9 +1308,7 @@ def procesar_ticket(ticket):
 @transaction.atomic
 def cobrar_ticket(ticket, forma_pago, importe_recibido=None):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
-    from .consolidacion import exigir_mes_operativo
 
-    exigir_mes_operativo(ticket.sucursal)
     if ticket.comanda_en_edicion:
         raise ErrorVenta("Procesa la comanda actual antes de cobrar.")
     if ticket.canal == Mesa.Canal.DOMICILIO:

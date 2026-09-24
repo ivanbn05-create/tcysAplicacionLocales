@@ -47,6 +47,7 @@ from .models import (
     ConsolidacionMensual,
     ControlEfectivoDia,
     CorteCaja,
+    EventoOutbox,
     Mesa,
     MovimientoCaja,
     ReporteAdministrativo,
@@ -476,7 +477,7 @@ class CandidataDev3BackendTests(TestCase):
             app_js,
         )
 
-    def test_mes_anterior_confirmado_bloquea_nuevas_ventas_hasta_purgada(self):
+    def test_mes_anterior_confirmado_avisa_sin_bloquear_operacion_local(self):
         ahora = timezone.now()
         cobrable, _ = self._ticket_personalizado(
             Mesa.Canal.COMEDOR,
@@ -513,23 +514,6 @@ class CandidataDev3BackendTests(TestCase):
             purgado_en=ahora,
         )
 
-        with self.assertRaisesRegex(ErrorVenta, "Debes consolidar"):
-            abrir_ticket(self._mesa(Mesa.Canal.COMEDOR, orden=2))
-        with self.assertRaisesRegex(ErrorVenta, "Debes consolidar"):
-            cobrar_ticket(cobrable, Ticket.FormaPago.EFECTIVO, "62.00")
-
-        self.assertEqual(activar_programados(self.sucursal, ahora=ahora), 0)
-        programado.refresh_from_db()
-        self.assertEqual(programado.estado, Ticket.Estado.PROGRAMADO)
-        # La consulta administrativa llama activar_programados y debe seguir
-        # disponible mientras SYSTEM termina la purga física.
-        self.assertIsInstance(resumen_administrador(self.sucursal), dict)
-        programado.refresh_from_db()
-        self.assertEqual(programado.estado, Ticket.Estado.PROGRAMADO)
-
-        consolidacion.estado = ConsolidacionMensual.Estado.PURGADA
-        consolidacion.save(update_fields=["estado"])
-
         _, creado = abrir_ticket(self._mesa(Mesa.Canal.COMEDOR, orden=2))
         self.assertTrue(creado)
         cobrar_ticket(cobrable, Ticket.FormaPago.EFECTIVO, "62.00")
@@ -538,6 +522,19 @@ class CandidataDev3BackendTests(TestCase):
         self.assertEqual(activar_programados(self.sucursal, ahora=ahora), 1)
         programado.refresh_from_db()
         self.assertEqual(programado.estado, Ticket.Estado.PROCESADO)
+
+        resumen = resumen_administrador(self.sucursal)
+        self.assertTrue(resumen["cierre_mensual"]["requerido"])
+        self.assertEqual(
+            resumen["cierre_mensual"]["periodo"],
+            consolidacion.periodo.isoformat(),
+        )
+
+        consolidacion.estado = ConsolidacionMensual.Estado.PURGADA
+        consolidacion.save(update_fields=["estado"])
+        self.assertFalse(
+            resumen_administrador(self.sucursal)["cierre_mensual"]["requerido"]
+        )
 
     def test_movimientos_control_formula_corte_purga_detalle_y_conserva_reporte(self):
         venta, _ = self._ticket_personalizado(
@@ -580,6 +577,15 @@ class CandidataDev3BackendTests(TestCase):
             )
         )
 
+        ids_operacion = [venta.id, pedido_sucursal.id, cancelado.id]
+        eventos_centrales = list(
+            EventoOutbox.objects.filter(
+                agregado="ticket",
+                agregado_id__in=ids_operacion,
+                destino=EventoOutbox.Destino.CENTRAL_VENTAS,
+            ).values_list("id", flat=True)
+        )
+        self.assertEqual(len(eventos_centrales), 3)
         agregar_movimiento(self.sucursal, MovimientoCaja.Tipo.INGRESO, "Cambio extra", "50")
         agregar_movimiento(self.sucursal, MovimientoCaja.Tipo.GASTO, "Insumos", "20")
         agregar_movimiento(self.sucursal, MovimientoCaja.Tipo.TERMINAL, "Cobro terminal", "30")
@@ -619,6 +625,17 @@ class CandidataDev3BackendTests(TestCase):
 
         ids_cerrados = [venta.id, pedido_sucursal.id, cancelado.id]
         self.assertFalse(Ticket.objects.filter(pk__in=ids_cerrados).exists())
+        self.assertEqual(
+            EventoOutbox.objects.filter(id__in=eventos_centrales).count(),
+            len(eventos_centrales),
+        )
+        self.assertFalse(
+            EventoOutbox.objects.filter(
+                agregado="ticket",
+                agregado_id__in=ids_cerrados,
+                destino=EventoOutbox.Destino.LOCAL,
+            ).exists()
+        )
         self.assertIsNotNone(corte.detalle_eliminado_en)
         self.assertTrue(ReporteAdministrativo.objects.filter(pk=reporte.pk).exists())
         self.assertFalse(resumen_administrador(self.sucursal)["cancelaciones"])
@@ -825,7 +842,9 @@ class CandidataDev3BackendTests(TestCase):
         respuesta = MagicMock()
         respuesta.status = 200
         respuesta.getcode.return_value = 200
-        respuesta.read.return_value = b'{"recibido":true,"acuse":"cruce-001"}'
+        respuesta.geturl.return_value = "https://vps.invalid/api/consolidaciones"
+        respuesta.headers = {'Content-Type': 'application/json'}
+        respuesta.read.return_value = b'{"recibido":true,"acuse":"cruce-001","estado":"recibido"}'
         respuesta.__enter__.return_value = respuesta
         respuesta.__exit__.return_value = False
         with tempfile.TemporaryDirectory() as temporal:
@@ -1127,6 +1146,8 @@ class CandidataDev3BackendTests(TestCase):
         sin_acuse = MagicMock()
         sin_acuse.status = 200
         sin_acuse.getcode.return_value = 200
+        sin_acuse.geturl.return_value = "https://vps.invalid/api/consolidaciones"
+        sin_acuse.headers = {'Content-Type': 'application/json'}
         sin_acuse.read.return_value = b'{"recibido":true}'
         sin_acuse.__enter__.return_value = sin_acuse
         sin_acuse.__exit__.return_value = False
@@ -1144,7 +1165,9 @@ class CandidataDev3BackendTests(TestCase):
         con_acuse = MagicMock()
         con_acuse.status = 200
         con_acuse.getcode.return_value = 200
-        con_acuse.read.return_value = b'{"recibido":true,"acuse":"acuse-vps-001"}'
+        con_acuse.geturl.return_value = "https://vps.invalid/api/consolidaciones"
+        con_acuse.headers = {'Content-Type': 'application/json'}
+        con_acuse.read.return_value = b'{"recibido":true,"acuse":"acuse-vps-001","estado":"recibido"}'
         con_acuse.__enter__.return_value = con_acuse
         con_acuse.__exit__.return_value = False
         with tempfile.TemporaryDirectory() as temporal:

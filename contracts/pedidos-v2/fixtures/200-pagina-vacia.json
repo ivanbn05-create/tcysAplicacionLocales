@@ -1,0 +1,11 @@
+{
+  "version": "v2",
+  "request_id": "pedidos-v2-vacia-001",
+  "data": [],
+  "page": {
+    "has_more": false,
+    "limit": 100,
+    "next_cursor": null,
+    "returned": 0
+  }
+}

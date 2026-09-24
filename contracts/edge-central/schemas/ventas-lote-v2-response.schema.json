@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.lostocayos.invalid/edge-central/ventas-lote-v2-response.schema.json",
+  "title": "Acuse de lote de ventas v2 propuesto",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recibido", "acuse", "lote_id", "estado", "contenido_sha256", "conteo_aceptado", "primera_recepcion_en"],
+  "properties": {
+    "recibido": {"const": true},
+    "acuse": {"type": "string", "format": "uuid"},
+    "lote_id": {"type": "string", "format": "uuid"},
+    "estado": {"type": "string", "enum": ["recibido", "purgado"]},
+    "contenido_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "conteo_aceptado": {"type": "integer", "minimum": 1, "maximum": 100},
+    "primera_recepcion_en": {"type": "string", "format": "date-time"}
+  }
+}

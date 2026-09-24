@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.lostocayos.invalid/edge-central/matriz-identidades-v1.schema.json",
+  "title": "Matriz explícita POS, Pedidos y Central",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "mapeos"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "mapeos": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pos",
+          "pedidos",
+          "central",
+          "estado"
+        ],
+        "properties": {
+          "pos": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "sucursal_id",
+              "sucursal_clave"
+            ],
+            "properties": {
+              "sucursal_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "sucursal_clave": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 30
+              }
+            }
+          },
+          "pedidos": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "sucursal_cliente_id"
+            ],
+            "properties": {
+              "sucursal_cliente_id": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              }
+            }
+          },
+          "central": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "branch_source_id",
+              "branch_code"
+            ],
+            "properties": {
+              "branch_source_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "branch_code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            }
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "pendiente_verificacion",
+              "verificado",
+              "deshabilitado"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

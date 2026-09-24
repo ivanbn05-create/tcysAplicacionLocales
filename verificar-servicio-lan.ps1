@@ -86,6 +86,54 @@ function Assert-VpsConsolidationConfiguration {
     }
 }
 
+function Assert-UniqueDotEnvKeys {
+    param(
+        [string[]]$Names,
+        [string[]]$Prefixes = @()
+    )
+
+    $lines = @(Get-Content -LiteralPath $envPath -Encoding UTF8)
+    $namesToCheck = @($Names)
+    foreach ($line in $lines) {
+        if ($line -notmatch '^\s*([A-Za-z][A-Za-z0-9_]*)\s*=') { continue }
+        $candidate = $Matches[1].ToUpperInvariant()
+        if (@($Prefixes | Where-Object {
+            $candidate.StartsWith($_, [StringComparison]::OrdinalIgnoreCase)
+        }).Count) {
+            $namesToCheck += $candidate
+        }
+    }
+    foreach ($name in @($namesToCheck | Sort-Object -Unique)) {
+        $pattern = "(?i)^\s*" + [Regex]::Escape($name) + "\s*="
+        if (@($lines | Where-Object { $_ -match $pattern }).Count -gt 1) {
+            throw "$name no puede aparecer mas de una vez en .env."
+        }
+    }
+}
+
+function Assert-CanonicalDjangoEnvironment {
+    param(
+        [string]$PythonPath,
+        [string]$ProjectRoot
+    )
+
+    $validationCode = 'import sys; sys.path.insert(0, sys.argv[1]); import servicio_windows as sw; sw._cargar_entorno(); import django; django.setup(); print("OK")'
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # stderr puede incluir diagnosticos con datos operativos; se captura y no se reemite.
+        $ErrorActionPreference = "Continue"
+        $validationOutput = @(& $PythonPath -I -c $validationCode $ProjectRoot 2>&1)
+        $validationExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($validationExitCode -ne 0 -or $validationOutput.Count -ne 1 -or
+        ([string]$validationOutput[0]).Trim() -cne "OK") {
+        throw "La configuracion canonica de Django no es valida; revisa .env sin copiar secretos a la consola."
+    }
+}
+
 function Resolve-ProjectPath {
     param([string]$Value)
     $resolved = if ([IO.Path]::IsPathRooted($Value)) {
@@ -159,6 +207,7 @@ function Test-AllowedHost {
 foreach ($required in @($envPath, $python, $serviceHost)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Falta un archivo obligatorio: $required" }
 }
+$envHashBeforeValidation = (Get-FileHash -LiteralPath $envPath -Algorithm SHA256).Hash
 $requiredEnvironmentKeys = @(
     "SUCURSAL_CLAVE", "DJANGO_SECRET_KEY", "DJANGO_DEBUG", "DJANGO_ALLOWED_HOSTS",
     "DJANGO_HTTPS", "ALLOW_INSECURE_HTTP_LAN", "WAITRESS_HOST", "WAITRESS_PORT",
@@ -171,16 +220,20 @@ foreach ($requiredKey in $requiredEnvironmentKeys) {
 $optionalEnvironmentKeys = @(
     "DB_ENGINE", "SQLITE_PATH", "PRINT_BACKEND", "PRINT_SYNC",
     "PRINTER_CAJA_HOST", "PRINTER_COCINA_HOST", "PRINTER_BARRA_HOST",
-    "PRINTER_PORT", "VPS_CONSOLIDACION_URL", "VPS_CONSOLIDACION_TOKEN",
-    "VPS_CONSOLIDACION_TIMEOUT"
+    "PRINTER_PORT", "PEDIDOS_SUCURSALES_FUENTE",
+    "PEDIDOS_API_BASE_URL", "PEDIDOS_API_ENDPOINT", "PEDIDOS_API_TOKEN",
+    "PEDIDOS_API_CA_BUNDLE", "PEDIDOS_API_SUCURSAL_IDS", "PEDIDOS_API_PAGE_SIZE",
+    "PEDIDOS_API_CONNECT_TIMEOUT_SECONDS", "PEDIDOS_API_READ_TIMEOUT_SECONDS",
+    "PEDIDOS_API_MAX_RESPONSE_BYTES", "PEDIDOS_API_MAX_RETRIES",
+    "CENTRAL_API_BASE_URL", "CENTRAL_BRANCH_ID", "CENTRAL_BRANCH_CODE",
+    "CENTRAL_POS_INSTANCE_ID", "CENTRAL_INGEST_TOKEN", "CENTRAL_CATALOG_TOKEN",
+    "CENTRAL_API_CA_BUNDLE", "CENTRAL_ENABLE_SALES_V2",
+    "CENTRAL_ENABLE_CUSTOMERS_V2", "CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2",
+    "CENTRAL_CONNECT_TIMEOUT_SECONDS", "CENTRAL_READ_TIMEOUT_SECONDS",
+    "CENTRAL_MAX_RESPONSE_BYTES", "CENTRAL_SYNC_INTERVAL_SECONDS",
+    "VPS_CONSOLIDACION_URL", "VPS_CONSOLIDACION_TOKEN", "VPS_CONSOLIDACION_TIMEOUT"
 )
-foreach ($optionalKey in $optionalEnvironmentKeys) {
-    $optionalPattern = "(?i)^\s*" + [Regex]::Escape($optionalKey) + "\s*="
-    if (@((Get-Content -LiteralPath $envPath -Encoding UTF8) |
-        Where-Object { $_ -match $optionalPattern }).Count -gt 1) {
-        throw "$optionalKey no puede aparecer más de una vez en .env."
-    }
-}
+Assert-UniqueDotEnvKeys -Names $optionalEnvironmentKeys -Prefixes @("PEDIDOS_API_", "CENTRAL_")
 $vpsConsolidacionUrl = Get-DotEnvValue -Name "VPS_CONSOLIDACION_URL"
 $vpsConsolidacionToken = Get-DotEnvValue -Name "VPS_CONSOLIDACION_TOKEN"
 $vpsConsolidacionTimeout = ConvertFrom-DotEnvInteger `
@@ -190,6 +243,11 @@ $vpsConsolidacionTimeout = ConvertFrom-DotEnvInteger `
 Assert-VpsConsolidationConfiguration `
     -Url $vpsConsolidacionUrl `
     -Token $vpsConsolidacionToken
+Assert-CanonicalDjangoEnvironment -PythonPath $python -ProjectRoot $root
+$envHashAfterValidation = (Get-FileHash -LiteralPath $envPath -Algorithm SHA256).Hash
+if ($envHashAfterValidation -cne $envHashBeforeValidation) {
+    throw ".env cambio durante la verificacion; vuelve a ejecutar con una configuracion estable."
+}
 $branchKey = Get-RequiredDotEnvValue -Name "SUCURSAL_CLAVE"
 if ($branchKey -notmatch '^[A-Z0-9](?:[A-Z0-9_-]{0,28}[A-Z0-9])?$') { throw "SUCURSAL_CLAVE no tiene el formato canónico esperado." }
 $secretKey = Get-RequiredDotEnvValue -Name "DJANGO_SECRET_KEY"
@@ -597,6 +655,10 @@ while ($queue.Count) {
     }
 }
 if ($violations.Count) { throw ("ACL no conformes: " + $violations.Count + "; " + ($violations | Select-Object -First 10) -join "; ") }
+$envHashFinal = (Get-FileHash -LiteralPath $envPath -Algorithm SHA256).Hash
+if ($envHashFinal -cne $envHashBeforeValidation) {
+    throw ".env cambio durante la verificacion; vuelve a ejecutar con una configuracion estable."
+}
 [pscustomobject]@{
     Service = $service.Name
     ServiceState = $service.State

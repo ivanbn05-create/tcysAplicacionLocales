@@ -94,6 +94,148 @@ function Assert-NoReparseTree {
     }
 }
 
+function New-PrivateDirectory {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (Test-Path -LiteralPath $Path) {
+        throw "La carpeta privada ya existe: $Path"
+    }
+    New-Item -ItemType Directory -Path $Path | Out-Null
+    $acl = New-Object Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    $adminSid = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
+    $acl.SetOwner($adminSid)
+    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+        $identity = New-Object Security.Principal.SecurityIdentifier($sid)
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule(
+            $identity,
+            'FullControl',
+            'ContainerInherit, ObjectInherit',
+            'None',
+            'Allow'
+        )
+        [void]$acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+
+    $verified = Get-Acl -LiteralPath $Path
+    if (-not $verified.AreAccessRulesProtected) {
+        throw 'La carpeta privada conserva herencia de ACL.'
+    }
+    $unexpected = @(
+        $verified.Access | Where-Object {
+            $_.IdentityReference.Translate(
+                [Security.Principal.SecurityIdentifier]
+            ).Value -notin @('S-1-5-18', 'S-1-5-32-544')
+        }
+    )
+    if ($unexpected.Count -gt 0) {
+        throw 'La carpeta privada contiene ACE inesperadas.'
+    }
+}
+
+
+function Get-FileSha256Hex {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Get-Sha256Hex {
+    param([Parameter(Mandatory = $true)][byte[]]$Bytes)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        return (($sha256.ComputeHash($Bytes) | ForEach-Object { $_.ToString('x2') }) -join '')
+    }
+    finally { $sha256.Dispose() }
+}
+
+function Get-VerifiedEnvironmentSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$ExpectedHash = ''
+    )
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw 'La instalación anterior no contiene .env.'
+    }
+    Assert-NoReparseTree -Path $Path -Description 'El archivo .env'
+    $acl = Get-Acl -LiteralPath $Path
+    if (-not $acl.AreAccessRulesProtected) {
+        throw '.env conserva herencia de ACL.'
+    }
+    try {
+        $ownerSid = (New-Object Security.Principal.NTAccount($acl.Owner)).Translate(
+            [Security.Principal.SecurityIdentifier]
+        ).Value
+    }
+    catch {
+        try { $ownerSid = (New-Object Security.Principal.SecurityIdentifier($acl.Owner)).Value }
+        catch { $ownerSid = '' }
+    }
+    if ($ownerSid -ne 'S-1-5-32-544') {
+        throw '.env debe pertenecer a Administradores.'
+    }
+    $rules = @($acl.GetAccessRules(
+        $true,
+        $true,
+        [Security.Principal.SecurityIdentifier]
+    ))
+    if (@($rules | Where-Object { $_.IsInherited }).Count -ne 0 -or $rules.Count -ne 3) {
+        throw '.env no tiene exactamente las tres ACE privadas canónicas.'
+    }
+    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+        $full = @($rules | Where-Object {
+            $_.IdentityReference.Value -eq $sid -and
+            $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+            $_.FileSystemRights -eq [Security.AccessControl.FileSystemRights]::FullControl -and
+            ($_.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -eq 0
+        })
+        if ($full.Count -ne 1) { throw '.env no tiene control administrativo canónico.' }
+    }
+    $localService = @($rules | Where-Object {
+        $_.IdentityReference.Value -eq 'S-1-5-19' -and
+        $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+        ($_.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -eq 0
+    })
+    $readRights = (
+        [Security.AccessControl.FileSystemRights]::Read -bor
+        [Security.AccessControl.FileSystemRights]::Synchronize
+    )
+    if ($localService.Count -ne 1 -or $localService[0].FileSystemRights -ne $readRights) {
+        throw '.env no concede sólo lectura canónica a LocalService.'
+    }
+    if (@($rules | Where-Object {
+        $_.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+        $_.IdentityReference.Value -notin @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-19')
+    }).Count -ne 0) {
+        throw '.env contiene identidades o denegaciones no previstas.'
+    }
+    [byte[]]$bytes = [IO.File]::ReadAllBytes($Path)
+    $hash = Get-Sha256Hex -Bytes $bytes
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedHash) -and $hash -cne $ExpectedHash) {
+        throw 'El contenido de .env cambió durante la preparación de la actualización.'
+    }
+    return [pscustomobject]@{ Bytes = $bytes; Hash = $hash; Acl = $acl }
+}
+
+function Copy-VerifiedEnvironment {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [Parameter(Mandatory = $true)][string]$ExpectedHash
+    )
+    $snapshot = Get-VerifiedEnvironmentSnapshot -Path $Source -ExpectedHash $ExpectedHash
+    if (Test-Path -LiteralPath $Destination) {
+        throw 'El destino de .env ya existe dentro de la release.'
+    }
+    New-Item -ItemType File -Path $Destination | Out-Null
+    Set-Acl -LiteralPath $Destination -AclObject $snapshot.Acl
+    [IO.File]::WriteAllBytes($Destination, $snapshot.Bytes)
+    $copied = Get-VerifiedEnvironmentSnapshot -Path $Destination -ExpectedHash $ExpectedHash
+    if ($copied.Bytes.Length -ne $snapshot.Bytes.Length) {
+        throw 'La copia protegida de .env cambió de tamaño.'
+    }
+}
 function Copy-DirectoryContents {
     param([string]$Source, [string]$Destination)
     Assert-NoReparseTree -Path $Source -Description 'El árbol que se copiará'
@@ -104,7 +246,11 @@ function Copy-DirectoryContents {
 }
 
 function Copy-OperationalState {
-    param([string]$SourceRoot, [string]$DestinationRoot)
+    param(
+        [string]$SourceRoot,
+        [string]$DestinationRoot,
+        [Parameter(Mandatory = $true)][string]$ExpectedEnvironmentHash
+    )
 
     foreach ($relative in @('.env', '.venv', 'runtime', 'media', 'logs', 'backups')) {
         $source = Join-Path $SourceRoot $relative
@@ -123,7 +269,15 @@ function Copy-OperationalState {
         }
         else {
             Assert-NoReparseTree -Path $source -Description 'El estado que se copiará'
-            Copy-Item -LiteralPath $source -Destination $destination -Force
+            if ($relative -eq '.env') {
+                Copy-VerifiedEnvironment `
+                    -Source $source `
+                    -Destination $destination `
+                    -ExpectedHash $ExpectedEnvironmentHash
+            }
+            else {
+                Copy-Item -LiteralPath $source -Destination $destination -Force
+            }
         }
     }
     foreach ($relative in @('db.sqlite3', 'db.sqlite3-wal', 'db.sqlite3-shm', 'db.sqlite3-journal')) {
@@ -377,6 +531,18 @@ if ($serviceBefore.Status -ne 'Running') {
 }
 Wait-LabHealth -Root $installation -TimeoutSeconds 10
 Assert-NoReparseTree -Path $installation -Description 'La instalación de laboratorio'
+$environmentBeforeSwap = Get-VerifiedEnvironmentSnapshot -Path (Join-Path $installation '.env')
+$environmentHashBeforeSwap = $environmentBeforeSwap.Hash
+$artifactSources = [ordered]@{
+    archive = $archive
+    manifest = $manifest
+    checksum = $checksum
+    verifier = $verifier
+}
+$artifactHashes = @{}
+foreach ($entry in $artifactSources.GetEnumerator()) {
+    $artifactHashes[$entry.Key] = Get-FileSha256Hex -Path $entry.Value
+}
 
 Write-Host 'Verificando ZIP, manifiesto y SHA-256 antes de detener el servicio...' -ForegroundColor Yellow
 $verificationOutput = @(& $verifierPythonPath $verifier verify --archive $archive --manifest $manifest --checksum $checksum)
@@ -386,20 +552,73 @@ catch { throw 'El verificador no devolvió un resultado JSON válido.' }
 if ($verification.status -ne 'ok' -or [string]$verification.version -cne $ExpectedVersion) {
     throw 'La release verificada no coincide con ExpectedVersion.'
 }
+foreach ($entry in $artifactSources.GetEnumerator()) {
+    if ((Get-FileSha256Hex -Path $entry.Value) -cne $artifactHashes[$entry.Key]) {
+        throw 'Un artefacto o el verificador cambió durante la verificación inicial.'
+    }
+}
 
 New-Item -ItemType Directory -Path $workspace -Force | Out-Null
 $stamp = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+$sealed = Join-Path $workspace ("sellada-$ExpectedVersion-$stamp")
 $staging = Join-Path $workspace ("stage-$ExpectedVersion-$stamp")
 $backup = Join-Path (Split-Path -Parent $installation) ((Split-Path -Leaf $installation) + "-respaldo-lab-$stamp")
 $failed = Join-Path $workspace ("fallida-$ExpectedVersion-$stamp")
-foreach ($path in @($staging, $backup, $failed)) {
+foreach ($path in @($sealed, $staging, $backup, $failed)) {
     Assert-SafePath -Path $path -Description 'La ruta temporal'
     if (Test-Path -LiteralPath $path) { throw "La ruta temporal ya existe: $path" }
 }
 
-New-Item -ItemType Directory -Path $staging | Out-Null
+$sourceLeaves = @($artifactSources.Values | ForEach-Object { Split-Path -Leaf $_ })
+if (@($sourceLeaves | Sort-Object -Unique).Count -ne $sourceLeaves.Count) {
+    throw 'Los artefactos y el verificador deben tener nombres de archivo distintos.'
+}
+New-PrivateDirectory -Path $sealed
+$sealedArchive = Join-Path $sealed (Split-Path -Leaf $archive)
+$sealedManifest = Join-Path $sealed (Split-Path -Leaf $manifest)
+$sealedChecksum = Join-Path $sealed (Split-Path -Leaf $checksum)
+$sealedVerifier = Join-Path $sealed (Split-Path -Leaf $verifier)
+Copy-Item -LiteralPath $archive -Destination $sealedArchive
+Copy-Item -LiteralPath $manifest -Destination $sealedManifest
+Copy-Item -LiteralPath $checksum -Destination $sealedChecksum
+Copy-Item -LiteralPath $verifier -Destination $sealedVerifier
+$sealedArtifacts = [ordered]@{
+    archive = $sealedArchive
+    manifest = $sealedManifest
+    checksum = $sealedChecksum
+    verifier = $sealedVerifier
+}
+foreach ($entry in $sealedArtifacts.GetEnumerator()) {
+    if ((Get-FileSha256Hex -Path $entry.Value) -cne $artifactHashes[$entry.Key]) {
+        throw 'La copia privada no coincide con los artefactos verificados.'
+    }
+}
+
+$sealedVerificationOutput = @(
+    & $verifierPythonPath $sealedVerifier verify --archive $sealedArchive --manifest $sealedManifest --checksum $sealedChecksum
+)
+if ($LASTEXITCODE -ne 0) { throw 'La copia privada de la release no superó la verificación.' }
+try {
+    $sealedVerification = ($sealedVerificationOutput -join [Environment]::NewLine) | ConvertFrom-Json
+}
+catch { throw 'El verificador privado no devolvió un resultado JSON válido.' }
+if (
+    $sealedVerification.status -ne 'ok' -or
+    [string]$sealedVerification.version -cne [string]$verification.version -or
+    [string]$sealedVerification.commit -cne [string]$verification.commit -or
+    [int]$sealedVerification.files -ne [int]$verification.files
+) {
+    throw 'La copia privada no coincide con la identidad de la release verificada.'
+}
+foreach ($entry in $sealedArtifacts.GetEnumerator()) {
+    if ((Get-FileSha256Hex -Path $entry.Value) -cne $artifactHashes[$entry.Key]) {
+        throw 'La copia privada cambió después de su verificación.'
+    }
+}
+
+New-PrivateDirectory -Path $staging
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-[IO.Compression.ZipFile]::ExtractToDirectory($archive, $staging)
+[IO.Compression.ZipFile]::ExtractToDirectory($sealedArchive, $staging)
 Assert-NoReparseTree -Path $staging -Description 'El staging extraído'
 $stagedVersionPath = Join-Path $staging 'VERSION'
 $stagedUpdater = Join-Path $staging 'actualizar-servidor.ps1'
@@ -439,6 +658,10 @@ try {
     # registrar tareas. El XML permanece sólo en memoria y no expone .env.
     $taskSnapshots = @(Get-ManagedTaskSnapshots)
 
+    $environmentImmediatelyBeforeStop = Get-VerifiedEnvironmentSnapshot `
+        -Path (Join-Path $installation '.env') `
+        -ExpectedHash $environmentHashBeforeSwap
+
     Write-Host 'Deteniendo el servicio saludable para conmutar el laboratorio...' -ForegroundColor Yellow
     Stop-LabService
     $serviceStopped = $true
@@ -448,7 +671,10 @@ try {
     $oldRootMoved = $true
     Move-Item -LiteralPath $staging -Destination $installation
     $candidatePromoted = $true
-    Copy-OperationalState -SourceRoot $backup -DestinationRoot $installation
+    Copy-OperationalState `
+        -SourceRoot $backup `
+        -DestinationRoot $installation `
+        -ExpectedEnvironmentHash $environmentHashBeforeSwap
 
     # La copia consistente ya terminó. El motor oficial volverá a adquirir este
     # mutex para su respaldo verificable sin bloquear a su propio proceso hijo.

@@ -6,6 +6,11 @@
     "El pedido cambió en otra terminal. Ya mostramos la versión más reciente; "
     + "revisa la comanda y vuelve a confirmar la operación."
   );
+  const CLAVE_ORIGEN_ADMIN = "tocayos_admin_origen_v1";
+
+  function origenAdministradorDesdePanel(panel = "") {
+    return panel === "movimientos" ? "ventas" : "inicio";
+  }
 
   function esUuid(valor) {
     return patronUuid.test(String(valor || ""));
@@ -120,6 +125,7 @@
     cuerpoConContratoTicket,
     despacharSolicitud,
     mensajeConflictoVersion,
+    origenAdministradorDesdePanel,
     requiereContratoTicket,
     resolverGuardadoNombreClienteLlevar,
     solicitarJson,
@@ -752,6 +758,9 @@
         body: JSON.stringify({ clave_administrador: clave }),
       });
       const destino = datos.destino || "/administrador/";
+      try {
+        sessionStorage.setItem(CLAVE_ORIGEN_ADMIN, origenAdministradorDesdePanel(panel));
+      } catch { /* El destino seguro sigue siendo Inicio cuando el almacenamiento no esta disponible. */ }
       window.location.assign(panel ? destino.replace(/#.*$/, "") + "#" + panel : destino);
     } catch (error) {
       toast(error.message, true);

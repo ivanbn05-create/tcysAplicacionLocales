@@ -3,6 +3,7 @@ import re
 from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from django.core.exceptions import ImproperlyConfigured
 
@@ -36,6 +37,27 @@ cargar_entorno_local()
 
 def env_bool(name, default=False):
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "si", "sí", "yes"}
+
+
+def env_int(name, default):
+    valor = os.getenv(name, str(default)).strip()
+    try:
+        return int(valor)
+    except (TypeError, ValueError) as exc:
+        raise ImproperlyConfigured(f"{name} debe ser un entero.") from exc
+
+
+def env_uuid_canonico(name):
+    valor = os.getenv(name, "").strip()
+    if not valor:
+        return ""
+    try:
+        identificador = UUID(valor)
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ImproperlyConfigured(f"{name} debe ser un UUID canonico.") from exc
+    if identificador.int == 0 or str(identificador) != valor:
+        raise ImproperlyConfigured(f"{name} debe ser un UUID canonico no nulo.")
+    return valor
 
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "").strip()
@@ -74,6 +96,34 @@ def host_permitido(host):
         return ":" not in host or (host.startswith("[") and host.endswith("]"))
     except ValueError:
         return bool(_HOST_DNS.fullmatch(host)) and ":" not in host
+
+
+def url_https_configurada(nombre, valor):
+    valor = str(valor or "").strip()
+    if not valor:
+        return ""
+    try:
+        uri = urlsplit(valor)
+        puerto = uri.port
+    except ValueError as exc:
+        raise ImproperlyConfigured(
+            f"{nombre} debe ser una URL HTTPS absoluta sin credenciales embebidas."
+        ) from exc
+    if (
+        any(caracter.isspace() for caracter in valor)
+        or uri.scheme.lower() != "https"
+        or not uri.netloc
+        or not uri.hostname
+        or uri.username is not None
+        or uri.password is not None
+        or uri.query
+        or uri.fragment
+        or (puerto is not None and not 1 <= puerto <= 65535)
+    ):
+        raise ImproperlyConfigured(
+            f"{nombre} debe ser una URL HTTPS absoluta sin credenciales, query ni fragmento."
+        )
+    return valor.rstrip("/")
 
 
 _hosts_configurados = os.getenv(
@@ -347,9 +397,9 @@ if PRINT_BACKEND == "tcp" and any(
 # SQLite hermana queda como respaldo para desarrollo sin conexión.
 PEDIDOS_SUCURSALES_DATABASE_URL = os.getenv("PEDIDOS_SUCURSALES_DATABASE_URL", "").strip()
 PEDIDOS_SUCURSALES_FUENTE = os.getenv("PEDIDOS_SUCURSALES_FUENTE", "desactivada").strip().lower()
-if PEDIDOS_SUCURSALES_FUENTE not in {"desactivada", "supabase", "sqlite"}:
+if PEDIDOS_SUCURSALES_FUENTE not in {"desactivada", "supabase", "sqlite", "api_v2"}:
     raise ImproperlyConfigured(
-        "PEDIDOS_SUCURSALES_FUENTE debe ser 'desactivada', 'supabase' o 'sqlite'."
+        "PEDIDOS_SUCURSALES_FUENTE debe ser desactivada, supabase, sqlite o api_v2."
     )
 PEDIDOS_SUCURSALES_POSTGRES = {
     "host": os.getenv("PEDIDOS_SUCURSALES_DB_HOST", "").strip(),
@@ -370,6 +420,110 @@ PEDIDOS_SUCURSALES_SYNC_SECONDS = int(os.getenv("PEDIDOS_SUCURSALES_SYNC_SECONDS
 PEDIDOS_SUCURSALES_HORA_INICIO = os.getenv("PEDIDOS_SUCURSALES_HORA_INICIO", "06:00")
 # Cinco minutos de gracia garantizan una lectura posterior al último pedido de las 17:30.
 PEDIDOS_SUCURSALES_HORA_FIN = os.getenv("PEDIDOS_SUCURSALES_HORA_FIN", "17:35")
+
+# API Pedidos v2. Se mantiene separada de Supabase y de las credenciales Central.
+PEDIDOS_API_BASE_URL = url_https_configurada(
+    "PEDIDOS_API_BASE_URL",
+    os.getenv("PEDIDOS_API_BASE_URL", ""),
+)
+PEDIDOS_API_ENDPOINT = os.getenv("PEDIDOS_API_ENDPOINT", "/api/v2/pos/pedidos/").strip()
+if (
+    not PEDIDOS_API_ENDPOINT.startswith("/")
+    or PEDIDOS_API_ENDPOINT.startswith("//")
+    or "?" in PEDIDOS_API_ENDPOINT
+    or "#" in PEDIDOS_API_ENDPOINT
+    or "\\" in PEDIDOS_API_ENDPOINT
+):
+    raise ImproperlyConfigured("PEDIDOS_API_ENDPOINT debe ser una ruta absoluta relativa al mismo origen.")
+PEDIDOS_API_TOKEN = os.getenv("PEDIDOS_API_TOKEN", "").strip()
+PEDIDOS_API_CA_BUNDLE = os.getenv("PEDIDOS_API_CA_BUNDLE", "").strip()
+try:
+    PEDIDOS_API_SUCURSAL_IDS = tuple(
+        sorted({
+            int(valor.strip())
+            for valor in os.getenv("PEDIDOS_API_SUCURSAL_IDS", "").split(",")
+            if valor.strip()
+        })
+    )
+except ValueError as exc:
+    raise ImproperlyConfigured("PEDIDOS_API_SUCURSAL_IDS solo acepta enteros positivos.") from exc
+if any(valor <= 0 for valor in PEDIDOS_API_SUCURSAL_IDS):
+    raise ImproperlyConfigured("PEDIDOS_API_SUCURSAL_IDS solo acepta enteros positivos.")
+PEDIDOS_API_PAGE_SIZE = env_int("PEDIDOS_API_PAGE_SIZE", 100)
+PEDIDOS_API_CONNECT_TIMEOUT_SECONDS = env_int("PEDIDOS_API_CONNECT_TIMEOUT_SECONDS", 5)
+PEDIDOS_API_READ_TIMEOUT_SECONDS = env_int("PEDIDOS_API_READ_TIMEOUT_SECONDS", 15)
+PEDIDOS_API_MAX_RESPONSE_BYTES = env_int("PEDIDOS_API_MAX_RESPONSE_BYTES", 1048576)
+PEDIDOS_API_MAX_RETRIES = env_int("PEDIDOS_API_MAX_RETRIES", 2)
+if not 1 <= PEDIDOS_API_PAGE_SIZE <= 500:
+    raise ImproperlyConfigured("PEDIDOS_API_PAGE_SIZE debe estar entre 1 y 500.")
+if not 1 <= PEDIDOS_API_CONNECT_TIMEOUT_SECONDS <= 30:
+    raise ImproperlyConfigured("PEDIDOS_API_CONNECT_TIMEOUT_SECONDS debe estar entre 1 y 30.")
+if not 1 <= PEDIDOS_API_READ_TIMEOUT_SECONDS <= 60:
+    raise ImproperlyConfigured("PEDIDOS_API_READ_TIMEOUT_SECONDS debe estar entre 1 y 60.")
+if not 4096 <= PEDIDOS_API_MAX_RESPONSE_BYTES <= 4 * 1024 * 1024:
+    raise ImproperlyConfigured("PEDIDOS_API_MAX_RESPONSE_BYTES debe estar entre 4096 y 4194304.")
+if not 0 <= PEDIDOS_API_MAX_RETRIES <= 5:
+    raise ImproperlyConfigured("PEDIDOS_API_MAX_RETRIES debe estar entre 0 y 5.")
+if PEDIDOS_API_TOKEN and not 32 <= len(PEDIDOS_API_TOKEN) <= 512:
+    raise ImproperlyConfigured("PEDIDOS_API_TOKEN debe tener entre 32 y 512 caracteres.")
+if PEDIDOS_API_CA_BUNDLE and not Path(PEDIDOS_API_CA_BUNDLE).is_file():
+    raise ImproperlyConfigured("PEDIDOS_API_CA_BUNDLE debe apuntar a un archivo existente.")
+if PEDIDOS_SUCURSALES_FUENTE == "api_v2":
+    if not PEDIDOS_API_BASE_URL or not PEDIDOS_API_TOKEN or not PEDIDOS_API_SUCURSAL_IDS:
+        raise ImproperlyConfigured(
+            "api_v2 exige PEDIDOS_API_BASE_URL, PEDIDOS_API_TOKEN "
+            "y PEDIDOS_API_SUCURSAL_IDS explicitos."
+        )
+
+# Backend Central candidato. Todos los flujos v2 permanecen apagados por defecto.
+CENTRAL_API_BASE_URL = url_https_configurada(
+    "CENTRAL_API_BASE_URL",
+    os.getenv("CENTRAL_API_BASE_URL", ""),
+)
+CENTRAL_BRANCH_ID = env_uuid_canonico("CENTRAL_BRANCH_ID")
+CENTRAL_BRANCH_CODE = os.getenv("CENTRAL_BRANCH_CODE", "").strip()
+CENTRAL_POS_INSTANCE_ID = env_uuid_canonico("CENTRAL_POS_INSTANCE_ID")
+if CENTRAL_BRANCH_CODE:
+    try:
+        CENTRAL_BRANCH_CODE = normalizar_clave_sucursal(CENTRAL_BRANCH_CODE)
+    except ValueError as exc:
+        raise ImproperlyConfigured("CENTRAL_BRANCH_CODE no es canonico.") from exc
+CENTRAL_INGEST_TOKEN = os.getenv("CENTRAL_INGEST_TOKEN", "").strip()
+CENTRAL_CATALOG_TOKEN = os.getenv("CENTRAL_CATALOG_TOKEN", "").strip()
+CENTRAL_API_CA_BUNDLE = os.getenv("CENTRAL_API_CA_BUNDLE", "").strip()
+CENTRAL_ENABLE_SALES_V2 = env_bool("CENTRAL_ENABLE_SALES_V2", False)
+CENTRAL_ENABLE_CUSTOMERS_V2 = env_bool("CENTRAL_ENABLE_CUSTOMERS_V2", False)
+CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2 = env_bool(
+    "CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2",
+    False,
+)
+CENTRAL_CONNECT_TIMEOUT_SECONDS = env_int("CENTRAL_CONNECT_TIMEOUT_SECONDS", 5)
+CENTRAL_READ_TIMEOUT_SECONDS = env_int("CENTRAL_READ_TIMEOUT_SECONDS", 15)
+CENTRAL_MAX_RESPONSE_BYTES = env_int("CENTRAL_MAX_RESPONSE_BYTES", 1048576)
+CENTRAL_SYNC_INTERVAL_SECONDS = env_int("CENTRAL_SYNC_INTERVAL_SECONDS", 300)
+if not 1 <= CENTRAL_CONNECT_TIMEOUT_SECONDS <= 30:
+    raise ImproperlyConfigured("CENTRAL_CONNECT_TIMEOUT_SECONDS debe estar entre 1 y 30.")
+if not 1 <= CENTRAL_READ_TIMEOUT_SECONDS <= 60:
+    raise ImproperlyConfigured("CENTRAL_READ_TIMEOUT_SECONDS debe estar entre 1 y 60.")
+if not 4096 <= CENTRAL_MAX_RESPONSE_BYTES <= 4 * 1024 * 1024:
+    raise ImproperlyConfigured("CENTRAL_MAX_RESPONSE_BYTES debe estar entre 4096 y 4194304.")
+if not 30 <= CENTRAL_SYNC_INTERVAL_SECONDS <= 86400:
+    raise ImproperlyConfigured("CENTRAL_SYNC_INTERVAL_SECONDS debe estar entre 30 y 86400.")
+if CENTRAL_ENABLE_SALES_V2 or CENTRAL_ENABLE_CUSTOMERS_V2 or CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2:
+    if not CENTRAL_API_BASE_URL or not CENTRAL_BRANCH_ID or not CENTRAL_BRANCH_CODE or not CENTRAL_POS_INSTANCE_ID:
+        raise ImproperlyConfigured(
+            "Un flujo Central v2 activo exige URL, branch UUID/codigo e instance UUID."
+        )
+if CENTRAL_INGEST_TOKEN and not 32 <= len(CENTRAL_INGEST_TOKEN) <= 512:
+    raise ImproperlyConfigured("CENTRAL_INGEST_TOKEN debe tener entre 32 y 512 caracteres.")
+if CENTRAL_CATALOG_TOKEN and not 32 <= len(CENTRAL_CATALOG_TOKEN) <= 512:
+    raise ImproperlyConfigured("CENTRAL_CATALOG_TOKEN debe tener entre 32 y 512 caracteres.")
+if (CENTRAL_ENABLE_SALES_V2 or CENTRAL_ENABLE_CUSTOMERS_V2) and not CENTRAL_INGEST_TOKEN:
+    raise ImproperlyConfigured("Ventas/clientes v2 exigen CENTRAL_INGEST_TOKEN independiente.")
+if CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2 and not CENTRAL_CATALOG_TOKEN:
+    raise ImproperlyConfigured("Catalogo v2 exige CENTRAL_CATALOG_TOKEN independiente.")
+if CENTRAL_API_CA_BUNDLE and not Path(CENTRAL_API_CA_BUNDLE).is_file():
+    raise ImproperlyConfigured("CENTRAL_API_CA_BUNDLE debe apuntar a un archivo existente.")
 
 # Consolidación mensual Edge -> VPS. URL y token vacíos mantienen los envíos desactivados.
 VPS_CONSOLIDACION_URL = os.getenv("VPS_CONSOLIDACION_URL", "").strip()
@@ -407,4 +561,19 @@ except ValueError as exc:
 if not 1 <= VPS_CONSOLIDACION_TIMEOUT <= 60:
     raise ImproperlyConfigured(
         "VPS_CONSOLIDACION_TIMEOUT debe ser un entero entre 1 y 60 segundos."
+    )
+
+_tokens_remotos_configurados = tuple(
+    token
+    for token in (
+        PEDIDOS_API_TOKEN,
+        CENTRAL_INGEST_TOKEN,
+        CENTRAL_CATALOG_TOKEN,
+        VPS_CONSOLIDACION_TOKEN,
+    )
+    if token
+)
+if len(_tokens_remotos_configurados) != len(set(_tokens_remotos_configurados)):
+    raise ImproperlyConfigured(
+        "Cada flujo remoto debe usar una credencial distinta; revisa los tokens configurados."
     )

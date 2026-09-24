@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "retention_gap",
+    "message": "El cursor legado de época numérica no es compatible con v2; se requiere resincronización supervisada.",
+    "request_id": "pedidos-v2-cursor-legacy-001"
+  }
+}

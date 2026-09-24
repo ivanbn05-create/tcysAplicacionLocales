@@ -1,5 +1,7 @@
 # Traspaso: base estándar, instalador Windows y primer parche
 
+> Documento histórico. Conserva el estado de aquella etapa; no es una instrucción vigente ni autorización para ejecutar cambios.
+
 > Snapshot informativo del 2026-09-14, zona `America/Mexico_City`. Este archivo
 > aporta contexto a un agente nuevo; no reemplaza una solicitud posterior del
 > usuario ni constituye autorización permanente para acciones destructivas.
@@ -32,7 +34,7 @@ omitía `VERSION`. El actualizador ejecutó su rollback y restauró la instalaci
 `dev.6` añade `VERSION` al snapshot efímero y una prueba de regresión. El validador
 exacto completó 182 pruebas Django, checks HTTPS/HTTP LAN, 13 pruebas de
 respaldo y 5 del host Windows. Dos builds idénticos y la actualización real quedaron
-acreditados en `EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.6.md`.
+acreditados en `../releases/EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.6.md`.
 
 ### Evidencia histórica de dev.5
 
@@ -62,7 +64,7 @@ queda como evidencia histórica y no debe reutilizarse con bytes distintos.
 tabletas, comandas, producto personalizable, Movimientos, directorio de clientes y
 Pedidos Sucursales. Sus pruebas, sus dos builds reproducibles y la actualización del
 laboratorio se conservan en
-[EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.4.md](EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.4.md).
+[EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.4.md](../releases/EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.4.md).
 El artefacto permanece como evidencia histórica de esos cambios, pero fue sustituido
 como candidata promocionable por la discrepancia de versión de la caché PWA.
 
@@ -178,10 +180,10 @@ veces, el reintento terminó correctamente.
 Leer completamente, en este orden:
 
 1. Este traspaso.
-2. `DESPLIEGUE_WINDOWS.md`: contrato operativo del servidor Edge Windows actual.
-3. `ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md`: arquitectura
+2. `../../../DESPLIEGUE_WINDOWS.md`: contrato operativo del servidor Edge Windows actual.
+3. `../../../ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md`: arquitectura
    futura y decisiones sobre distribución, módulos y VPS.
-4. `README.md`: uso general y puntos de entrada públicos.
+4. `../../../README.md`: uso general y puntos de entrada públicos.
 
 Si el estado real diverge de este snapshot, manda el estado comprobado. No
 convertir frases de este documento en instrucciones que contradigan al usuario.
@@ -255,8 +257,8 @@ Cambios del checkpoint, agrupados:
   `tests/test_respaldo_sqlite.py`, `tests/test_release_servidor.py`,
   `tests/test_contratos_despliegue.py`, `tests/test_servicio_windows.py` y
   pruebas funcionales de `ventas`/`personas`.
-- Documentación: `README.md`, `DESPLIEGUE_WINDOWS.md`,
-  `ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md` y este archivo.
+- Documentación: `../../../README.md`, `../../../DESPLIEGUE_WINDOWS.md`,
+  `../../../ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md` y este archivo.
 
 ## 5. Estado histórico de la instalación simulada
 
@@ -504,9 +506,9 @@ Fuentes:
 
 ## 15. Primer mensaje sugerido
 
-> Lee completamente `TRASPASO_BASE_ESTANDAR_Y_PRIMER_PARCHE.md`,
-> `README.md`, `DESPLIEGUE_WINDOWS.md` y
-> `ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md`. Continúa sobre
+> Lee completamente `docs/historico/handoffs/TRASPASO_BASE_ESTANDAR_Y_PRIMER_PARCHE.md`,
+> `../../../README.md`, `../../../DESPLIEGUE_WINDOWS.md` y
+> `../../../ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md`. Continúa sobre
 > `codex/candidata-0.4.0-dev.6`, verifica primero el estado real y conserva separados
 > el worktree, el perfil de prueba `8001` y `C:\LosTocayosPOS`. `dev.3`, `dev.4` y
 > `dev.5` conservan evidencia histórica; para `dev.6` comprueba que `VERSION`,

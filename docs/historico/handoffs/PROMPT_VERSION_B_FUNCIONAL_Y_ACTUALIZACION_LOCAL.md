@@ -1,5 +1,7 @@
 # Prompt para implementar la versión B funcional y actualizar el laboratorio
 
+> Documento histórico. Conserva el encargo de esa etapa; no es una instrucción vigente ni autorización para ejecutar cambios.
+
 Trabaja como agente principal de desarrollo sobre el proyecto POS **Los Tocayos
 Tacos de Barbacoa**. Continúa hasta dejar una candidata instalable, probada y
 documentada. No te limites a proponer un plan.

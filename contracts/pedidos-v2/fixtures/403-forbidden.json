@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "forbidden",
+    "message": "La credencial no autoriza la sucursal solicitada.",
+    "request_id": "pedidos-v2-403-001"
+  }
+}

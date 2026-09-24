@@ -10,7 +10,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import TrabajoImpresion
+from .models import ConfiguracionImpresionTerminal, TrabajoImpresion
 from .render import (
     enviar_tcp,
     guardar_png,
@@ -105,7 +105,48 @@ def purgar_vistas_previas(forzar=False):
         _purga_lock.release()
 
 
-def encolar_impresiones(ticket, formato, comanda_numero=None):
+def resolver_ruta_impresion(sucursal, device_id, destino):
+    """Resuelve una ruta y devuelve un snapshot que el worker no recalcula."""
+
+    identificador = str(device_id or "").strip()
+    if len(identificador) > 128 or any(ord(caracter) < 32 for caracter in identificador):
+        identificador = ""
+    configuracion = None
+    if identificador:
+        configuracion = (
+            ConfiguracionImpresionTerminal.objects.filter(
+                sucursal=sucursal,
+                device_id=identificador,
+                activa=True,
+            )
+            .only(
+                "device_id",
+                "host_caja",
+                "host_cocina",
+                "host_barra",
+                "puerto",
+            )
+            .first()
+        )
+    if configuracion is not None:
+        host = configuracion.host_para(destino)
+        if host:
+            return {
+                "device_id": identificador,
+                "printer_host": str(host),
+                "printer_port": int(configuracion.puerto),
+                "origen_ruta": "terminal",
+            }
+    host = str(settings.PRINTER_HOSTS.get(destino) or "").strip()
+    return {
+        "device_id": identificador,
+        "printer_host": host or None,
+        "printer_port": int(settings.PRINTER_PORT),
+        "origen_ruta": "legacy_env",
+    }
+
+
+def encolar_impresiones(ticket, formato, comanda_numero=None, device_id=""):
     purgar_vistas_previas()
     destinos = []
     numero_trabajo = None
@@ -129,23 +170,26 @@ def encolar_impresiones(ticket, formato, comanda_numero=None):
                 destinos.append(TrabajoImpresion.Destino.COCINA)
             if any(p.producto.destino_impresion == "barra" for p in productos):
                 destinos.append(TrabajoImpresion.Destino.BARRA)
-    trabajos = [
-        TrabajoImpresion.objects.create(
-            sucursal=ticket.sucursal,
-            ticket=ticket,
-            formato=formato,
-            destino=destino,
-            comanda_numero=numero_trabajo,
+    trabajos = []
+    for destino in destinos:
+        ruta = resolver_ruta_impresion(ticket.sucursal, device_id, destino)
+        trabajos.append(
+            TrabajoImpresion.objects.create(
+                sucursal=ticket.sucursal,
+                ticket=ticket,
+                formato=formato,
+                destino=destino,
+                comanda_numero=numero_trabajo,
+                **ruta,
+            )
         )
-        for destino in destinos
-    ]
     if settings.PRINT_SYNC:
         for trabajo in trabajos:
             procesar_trabajo(trabajo)
     return trabajos
 
 
-def encolar_reporte(reporte):
+def encolar_reporte(reporte, device_id=""):
     formatos = {
         "liquidacion": TrabajoImpresion.Formato.LIQUIDACION,
         "parcial": TrabajoImpresion.Formato.PARCIAL,
@@ -153,11 +197,17 @@ def encolar_reporte(reporte):
         "corte_sucursal": TrabajoImpresion.Formato.CORTE_SUCURSAL,
     }
     formato = formatos[reporte.tipo]
+    ruta = resolver_ruta_impresion(
+        reporte.sucursal,
+        device_id,
+        TrabajoImpresion.Destino.CAJA,
+    )
     trabajo = TrabajoImpresion.objects.create(
         sucursal=reporte.sucursal,
         reporte=reporte,
         formato=formato,
         destino=TrabajoImpresion.Destino.CAJA,
+        **ruta,
     )
     if settings.PRINT_SYNC:
         procesar_trabajo(trabajo)
@@ -292,7 +342,14 @@ def procesar_trabajo(trabajo):
         trabajo.archivo = relativo
         trabajo.save(update_fields=["archivo"])
         if settings.PRINT_BACKEND == "tcp":
-            enviar_tcp(imagen, trabajo.destino)
+            host = trabajo.printer_host or settings.PRINTER_HOSTS[trabajo.destino]
+            puerto = trabajo.printer_port or settings.PRINTER_PORT
+            enviar_tcp(
+                imagen,
+                trabajo.destino,
+                host=host,
+                puerto=puerto,
+            )
             trabajo.estado = TrabajoImpresion.Estado.IMPRESO
         else:
             trabajo.estado = TrabajoImpresion.Estado.GENERADO

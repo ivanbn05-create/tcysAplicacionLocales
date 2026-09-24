@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "unauthorized",
+    "message": "Credencial ausente, inválida, expirada o revocada.",
+    "request_id": "pedidos-v2-401-001"
+  }
+}

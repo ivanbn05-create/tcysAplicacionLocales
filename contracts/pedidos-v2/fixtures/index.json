@@ -1,0 +1,228 @@
+{
+  "version": 1,
+  "candidate": {
+    "commit": "8fad56815f856b4286a2f60f488480960e34cde5",
+    "status": "candidate_unmerged_undeployed",
+    "v1_legacy_preserved": true
+  },
+  "operation": {
+    "method": "GET",
+    "path": "/api/v2/pos/pedidos/",
+    "required_scope": "orders:v2:read",
+    "identity_binding": "Una credencial propuesta por Edge ligada a una allowlist explícita de SucursalCliente.id. SucursalCliente no tiene codigo_publico; Pedido.codigo_publico es la identidad durable del pedido.",
+    "current_candidate_gap": "El candidato usa una allowlist global y todavía no liga token, Edge, scope y sucursal de forma individual."
+  },
+  "limits": {
+    "window_max_days": 31,
+    "edge_window_max_hours": 24,
+    "page_size_min": 1,
+    "page_size_max": 500,
+    "page_size_default": 100,
+    "cursor_max_chars": 2048,
+    "response_bytes_default": 1048576,
+    "response_bytes_config_min": 4096,
+    "response_bytes_config_max": 4194304,
+    "max_pages_per_window": 1000,
+    "max_items_per_order": 100
+  },
+  "cases": [
+    {
+      "name": "pagina_con_datos",
+      "request": {
+        "query": {
+          "desde": "2026-09-22T14:00:00.000000Z",
+          "hasta": "2026-09-22T15:00:00.000000Z",
+          "sucursal_id": "3",
+          "limite": "100"
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Authorization": "Bearer ${PEDIDOS_API_TOKEN}",
+          "Cache-Control": "no-store",
+          "X-Request-ID": "pedidos-v2-datos-001",
+          "User-Agent": "LosTocayosPOS/pedidos-api-v2"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Request-ID": "pedidos-v2-datos-001"
+        },
+        "schema": "schemas/pagina-pedidos-v2.schema.json",
+        "body": "fixtures/200-pagina-con-datos.json"
+      },
+      "expected_client_result": "PaginaPedidosV2(returned=1)"
+    },
+    {
+      "name": "pagina_vacia",
+      "request": {
+        "query": {
+          "desde": "2026-09-22T14:00:00.000000Z",
+          "hasta": "2026-09-22T15:00:00.000000Z",
+          "sucursal_id": "3",
+          "limite": "100"
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Authorization": "Bearer ${PEDIDOS_API_TOKEN}",
+          "Cache-Control": "no-store",
+          "X-Request-ID": "pedidos-v2-vacia-001",
+          "User-Agent": "LosTocayosPOS/pedidos-api-v2"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Request-ID": "pedidos-v2-vacia-001"
+        },
+        "schema": "schemas/pagina-pedidos-v2.schema.json",
+        "body": "fixtures/200-pagina-vacia.json"
+      },
+      "expected_client_result": "PaginaPedidosV2(returned=0)"
+    },
+    {
+      "name": "credencial_invalida",
+      "request": {
+        "query": {
+          "desde": "2026-09-22T14:00:00.000000Z",
+          "hasta": "2026-09-22T15:00:00.000000Z",
+          "sucursal_id": "3",
+          "limite": "100"
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Authorization": "Bearer ${PEDIDOS_API_TOKEN}",
+          "Cache-Control": "no-store",
+          "X-Request-ID": "pedidos-v2-401-001",
+          "User-Agent": "LosTocayosPOS/pedidos-api-v2"
+        }
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Request-ID": "pedidos-v2-401-001"
+        },
+        "schema": "schemas/error-pedidos-v2.schema.json",
+        "body": "fixtures/401-unauthorized.json"
+      },
+      "expected_client_result": "ErrorAutenticacionPedidos"
+    },
+    {
+      "name": "sucursal_fuera_de_scope",
+      "request": {
+        "query": {
+          "desde": "2026-09-22T14:00:00.000000Z",
+          "hasta": "2026-09-22T15:00:00.000000Z",
+          "sucursal_id": "3",
+          "limite": "100"
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Authorization": "Bearer ${PEDIDOS_API_TOKEN}",
+          "Cache-Control": "no-store",
+          "X-Request-ID": "pedidos-v2-403-001",
+          "User-Agent": "LosTocayosPOS/pedidos-api-v2"
+        }
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Request-ID": "pedidos-v2-403-001"
+        },
+        "schema": "schemas/error-pedidos-v2.schema.json",
+        "body": "fixtures/403-forbidden.json"
+      },
+      "expected_client_result": "ErrorAlcancePedidos"
+    },
+    {
+      "name": "retention_gap_cursor_firmado",
+      "request": {
+        "query": {
+          "desde": "2026-08-01T00:00:00.000000Z",
+          "hasta": "2026-08-02T00:00:00.000000Z",
+          "sucursal_id": "3",
+          "limite": "100",
+          "cursor": "eyJ2IjoyLCJlcG9jaCI6ImNhbmRpZGF0YSJ9.firma-sintetica"
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Authorization": "Bearer ${PEDIDOS_API_TOKEN}",
+          "Cache-Control": "no-store",
+          "X-Request-ID": "pedidos-v2-gap-001",
+          "User-Agent": "LosTocayosPOS/pedidos-api-v2"
+        }
+      },
+      "response": {
+        "status": 410,
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Request-ID": "pedidos-v2-gap-001"
+        },
+        "schema": "schemas/error-pedidos-v2.schema.json",
+        "body": "fixtures/410-retention-gap.json"
+      },
+      "expected_client_result": "ErrorBrechaRetencion(RECONCILIACION_REQUERIDA)"
+    },
+    {
+      "name": "cursor_legado_numerico",
+      "request": {
+        "query": {
+          "desde": "2026-08-01T00:00:00.000000Z",
+          "hasta": "2026-08-02T00:00:00.000000Z",
+          "sucursal_id": "3",
+          "limite": "100",
+          "cursor": "1727034600123456"
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Authorization": "Bearer ${PEDIDOS_API_TOKEN}",
+          "Cache-Control": "no-store",
+          "X-Request-ID": "pedidos-v2-cursor-legacy-001",
+          "User-Agent": "LosTocayosPOS/pedidos-api-v2"
+        }
+      },
+      "response": {
+        "status": 410,
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Request-ID": "pedidos-v2-cursor-legacy-001"
+        },
+        "schema": "schemas/error-pedidos-v2.schema.json",
+        "body": "fixtures/410-cursor-legado-numerico.json"
+      },
+      "expected_client_result": "ErrorBrechaRetencion(RECONCILIACION_REQUERIDA)"
+    },
+    {
+      "name": "pagina_returned_inconsistente",
+      "request": {
+        "query": {
+          "desde": "2026-09-22T14:00:00.000000Z",
+          "hasta": "2026-09-22T15:00:00.000000Z",
+          "sucursal_id": "3",
+          "limite": "100"
+        },
+        "headers": {
+          "Accept": "application/json",
+          "Authorization": "Bearer ${PEDIDOS_API_TOKEN}",
+          "Cache-Control": "no-store",
+          "X-Request-ID": "pedidos-v2-invalida-001",
+          "User-Agent": "LosTocayosPOS/pedidos-api-v2"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Request-ID": "pedidos-v2-invalida-001"
+        },
+        "schema": "schemas/pagina-pedidos-v2.schema.json",
+        "body": "fixtures/invalid/200-pagina-returned-inconsistente.json"
+      },
+      "expected_client_result": "ErrorContratoPedidos"
+    }
+  ]
+}

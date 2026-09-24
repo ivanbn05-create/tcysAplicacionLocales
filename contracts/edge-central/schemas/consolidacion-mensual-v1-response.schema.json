@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.lostocayos.invalid/edge-central/consolidacion-mensual-v1-response.schema.json",
+  "title": "Acuse de consolidación mensual v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recibido", "acuse", "estado"],
+  "properties": {
+    "recibido": {"const": true},
+    "acuse": {"type": "string", "format": "uuid"},
+    "estado": {"type": "string", "enum": ["recibido", "purgado"]}
+  }
+}

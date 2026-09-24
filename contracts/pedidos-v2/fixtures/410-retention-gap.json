@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "retention_gap",
+    "message": "El cursor quedó fuera de la retención disponible; se requiere conciliación.",
+    "request_id": "pedidos-v2-gap-001"
+  }
+}

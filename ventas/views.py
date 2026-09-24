@@ -1,4 +1,6 @@
+import ipaddress
 import json
+import re
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import wraps
@@ -7,7 +9,7 @@ from uuid import UUID
 
 from django.conf import settings
 from django.core.exceptions import RequestDataTooBig, ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.templatetags.static import static
@@ -17,7 +19,7 @@ from django.utils.cache import patch_cache_control
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from catalogo.models import Producto
-from impresion.models import TrabajoImpresion
+from impresion.models import ConfiguracionImpresionTerminal, TrabajoImpresion
 from impresion.services import encolar_impresiones, encolar_reporte, estado_impresora
 from personas.models import Rol, Sucursal, UsuarioPOS
 from personas.modulos import modulo_habilitado, modulos_efectivos
@@ -244,11 +246,13 @@ PERMISOS_ADMINISTRADOR = {
     "gestionar_usuarios": True,
     "reiniciar_folios": True,
     "cambiar_clave_maestra": True,
+    "gestionar_configuracion_tecnica": True,
 }
 PERMISOS_ELEVADO = {
     "gestionar_usuarios": False,
     "reiniciar_folios": False,
     "cambiar_clave_maestra": False,
+    "gestionar_configuracion_tecnica": False,
 }
 
 
@@ -377,6 +381,137 @@ def _device_id(request, datos=None):
     return device_id
 
 
+CAMPOS_CONFIGURACION_IMPRESION = frozenset(
+    {
+        "nombre",
+        "device_id",
+        "host_caja",
+        "host_cocina",
+        "host_barra",
+        "puerto",
+        "activa",
+    }
+)
+CAMPOS_HOST_IMPRESION = ("host_caja", "host_cocina", "host_barra")
+PATRON_DEVICE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+
+
+def _normalizar_device_id_configuracion(valor):
+    if not isinstance(valor, str):
+        raise ErrorSolicitudJSON("El identificador del dispositivo debe ser texto.")
+    device_id = valor.strip()
+    if not PATRON_DEVICE_ID.fullmatch(device_id):
+        raise ErrorSolicitudJSON(
+            "El identificador del dispositivo sólo admite letras, números, punto, guion, guion bajo y dos puntos."
+        )
+    return device_id
+
+
+def _normalizar_nombre_configuracion_impresion(valor):
+    if not isinstance(valor, str):
+        raise ErrorSolicitudJSON("El nombre de la terminal debe ser texto.")
+    nombre = valor.strip()
+    if not nombre or len(nombre) > 100 or any(ord(caracter) < 32 for caracter in nombre):
+        raise ErrorSolicitudJSON(
+            "El nombre de la terminal debe contener entre 1 y 100 caracteres válidos."
+        )
+    return nombre
+
+
+def _normalizar_host_impresion(valor, etiqueta):
+    if valor is None or valor == "":
+        return None
+    if not isinstance(valor, str) or valor != valor.strip():
+        raise ErrorSolicitudJSON(f"{etiqueta} debe ser una dirección IP válida o quedar vacío.")
+    try:
+        direccion = ipaddress.ip_address(valor)
+    except ValueError as exc:
+        raise ErrorSolicitudJSON(
+            f"{etiqueta} debe ser una dirección IPv4 o IPv6 válida, sin protocolo ni puerto."
+        ) from exc
+    if direccion.is_unspecified or direccion.is_multicast:
+        raise ErrorSolicitudJSON(f"{etiqueta} no puede ser una dirección no especificada o multicast.")
+    return direccion.compressed
+
+
+def _normalizar_puerto_impresion(valor):
+    if isinstance(valor, bool):
+        raise ErrorSolicitudJSON("El puerto debe ser un entero entre 1 y 65535.")
+    if isinstance(valor, int):
+        puerto = valor
+    elif isinstance(valor, str) and valor.isascii() and valor.isdigit():
+        puerto = int(valor)
+    else:
+        raise ErrorSolicitudJSON("El puerto debe ser un entero entre 1 y 65535.")
+    if not 1 <= puerto <= 65535:
+        raise ErrorSolicitudJSON("El puerto debe estar entre 1 y 65535.")
+    return puerto
+
+
+def _datos_configuracion_impresion(datos, *, parcial=False):
+    desconocidos = sorted(set(datos) - CAMPOS_CONFIGURACION_IMPRESION)
+    if desconocidos:
+        raise ErrorSolicitudJSON(
+            "El cuerpo contiene campos no permitidos: " + ", ".join(desconocidos) + "."
+        )
+    if parcial and not datos:
+        raise ErrorSolicitudJSON("Indica al menos un campo para actualizar.")
+    if not parcial:
+        faltantes = sorted({"nombre", "device_id"} - set(datos))
+        if faltantes:
+            raise ErrorSolicitudJSON(
+                "Faltan campos obligatorios: " + ", ".join(faltantes) + "."
+            )
+
+    resultado = {}
+    if "nombre" in datos:
+        resultado["nombre"] = _normalizar_nombre_configuracion_impresion(datos["nombre"])
+    if "device_id" in datos:
+        resultado["device_id"] = _normalizar_device_id_configuracion(datos["device_id"])
+    etiquetas_host = {
+        "host_caja": "La IP de caja",
+        "host_cocina": "La IP de cocina",
+        "host_barra": "La IP de barra",
+    }
+    for campo in CAMPOS_HOST_IMPRESION:
+        if campo in datos:
+            resultado[campo] = _normalizar_host_impresion(datos[campo], etiquetas_host[campo])
+    if "puerto" in datos:
+        resultado["puerto"] = _normalizar_puerto_impresion(datos["puerto"])
+    if "activa" in datos:
+        if not isinstance(datos["activa"], bool):
+            raise ErrorSolicitudJSON("El estado activo debe ser verdadero o falso.")
+        resultado["activa"] = datos["activa"]
+    return resultado
+
+
+def _configuracion_impresion_payload(configuracion):
+    return {
+        "id": str(configuracion.id),
+        "nombre": configuracion.nombre,
+        "device_id": configuracion.device_id,
+        "host_caja": configuracion.host_caja or "",
+        "host_cocina": configuracion.host_cocina or "",
+        "host_barra": configuracion.host_barra or "",
+        "puerto": configuracion.puerto,
+        "activa": configuracion.activa,
+        "actualizado_en": configuracion.actualizado_en.isoformat(),
+    }
+
+
+def _respuesta_configuracion_impresion(payload, *, status=200):
+    respuesta = JsonResponse(payload, status=status)
+    patch_cache_control(respuesta, no_store=True, private=True)
+    return respuesta
+
+
+def _error_configuracion_impresion(mensaje, *, status=400, codigo=""):
+    payload = {"error": mensaje}
+    if codigo:
+        payload["codigo"] = codigo
+    return _respuesta_configuracion_impresion(payload, status=status)
+
+
 def _operador_actual_pos(request, sucursal):
     perfil_id = request.session.get("mesero_pos_id")
     if perfil_id:
@@ -386,7 +521,11 @@ def _operador_actual_pos(request, sucursal):
             activo=True,
         ).first()
     if not getattr(settings, "POS_REQUIRE_AUTH", True):
-        return UsuarioPOS.objects.filter(sucursal=sucursal, activo=True).first()
+        return UsuarioPOS.objects.filter(
+            sucursal=sucursal,
+            activo=True,
+            es_sistema=False,
+        ).first()
     return None
 
 
@@ -1546,11 +1685,11 @@ def api_procesar(request, ticket_id):
             ticket, device_id = _asegurar_edicion_ticket(request, ticket, datos)
             ticket = procesar_ticket(ticket)
         if ticket.canal == Mesa.Canal.SUCURSALES:
-            trabajos = list(encolar_impresiones(ticket, TrabajoImpresion.Formato.SUCURSAL))
+            trabajos = list(encolar_impresiones(ticket, TrabajoImpresion.Formato.SUCURSAL, device_id=device_id))
         else:
-            trabajos = list(encolar_impresiones(ticket, TrabajoImpresion.Formato.COMANDA))
+            trabajos = list(encolar_impresiones(ticket, TrabajoImpresion.Formato.COMANDA, device_id=device_id))
         if ticket.canal == Mesa.Canal.DOMICILIO:
-            trabajos.extend(encolar_impresiones(ticket, TrabajoImpresion.Formato.DOMICILIO))
+            trabajos.extend(encolar_impresiones(ticket, TrabajoImpresion.Formato.DOMICILIO, device_id=device_id))
         return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id), "impresiones": _trabajos_payload(trabajos)})
     except ErrorVenta as exc:
         return _respuesta_error_venta(exc, device_id)
@@ -1666,8 +1805,10 @@ def api_cancelar(request, ticket_id):
 @require_POST
 def api_imprimir(request, ticket_id):
     try:
+        datos = _json(request)
+        device_id = _device_id(request, datos)
         ticket = _ticket(ticket_id)
-        formato = _json(request).get("formato", "cuenta")
+        formato = datos.get("formato", "cuenta")
         formatos_operativos = {
             TrabajoImpresion.Formato.COMANDA,
             TrabajoImpresion.Formato.CUENTA,
@@ -1695,7 +1836,7 @@ def api_imprimir(request, ticket_id):
             Ticket.Estado.PAGADO,
         } or ticket.comanda_en_edicion:
             raise ErrorVenta("Procesa la comanda actual antes de imprimir.")
-        trabajos = encolar_impresiones(ticket, formato)
+        trabajos = encolar_impresiones(ticket, formato, device_id=device_id)
         return JsonResponse({"impresiones": _trabajos_payload(trabajos)})
     except ErrorVenta as exc:
         return JsonResponse({"error": str(exc)}, status=400)
@@ -1767,6 +1908,109 @@ def api_admin_resumen(request):
         "permisos": dict(request.acceso_administrador["permisos"]),
     }
     return JsonResponse({"administrador": resumen})
+
+
+@require_http_methods(["GET", "POST"])
+@acceso_administrador_maestro
+def api_admin_configuraciones_impresion(request):
+    sucursal = _sucursal()
+    if request.method == "GET":
+        configuraciones = ConfiguracionImpresionTerminal.objects.filter(
+            sucursal=sucursal
+        ).order_by("nombre", "device_id")
+        return _respuesta_configuracion_impresion(
+            {
+                "configuraciones": [
+                    _configuracion_impresion_payload(configuracion)
+                    for configuracion in configuraciones
+                ]
+            }
+        )
+
+    try:
+        datos = _datos_configuracion_impresion(_json(request))
+        datos.setdefault("host_caja", None)
+        datos.setdefault("host_cocina", None)
+        datos.setdefault("host_barra", None)
+        datos.setdefault("puerto", 9100)
+        datos.setdefault("activa", True)
+        if ConfiguracionImpresionTerminal.objects.filter(
+            sucursal=sucursal,
+            device_id=datos["device_id"],
+        ).exists():
+            return _error_configuracion_impresion(
+                "Ya existe una ruta de impresión para ese dispositivo.",
+                status=409,
+                codigo="device_id_duplicado",
+            )
+        configuracion = ConfiguracionImpresionTerminal(
+            sucursal=sucursal,
+            **datos,
+        )
+        configuracion.full_clean()
+        configuracion.save()
+    except ErrorVenta as exc:
+        return _error_configuracion_impresion(str(exc))
+    except ValidationError:
+        return _error_configuracion_impresion(
+            "Los datos de la ruta de impresión no son válidos."
+        )
+    except IntegrityError:
+        return _error_configuracion_impresion(
+            "Ya existe una ruta de impresión para ese dispositivo.",
+            status=409,
+            codigo="device_id_duplicado",
+        )
+    return _respuesta_configuracion_impresion(
+        {"configuracion": _configuracion_impresion_payload(configuracion)},
+        status=201,
+    )
+
+
+@require_http_methods(["PATCH"])
+@acceso_administrador_maestro
+def api_admin_configuracion_impresion(request, configuracion_id):
+    try:
+        datos = _datos_configuracion_impresion(_json(request), parcial=True)
+        with transaction.atomic():
+            configuracion = ConfiguracionImpresionTerminal.objects.select_for_update().get(
+                pk=configuracion_id,
+                sucursal=_sucursal(),
+            )
+            device_id = datos.get("device_id")
+            if device_id and ConfiguracionImpresionTerminal.objects.filter(
+                sucursal=configuracion.sucursal,
+                device_id=device_id,
+            ).exclude(pk=configuracion.pk).exists():
+                return _error_configuracion_impresion(
+                    "Ya existe una ruta de impresión para ese dispositivo.",
+                    status=409,
+                    codigo="device_id_duplicado",
+                )
+            for campo, valor in datos.items():
+                setattr(configuracion, campo, valor)
+            configuracion.full_clean()
+            configuracion.save()
+    except ConfiguracionImpresionTerminal.DoesNotExist:
+        return _error_configuracion_impresion(
+            "La ruta de impresión ya no existe.",
+            status=404,
+        )
+    except ErrorVenta as exc:
+        return _error_configuracion_impresion(str(exc))
+    except ValidationError:
+        return _error_configuracion_impresion(
+            "Los datos de la ruta de impresión no son válidos."
+        )
+    except IntegrityError:
+        return _error_configuracion_impresion(
+            "Ya existe una ruta de impresión para ese dispositivo.",
+            status=409,
+            codigo="device_id_duplicado",
+        )
+    return _respuesta_configuracion_impresion(
+        {"configuracion": _configuracion_impresion_payload(configuracion)}
+    )
 
 
 @require_POST
@@ -1950,8 +2194,9 @@ def api_admin_cancelar_ticket(request, ticket_id):
         return JsonResponse({"error": str(exc)}, status=400)
 
 
-def _respuesta_reporte(reporte, extra=None):
-    trabajos = encolar_reporte(reporte)
+def _respuesta_reporte(request, reporte, extra=None):
+    device_id = _device_id(request)
+    trabajos = encolar_reporte(reporte, device_id=device_id)
     respuesta = {"reporte_id": str(reporte.id), "impresiones": _trabajos_payload(trabajos)}
     if extra:
         respuesta.update(extra)
@@ -1982,6 +2227,7 @@ def api_admin_liquidacion_repartidor(request):
             datos.get("fondo", "0"),
         )
         return _respuesta_reporte(
+            request,
             reporte,
             {"liquidacion_id": str(liquidacion.id), "total_a_entregar": str(liquidacion.total_a_entregar)},
         )
@@ -1997,7 +2243,7 @@ def api_admin_reporte_parcial(request):
     try:
         datos = _json(request)
         sucursal = _sucursal()
-        return _respuesta_reporte(crear_reporte_parcial(sucursal))
+        return _respuesta_reporte(request, crear_reporte_parcial(sucursal))
     except ErrorVenta as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
@@ -2122,7 +2368,7 @@ def api_admin_reimprimir_reporte(request, reporte_id):
             pk=reporte_id,
             sucursal=_sucursal(),
         )
-        return _respuesta_reporte(reporte)
+        return _respuesta_reporte(request, reporte)
     except ReporteAdministrativo.DoesNotExist:
         return JsonResponse(
             {"error": "El reporte solicitado ya no está disponible."},
@@ -2161,7 +2407,7 @@ def api_admin_previa_corte_caja(request):
         # un corte real no puede purgar la previa en esa ventana.
         with transaction.atomic():
             reporte = crear_previa_corte_caja(_sucursal())
-            return _respuesta_reporte(reporte, {"es_previa": True})
+            return _respuesta_reporte(request, reporte, {"es_previa": True})
     except ErrorVenta as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
@@ -2174,6 +2420,7 @@ def api_admin_corte_caja(request):
         sucursal = _sucursal()
         corte, reporte = crear_corte_caja(sucursal)
         return _respuesta_reporte(
+            request,
             reporte,
             {"corte_id": str(corte.id), "total_caja": str(corte.total_caja)},
         )
@@ -2191,6 +2438,7 @@ def api_admin_corte_sucursal(request):
         cliente = SucursalPedido.objects.get(pk=datos.get("cliente_sucursal_id"), sucursal=sucursal)
         corte, reporte = crear_corte_sucursal(sucursal, cliente)
         return _respuesta_reporte(
+            request,
             reporte,
             {"corte_id": str(corte.id), "total": str(corte.total)},
         )

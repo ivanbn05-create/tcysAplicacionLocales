@@ -35,3 +35,6 @@ tmp/
 .impeccable/tmp/
 .impeccable/review/
 # impeccable-ignore-end
+
+# Registros efímeros de preguntas de Impeccable
+.impeccable/questions/*.log

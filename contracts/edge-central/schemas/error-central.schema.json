@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.lostocayos.invalid/edge-central/error-central.schema.json",
+  "title": "Error seguro de API Edge central",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["error"],
+  "properties": {
+    "error": {"type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-z0-9_]+$"},
+    "request_id": {"type": "string", "format": "uuid"},
+    "retry_after_seconds": {"type": "integer", "minimum": 1, "maximum": 86400}
+  }
+}

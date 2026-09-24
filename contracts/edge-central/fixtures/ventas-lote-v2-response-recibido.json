@@ -1,0 +1,9 @@
+{
+  "recibido": true,
+  "acuse": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
+  "lote_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+  "estado": "recibido",
+  "contenido_sha256": "fd81748b2a0b4b1369a14677de159bb281138d08a4de81459e01abd507c1caa2",
+  "conteo_aceptado": 1,
+  "primera_recepcion_en": "2026-09-24T16:05:02Z"
+}

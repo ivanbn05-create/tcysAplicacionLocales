@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.lostocayos.invalid/edge-central/cliente-evento-v2-request.schema.json",
+  "title": "Evento permanente de cliente v2 propuesto",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version_contrato", "evento_id", "sucursal", "cliente_id", "version_origen", "operacion", "ocurrido_en", "cliente", "contenido_sha256"],
+  "properties": {
+    "version_contrato": {"const": 2},
+    "evento_id": {"type": "string", "format": "uuid"},
+    "sucursal": {"$ref": "#/$defs/sucursal"},
+    "cliente_id": {"type": "string", "format": "uuid"},
+    "version_origen": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+    "operacion": {"type": "string", "enum": ["upsert", "desactivar"]},
+    "ocurrido_en": {"type": "string", "format": "date-time"},
+    "cliente": {"$ref": "#/$defs/cliente"},
+    "contenido_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  },
+  "$defs": {
+    "sucursal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "clave"],
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "clave": {"type": "string", "minLength": 1, "maxLength": 30}
+      }
+    },
+    "cliente": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clave_corta", "nombre", "notas", "comentarios_multiples", "activo", "creado_en", "actualizado_en", "telefonos", "domicilios"],
+      "properties": {
+        "clave_corta": {"type": "string", "minLength": 1, "maxLength": 6},
+        "nombre": {"type": "string", "minLength": 1, "maxLength": 180},
+        "notas": {"type": "string", "maxLength": 2000},
+        "comentarios_multiples": {"type": "boolean"},
+        "activo": {"type": "boolean"},
+        "creado_en": {"type": "string", "format": "date-time"},
+        "actualizado_en": {"type": "string", "format": "date-time"},
+        "telefonos": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {"$ref": "#/$defs/telefono"}
+        },
+        "domicilios": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {"$ref": "#/$defs/domicilio"}
+        }
+      }
+    },
+    "telefono": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "numero", "etiqueta", "principal", "activo", "creado_en"],
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "numero": {"type": "string", "minLength": 1, "maxLength": 30},
+        "etiqueta": {"type": "string", "maxLength": 30},
+        "principal": {"type": "boolean"},
+        "activo": {"type": "boolean"},
+        "creado_en": {"type": "string", "format": "date-time"}
+      }
+    },
+    "domicilio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "etiqueta", "calle", "numero_exterior", "numero_interior", "colonia", "codigo_postal", "municipio", "referencia", "principal", "activo", "creado_en"],
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "etiqueta": {"type": "string", "maxLength": 30},
+        "calle": {"type": "string", "minLength": 1, "maxLength": 180},
+        "numero_exterior": {"type": "string", "maxLength": 30},
+        "numero_interior": {"type": "string", "maxLength": 30},
+        "colonia": {"type": "string", "maxLength": 120},
+        "codigo_postal": {"type": "string", "maxLength": 10},
+        "municipio": {"type": "string", "maxLength": 120},
+        "referencia": {"type": "string", "maxLength": 1000},
+        "principal": {"type": "boolean"},
+        "activo": {"type": "boolean"},
+        "creado_en": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}

@@ -26,6 +26,21 @@ def comprobar_integracion_externa(app_configs, **kwargs):
                     id="ventas.W001",
                 )
             )
+    elif fuente == "api_v2":
+        if not activa:
+            resultados.append(
+                Warning(
+                    "Pedidos API v2 esta configurada, pero la sincronizacion automatica esta desactivada.",
+                    id="ventas.W003",
+                )
+            )
+        if not getattr(settings, "PEDIDOS_API_SUCURSAL_IDS", ()):
+            resultados.append(
+                Error(
+                    "Pedidos API v2 requiere un alcance explicito de SucursalCliente.",
+                    id="ventas.E003",
+                )
+            )
     elif fuente == "sqlite" and not settings.DEBUG:
         resultados.append(
             Error(

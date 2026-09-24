@@ -139,6 +139,8 @@ class Precio(models.Model):
     vigente_desde = models.DateField(default=timezone.localdate)
     vigente_hasta = models.DateField(null=True, blank=True)
     activo = models.BooleanField(default=True)
+    origen = models.CharField(max_length=30, default="local")
+    publicacion_central_id = models.UUIDField(null=True, blank=True)
 
     class Meta:
         ordering = ["-vigente_desde"]
@@ -146,3 +148,93 @@ class Precio(models.Model):
 
     def __str__(self):
         return f"{self.producto}: ${self.importe}"
+
+
+class IdentidadCategoriaCentral(models.Model):
+    """Correspondencia explicita; jamas se infiere por el nombre visible."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(
+        Sucursal, on_delete=models.CASCADE, related_name="categorias_centrales"
+    )
+    central_id = models.UUIDField()
+    categoria = models.OneToOneField(
+        Categoria,
+        on_delete=models.PROTECT,
+        related_name="identidad_central",
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sucursal", "central_id"],
+                name="categoria_central_unica_sucursal",
+            )
+        ]
+
+
+class IdentidadProductoCentral(models.Model):
+    """Vinculo estable entre producto global y UUID local de cada sucursal."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(
+        Sucursal, on_delete=models.CASCADE, related_name="productos_centrales"
+    )
+    central_id = models.UUIDField()
+    producto = models.OneToOneField(
+        Producto,
+        on_delete=models.PROTECT,
+        related_name="identidad_central",
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sucursal", "central_id"],
+                name="producto_central_unico_sucursal",
+            )
+        ]
+
+
+class PublicacionCatalogoCentral(models.Model):
+    class Estado(models.TextChoices):
+        APLICADA = "aplicada", "Aplicada"
+        RECHAZADA = "rechazada", "Rechazada"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(
+        Sucursal, on_delete=models.PROTECT, related_name="publicaciones_catalogo"
+    )
+    release_id = models.UUIDField()
+    publicacion_id = models.UUIDField()
+    publicacion_anterior_id = models.UUIDField(null=True, blank=True)
+    version = models.PositiveIntegerField()
+    version_contrato = models.PositiveSmallIntegerField(default=2)
+    checksum = models.CharField(max_length=64)
+    estado = models.CharField(max_length=12, choices=Estado.choices)
+    snapshot = models.JSONField(default=dict)
+    codigo_error = models.CharField(max_length=40, blank=True)
+    detalle_seguro = models.CharField(max_length=240, blank=True)
+    recibido_en = models.DateTimeField(auto_now_add=True)
+    aplicado_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sucursal", "release_id"],
+                name="catalogo_release_unico_sucursal",
+            ),
+            models.UniqueConstraint(
+                fields=["sucursal", "publicacion_id"],
+                name="catalogo_publicacion_unica_sucursal",
+            ),
+            models.UniqueConstraint(
+                fields=["sucursal", "version"],
+                name="catalogo_version_unica_sucursal",
+            ),
+        ]

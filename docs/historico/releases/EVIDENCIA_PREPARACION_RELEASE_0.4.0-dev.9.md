@@ -199,4 +199,4 @@ version posterior a `0.4.0-dev.9`.
 no actualizo `C:\LosTocayosPOS`, no es version base y no es produccion. La decision
 de construir artefactos, aplicar una actualizacion y promoverla requiere una
 instruccion posterior. El protocolo general sigue siendo
-`PROTOCOLO_RELEASE_ACTUALIZACION_REUTILIZABLE.md`.
+`../../../PROTOCOLO_RELEASE_ACTUALIZACION_REUTILIZABLE.md`.

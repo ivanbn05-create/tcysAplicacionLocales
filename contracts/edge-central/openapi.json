@@ -1,0 +1,512 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Los Tocayos · Contrato Edge-Central",
+    "version": "2.0.0-propuesto",
+    "description": "Contrato de integración. Sólo la consolidación mensual v1 está implementada en el central privado; todas las rutas v2 están propuestas y desactivadas."
+  },
+  "servers": [
+    {
+      "url": "https://api-central.example.invalid",
+      "description": "Nombre ilustrativo; no existe DNS/TLS productivo"
+    }
+  ],
+  "paths": {
+    "/api/v1/edge/consolidaciones-mensuales/": {
+      "post": {
+        "operationId": "recibirConsolidacionMensualV1",
+        "summary": "Recibir el agregado mensual compatible",
+        "x-contract-status": "implementado-candidato-privado",
+        "x-required-scope": "sales:v1:write",
+        "security": [
+          {
+            "CentralLegacyBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./schemas/consolidacion-mensual-v1-receptor-actual.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Primera recepción durable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/consolidacion-mensual-v1-response.schema.json"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Repetición idéntica o lote ya purgado; conserva el mismo acuse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/consolidacion-mensual-v1-response.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-pos-emitter-profile": {
+          "$ref": "./schemas/consolidacion-mensual-v1-request.schema.json"
+        }
+      }
+    },
+    "/api/v2/edge/ventas/lotes/": {
+      "post": {
+        "operationId": "recibirLoteVentasV2",
+        "summary": "Recibir un lote inmutable de eventos de venta",
+        "x-contract-status": "propuesto-desactivado",
+        "x-required-scope": "sales:v2:write",
+        "security": [
+          {
+            "CentralIngestBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./schemas/ventas-lote-v2-request.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Primera recepción durable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/ventas-lote-v2-response.schema.json"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Repetición exacta o lote purgado, con ACK estable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/ventas-lote-v2-response.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "description": "Feature aún desactivado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/error-central.schema.json"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v2/edge/clientes/eventos/": {
+      "post": {
+        "operationId": "recibirEventoClienteV2",
+        "summary": "Aplicar un evento permanente de cliente",
+        "x-contract-status": "propuesto-desactivado",
+        "x-required-scope": "customers:v2:write",
+        "security": [
+          {
+            "CentralIngestBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./schemas/cliente-evento-v2-request.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Cliente creado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/cliente-evento-v2-response.schema.json"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Actualizado, repetido o desactualizado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/cliente-evento-v2-response.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "description": "Feature aún desactivado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/error-central.schema.json"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v2/edge/catalogo/publicaciones/actual/": {
+      "get": {
+        "operationId": "obtenerCatalogoActualV2",
+        "summary": "Obtener el snapshot completo asignado a la sucursal autenticada",
+        "x-contract-status": "propuesto-desactivado",
+        "x-required-scope": "catalog:v2:read",
+        "security": [
+          {
+            "CentralCatalogBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfNoneMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Publicación completa e inmutable",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/catalogo-publicacion-v2.schema.json"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "La sucursal aún no tiene publicación"
+          },
+          "304": {
+            "description": "La publicación indicada por ETag continúa vigente"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "description": "Feature aún desactivado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/error-central.schema.json"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v2/edge/catalogo/publicaciones/{publicacion_id}/": {
+      "get": {
+        "operationId": "obtenerCatalogoPorIdV2",
+        "summary": "Recuperar una publicación de la propia sucursal",
+        "x-contract-status": "propuesto-desactivado",
+        "x-required-scope": "catalog:v2:read",
+        "security": [
+          {
+            "CentralCatalogBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PublicacionId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Publicación completa e inmutable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/catalogo-publicacion-v2.schema.json"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "description": "Versión no disponible; solicitar el snapshot completo actual",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/error-central.schema.json"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v2/edge/catalogo/publicaciones/{publicacion_id}/acuse/": {
+      "post": {
+        "operationId": "registrarCatalogoAckV2",
+        "summary": "Registrar recepción, aplicación o rechazo durable",
+        "x-contract-status": "propuesto-desactivado",
+        "x-required-scope": "catalog:v2:ack",
+        "security": [
+          {
+            "CentralCatalogBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PublicacionId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./schemas/catalogo-ack-v2-request.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Primer registro del ACK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/catalogo-ack-v2-response.schema.json"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Repetición exacta del ACK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/catalogo-ack-v2-response.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "CentralLegacyBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Token v1 ligado a una sucursal; conservar sólo durante rollback."
+      },
+      "CentralIngestBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Credencial de ingesta ligada a sucursal; nunca autoriza edición de catálogo."
+      },
+      "CentralCatalogBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Credencial separada para leer publicaciones propias y enviar ACK."
+      }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "Debe coincidir con el identificador durable del cuerpo."
+      },
+      "IfNoneMatch": {
+        "name": "If-None-Match",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "PublicacionId": {
+        "name": "publicacion_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Error seguro sin cuerpo original ni secretos",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "./schemas/error-central.schema.json"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -35,6 +35,24 @@ os.environ["PRINT_BACKEND"] = _backend_impresion
 os.environ["PRINT_SYNC"] = "true"
 os.environ["PEDIDOS_SUCURSALES_AUTO_SYNC"] = "false"
 os.environ["PEDIDOS_SUCURSALES_FUENTE"] = "desactivada"
+# Los perfiles de prueba nunca heredan endpoints ni secretos de integracion.
+for _nombre_secreto in (
+    "PEDIDOS_API_BASE_URL",
+    "PEDIDOS_API_TOKEN",
+    "PEDIDOS_API_SUCURSAL_IDS",
+    "PEDIDOS_API_CA_BUNDLE",
+    "CENTRAL_API_BASE_URL",
+    "CENTRAL_BRANCH_ID",
+    "CENTRAL_BRANCH_CODE",
+    "CENTRAL_POS_INSTANCE_ID",
+    "CENTRAL_INGEST_TOKEN",
+    "CENTRAL_CATALOG_TOKEN",
+    "CENTRAL_API_CA_BUNDLE",
+):
+    os.environ[_nombre_secreto] = ""
+os.environ["CENTRAL_ENABLE_SALES_V2"] = "false"
+os.environ["CENTRAL_ENABLE_CUSTOMERS_V2"] = "false"
+os.environ["CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2"] = "false"
 # Una prueba local nunca debe heredar el destino ni el secreto del VPS.
 os.environ["VPS_CONSOLIDACION_URL"] = ""
 os.environ["VPS_CONSOLIDACION_TOKEN"] = ""

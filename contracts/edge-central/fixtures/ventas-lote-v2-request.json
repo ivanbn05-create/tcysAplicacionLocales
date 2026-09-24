@@ -1,0 +1,49 @@
+{
+  "version_contrato": 2,
+  "lote_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+  "sucursal": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "clave": "LAB01"
+  },
+  "creado_en": "2026-09-24T10:05:00-06:00",
+  "conteo": 1,
+  "eventos": [
+    {
+      "evento_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1",
+      "tipo": "venta.cerrada",
+      "venta_id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+      "version_agregado": 3,
+      "ocurrido_en": "2026-09-24T10:04:30-06:00",
+      "venta": {
+        "serie_folio": 2,
+        "folio": 41,
+        "canal": "llevar",
+        "estado": "pagado",
+        "cliente_id": null,
+        "creado_en": "2026-09-24T09:52:00-06:00",
+        "cerrado_en": "2026-09-24T10:04:30-06:00",
+        "moneda": "MXN",
+        "subtotal": "100.00",
+        "descuento_porcentaje": "0.00",
+        "total": "100.00",
+        "forma_pago": "efectivo",
+        "partidas": [
+          {
+            "id": "dddddddd-dddd-4ddd-8ddd-ddddddddddd1",
+            "origen": "menu",
+            "producto_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1",
+            "codigo": "LAB-TACO",
+            "nombre_cobrado": "Producto sintético",
+            "nombre_corto_cobrado": "PS",
+            "cantidad": "2.000",
+            "cantidad_por_precio": "1.000",
+            "unidad": "PZA",
+            "precio_unitario": "50.00",
+            "importe": "100.00"
+          }
+        ]
+      }
+    }
+  ],
+  "contenido_sha256": "fd81748b2a0b4b1369a14677de159bb281138d08a4de81459e01abd507c1caa2"
+}

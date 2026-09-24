@@ -7,7 +7,32 @@
   const dinero = valor => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(Number(valor || 0));
   const escapar = valor => String(valor ?? "").replace(/[&<>'"]/g, caracter => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[caracter]);
   const DENOMINACIONES = ["0.5", "1", "2", "5", "10", "20", "50", "100", "200", "500", "1000"];
-  const RUTAS = Object.freeze({ controlEfectivo: "/api/administrador/control-efectivo/" });
+  const CLAVE_ORIGEN_ADMIN = "tocayos_admin_origen_v1";
+  const DEVICE_ID_KEY = "tocayos_pos_device_id";
+  const RUTAS = Object.freeze({
+    controlEfectivo: "/api/administrador/control-efectivo/",
+    configuracionesImpresion: "/api/administrador/configuracion-tecnica/impresion/",
+  });
+
+  function crearDeviceId() {
+    if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+    const aleatorio = Math.random().toString(36).slice(2);
+    return "tablet-" + Date.now().toString(36) + "-" + aleatorio;
+  }
+
+  function obtenerDeviceId() {
+    try {
+      const guardado = localStorage.getItem(DEVICE_ID_KEY);
+      if (guardado) return guardado;
+      const nuevo = crearDeviceId();
+      localStorage.setItem(DEVICE_ID_KEY, nuevo);
+      return nuevo;
+    } catch {
+      return crearDeviceId();
+    }
+  }
+
+  const POS_DEVICE_ID = obtenerDeviceId();
 
   const estado = {
     administrador: null,
@@ -26,6 +51,11 @@
     asignacionesRepartidor: new Map(),
     secuenciaAsignacion: 0,
     panelInicialSolicitado: "",
+    pantallaCompletaSuspendida: false,
+    regresoEnCurso: false,
+    configuracionesImpresion: [],
+    configuracionImpresionId: "",
+    configuracionesImpresionCargando: false,
   };
 
   function tienePermisoAdministrador(nombre) {
@@ -58,14 +88,48 @@
       ...opciones,
       headers: {
         "Content-Type": "application/json",
-        "X-CSRFToken": csrf(),
         ...(opciones.headers || {}),
+        "X-CSRFToken": csrf(),
+        "X-POS-Device-ID": POS_DEVICE_ID,
       },
     });
     let datos = {};
     try { datos = await respuesta.json(); } catch { /* La respuesta vacía se trata como objeto. */ }
     if (!respuesta.ok) throw new ErrorAPI(datos.error || "No fue posible completar la operación.", respuesta.status, datos);
     return datos;
+  }
+
+  function origenRegresoAdministrador() {
+    try {
+      return sessionStorage.getItem(CLAVE_ORIGEN_ADMIN) === "ventas" ? "ventas" : "inicio";
+    } catch {
+      return "inicio";
+    }
+  }
+
+  function configurarRegresoAdministrador() {
+    const vuelveAVentas = origenRegresoAdministrador() === "ventas";
+    const etiqueta = vuelveAVentas ? "Volver a Ventas" : "Volver al inicio";
+    $$("[data-regreso-admin]").forEach(control => {
+      control.setAttribute("aria-label", etiqueta);
+      control.title = etiqueta;
+      const texto = control.querySelector("[data-regreso-admin-texto]");
+      if (texto) texto.textContent = etiqueta;
+    });
+  }
+
+  async function regresarDesdeAdministrador() {
+    if (estado.regresoEnCurso) return;
+    estado.regresoEnCurso = true;
+    const vuelveAVentas = origenRegresoAdministrador() === "ventas";
+    $$("[data-regreso-admin]").forEach(control => { control.disabled = true; });
+    try { sessionStorage.removeItem(CLAVE_ORIGEN_ADMIN); } catch { /* El regreso sigue disponible. */ }
+    if (!vuelveAVentas) {
+      try {
+        await api("/api/operador/salir/", { method: "POST", body: "{}" });
+      } catch { /* Una sesión vencida ya conduce a Inicio. */ }
+    }
+    window.location.assign("/");
   }
 
   function toast(mensaje, error = false) {
@@ -155,9 +219,16 @@
 
   function mostrarPanel(nombre) {
     const destino = $("[data-admin-panel=\"" + CSS.escape(nombre) + "\"]");
-    if (!destino || !elementoPermitido(destino)) nombre = "inicio";
+    if (!destino) {
+      toast("La sección solicitada no está disponible.", true);
+      return false;
+    }
+    if (!elementoPermitido(destino)) {
+      toast("Tu acceso administrativo no permite abrir esta sección.", true);
+      return false;
+    }
     $$("[data-admin-panel]").forEach(panel => {
-      const activo = elementoPermitido(panel) && panel.dataset.adminPanel === nombre;
+      const activo = panel === destino;
       panel.hidden = !activo;
       panel.classList.toggle("activo", activo);
     });
@@ -169,9 +240,27 @@
       if (activo) boton.setAttribute("aria-current", "page");
       else boton.removeAttribute("aria-current");
     });
-    history.replaceState(null, "", `#${nombre}`);
+    history.replaceState(null, "", "#" + nombre);
     const movimientoReducido = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     window.scrollTo({ top: 0, behavior: movimientoReducido ? "auto" : "smooth" });
+    if (nombre === "configuracion-tecnica") {
+      cargarConfiguracionesImpresion();
+    }
+    return true;
+  }
+
+  async function navegarPanel(nombre) {
+    const destino = $("[data-admin-panel=\"" + CSS.escape(nombre) + "\"]");
+    if (!destino) return mostrarPanel(nombre);
+    if (destino.dataset.permisoAdmin) {
+      const actualizado = await cargarResumen(false);
+      if (!actualizado) return false;
+      if (!elementoPermitido(destino)) {
+        toast("Tu acceso administrativo no permite abrir esta sección.", true);
+        return false;
+      }
+    }
+    return mostrarPanel(nombre);
   }
 
   function aplicarPermisosAdministrativos() {
@@ -181,6 +270,14 @@
     const panelActivo = $(".admin-panel.activo");
     const panelDeseado = estado.panelInicialSolicitado || panelActivo?.dataset.adminPanel || "inicio";
     estado.panelInicialSolicitado = "";
+    const destinoDeseado = $("[data-admin-panel=\"" + CSS.escape(panelDeseado) + "\"]");
+    if (!destinoDeseado || !elementoPermitido(destinoDeseado)) {
+      if (panelDeseado !== "inicio") {
+        toast("Tu acceso administrativo no permite abrir esta sección.", true);
+      }
+      mostrarPanel("inicio");
+      return;
+    }
     mostrarPanel(panelDeseado);
   }
 
@@ -207,7 +304,7 @@
     while (true) {
       const clave = await pedirClave("Abrir administrador", "Esta pantalla administra el turno de la sucursal. Clave inicial: 0000.");
       if (!clave) {
-        window.location.assign("/");
+        await regresarDesdeAdministrador();
         return false;
       }
       try {
@@ -511,17 +608,28 @@
         const abierto = estado.canalPedidosAbierto === canal;
         const ocupadas = grupo.filter(posicion => ticketDePosicion(posicion)).length;
         const libres = grupo.length - ocupadas;
+        const cobrables = grupo
+          .map(ticketDePosicion)
+          .filter(ticket => tipoLote(ticket) === "cobrar");
+        const todosCobrablesSeleccionados = cobrables.length > 0
+          && cobrables.every(ticket => estado.ticketsSeleccionados.has(String(ticket.id)));
         const idBoton = "alternar-posiciones-" + canal;
         const idPanel = "posiciones-" + canal;
         const contenido = canal === "sucursales"
           ? renderSucursalesEnPedidos(grupo, idPanel, idBoton, abierto)
           : '<div class="mapa-grupo-celdas" id="' + idPanel + '" role="region" aria-labelledby="' + idBoton + '"' + (abierto ? "" : " hidden") + '>' + grupo.map(renderCeldaPosicion).join("") + '</div>';
-        return '<section class="mapa-grupo" data-canal="' + canal + '">' +
-          '<h3><button class="mapa-grupo-toggle" id="' + idBoton + '" data-acordeon-canal="' + canal + '" type="button" aria-expanded="' + (abierto ? "true" : "false") + '" aria-controls="' + idPanel + '">' +
-            '<span class="mapa-grupo-nombre">' + etiquetas[canal] + '</span>' +
-            '<span class="mapa-grupo-resumen"><strong>' + ocupadas + (ocupadas === 1 ? " ocupada" : " ocupadas") + '</strong><small>' + libres + (libres === 1 ? " libre" : " libres") + '</small></span>' +
-            '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>' +
-          '</button></h3>' + contenido +
+        const accionSeleccion = cobrables.length
+          ? '<button class="mapa-grupo-seleccion' + (todosCobrablesSeleccionados ? " activo" : "") + '" data-seleccionar-canal="' + escapar(canal) + '" type="button" aria-pressed="' + (todosCobrablesSeleccionados ? "true" : "false") + '" aria-label="' + escapar((todosCobrablesSeleccionados ? "Quitar todos los pedidos cobrables de " : "Seleccionar todos los pedidos cobrables de ") + etiquetas[canal]) + '">' +
+              '<span>' + (todosCobrablesSeleccionados ? "Quitar selección" : "Seleccionar todos") + '</span><strong>' + cobrables.length + '</strong></button>'
+          : "";
+        return '<section class="mapa-grupo" data-canal="' + escapar(canal) + '">' +
+          '<header class="mapa-grupo-encabezado">' +
+            '<h3><button class="mapa-grupo-toggle" id="' + idBoton + '" data-acordeon-canal="' + escapar(canal) + '" type="button" aria-expanded="' + (abierto ? "true" : "false") + '" aria-controls="' + idPanel + '">' +
+              '<span class="mapa-grupo-nombre">' + etiquetas[canal] + '</span>' +
+              '<span class="mapa-grupo-resumen"><strong>' + ocupadas + (ocupadas === 1 ? " ocupada" : " ocupadas") + '</strong><small>' + libres + (libres === 1 ? " libre" : " libres") + '</small></span>' +
+              '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>' +
+            '</button></h3>' + accionSeleccion +
+          '</header>' + contenido +
         '</section>';
       }).join("") : '<p class="vacio">No hay posiciones configuradas para mostrar.</p>';
     const avisoMover = $("#instruccion-mover");
@@ -559,6 +667,47 @@
     });
   }
 
+  function ticketsCobrablesCanal(canal) {
+    const vistos = new Set();
+    return posicionesCompletas()
+      .filter(posicion => posicion.canal === canal)
+      .map(ticketDePosicion)
+      .filter(ticket => {
+        const id = String(ticket?.id || "");
+        if (tipoLote(ticket) !== "cobrar" || !id || vistos.has(id)) return false;
+        vistos.add(id);
+        return true;
+      });
+  }
+
+  function alternarSeleccionCobrablesCanal(canal) {
+    const cobrables = ticketsCobrablesCanal(canal);
+    if (!cobrables.length) {
+      toast("Este canal no tiene pedidos listos para cobrar.", true);
+      return;
+    }
+    const ids = cobrables.map(ticket => String(ticket.id));
+    const todosSeleccionados = ids.every(id => estado.ticketsSeleccionados.has(id));
+    if (todosSeleccionados) {
+      ids.forEach(id => estado.ticketsSeleccionados.delete(id));
+    } else {
+      [...estado.ticketsSeleccionados].forEach(id => {
+        if (tipoLote(buscarTicket(id)) !== "cobrar") estado.ticketsSeleccionados.delete(id);
+      });
+      ids.forEach(id => estado.ticketsSeleccionados.add(id));
+    }
+    if (!estado.ticketsSeleccionados.has(String(estado.ticketSeleccionadoId))) {
+      const restantes = [...estado.ticketsSeleccionados];
+      estado.ticketSeleccionadoId = restantes[restantes.length - 1] || "";
+    }
+    if (!todosSeleccionados) estado.ticketSeleccionadoId = ids[ids.length - 1];
+    estado.canalPedidosAbierto = canal;
+    renderPedidos();
+    requestAnimationFrame(() => {
+      $("[data-seleccionar-canal=\"" + CSS.escape(canal) + "\"]")?.focus();
+    });
+  }
+
   async function moverTicketAPosicion(posicionId) {
     const ticketId = estado.ticketMoverId;
     if (!ticketId) return;
@@ -589,30 +738,85 @@
     $("#cancelar-edicion-movimiento").hidden = true;
   }
 
-  async function alternarPantallaCompletaAdmin() {
-    try {
-      if (document.fullscreenElement || document.webkitFullscreenElement) {
-        if (document.exitFullscreen) await document.exitFullscreen();
-        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
-      } else if (document.documentElement.requestFullscreen) {
-        await document.documentElement.requestFullscreen({ navigationUI: "hide" });
-      } else if (document.documentElement.webkitRequestFullscreen) {
-        document.documentElement.webkitRequestFullscreen();
-      } else {
-        toast("Este navegador no permite activar pantalla completa.", true);
-      }
-    } catch {
-      toast("No fue posible cambiar el modo de pantalla completa.", true);
-    }
+  function estaEnPantallaCompletaAdmin() {
+    return Boolean(
+      document.fullscreenElement
+      || document.webkitFullscreenElement
+      || window.matchMedia?.("(display-mode: fullscreen)")?.matches
+      || window.matchMedia?.("(display-mode: standalone)")?.matches
+      || window.navigator.standalone
+    );
   }
 
   function actualizarBotonPantallaCompleta() {
     const boton = $("#pantalla-completa-admin");
-    const activo = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
-    const etiqueta = activo ? "Salir de pantalla completa" : "Entrar a pantalla completa";
+    if (!boton) return;
+    const activo = estaEnPantallaCompletaAdmin();
+    const etiqueta = activo ? "Salir de pantalla completa" : "Activar pantalla completa";
     boton.setAttribute("aria-pressed", String(activo));
     boton.setAttribute("aria-label", etiqueta);
     boton.title = etiqueta;
+  }
+
+  async function solicitarPantallaCompletaAdmin({ silencioso = false } = {}) {
+    if (estaEnPantallaCompletaAdmin()) {
+      actualizarBotonPantallaCompleta();
+      return true;
+    }
+    try {
+      if (document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen({ navigationUI: "hide" });
+      } else if (document.documentElement.webkitRequestFullscreen) {
+        await document.documentElement.webkitRequestFullscreen();
+      } else {
+        actualizarBotonPantallaCompleta();
+        if (!silencioso) {
+          toast("Este navegador no permite activar pantalla completa. Usa la aplicación instalada.", true);
+        }
+        return false;
+      }
+      estado.pantallaCompletaSuspendida = false;
+      actualizarBotonPantallaCompleta();
+      return true;
+    } catch {
+      actualizarBotonPantallaCompleta();
+      if (!silencioso) {
+        toast("El navegador bloqueó la pantalla completa. Toca de nuevo el botón para autorizarla.", true);
+      }
+      return false;
+    }
+  }
+
+  async function alternarPantallaCompletaAdmin() {
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      estado.pantallaCompletaSuspendida = true;
+      try {
+        if (document.exitFullscreen) await document.exitFullscreen();
+        else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
+      } catch {
+        toast("No fue posible salir de pantalla completa desde este navegador.", true);
+      }
+      actualizarBotonPantallaCompleta();
+      return;
+    }
+    if (estaEnPantallaCompletaAdmin()) {
+      toast("La aplicación instalada ya ocupa la pantalla completa. Usa el sistema para cambiar de aplicación.");
+      actualizarBotonPantallaCompleta();
+      return;
+    }
+    estado.pantallaCompletaSuspendida = false;
+    await solicitarPantallaCompletaAdmin();
+  }
+
+  function activarPantallaCompletaAdminConPrimerToque(evento) {
+    if (estado.pantallaCompletaSuspendida || estaEnPantallaCompletaAdmin()) return;
+    if (evento.target.closest?.("#pantalla-completa-admin, [data-regreso-admin]")) return;
+    solicitarPantallaCompletaAdmin({ silencioso: true });
+  }
+
+  function iniciarPantallaCompletaAdmin() {
+    actualizarBotonPantallaCompleta();
+    solicitarPantallaCompletaAdmin({ silencioso: true });
   }
 
   async function ejecutarLote(boton) {
@@ -627,6 +831,12 @@
       .map(ticket => ticket.id);
     if (!ids.length) return toast("La selección no contiene pedidos compatibles con esta acción.", true);
     const cuerpo = { accion, ticket_ids: ids };
+    if (accion === "cobrar") {
+      cuerpo.forma_pago = $("#lote-forma-pago").value;
+      if (!["efectivo", "tarjeta"].includes(cuerpo.forma_pago)) {
+        return toast("Selecciona Efectivo o Terminal para el cobro.", true);
+      }
+    }
     if (accion === "asignar_repartidor") {
       cuerpo.repartidor_id = $("#lote-repartidor").value;
       if (!cuerpo.repartidor_id) return toast("Selecciona un repartidor.", true);
@@ -983,6 +1193,191 @@
       : (cierre.vps_configurado ? "" : "Configura la URL del VPS antes de consolidar el mes.");
   }
 
+  function actualizarDeviceIdActual() {
+    const nodo = $("#device-id-actual");
+    if (nodo) nodo.textContent = POS_DEVICE_ID;
+  }
+
+  function configuracionImpresionSeleccionada() {
+    return estado.configuracionesImpresion.find(
+      item => String(item.id) === String(estado.configuracionImpresionId)
+    ) || null;
+  }
+
+  function renderConfiguracionesImpresion() {
+    const lista = $("#lista-configuraciones-impresion");
+    const aviso = $("#estado-configuraciones-impresion");
+    if (!lista || !aviso) return;
+    const configuraciones = estado.configuracionesImpresion || [];
+    aviso.textContent = configuraciones.length
+      ? String(configuraciones.length) + " " + (configuraciones.length === 1 ? "terminal configurada." : "terminales configuradas.")
+      : "No hay terminales configuradas; los trabajos usan las rutas generales.";
+    lista.innerHTML = configuraciones.length ? configuraciones.map(configuracion => {
+      const seleccionada = String(configuracion.id) === String(estado.configuracionImpresionId);
+      const esActual = configuracion.device_id === POS_DEVICE_ID;
+      const destinos = [
+        ["Caja", configuracion.host_caja],
+        ["Cocina", configuracion.host_cocina],
+        ["Barra", configuracion.host_barra],
+      ];
+      return '<article class="terminal-configuracion' + (seleccionada ? " seleccionada" : "") + (esActual ? " terminal-actual" : "") + (configuracion.activa ? "" : " inactiva") + '">' +
+        '<header><div><strong>' + escapar(configuracion.nombre) + '</strong><code>' + escapar(configuracion.device_id) + '</code></div>' +
+          '<span class="estado-ruta ' + (configuracion.activa ? "activa" : "inactiva") + '">' + (configuracion.activa ? "Activa" : "Inactiva") + '</span></header>' +
+        '<dl>' + destinos.map(([etiqueta, host]) => '<div><dt>' + etiqueta + '</dt><dd>' + (host ? escapar(host) + ':' + escapar(configuracion.puerto) : "Ruta general") + '</dd></div>').join("") + '</dl>' +
+        (esActual ? '<p class="terminal-actual-etiqueta">Esta terminal</p>' : "") +
+        '<button class="boton mini" data-editar-configuracion-impresion="' + escapar(configuracion.id) + '" type="button" aria-label="Editar ruta de ' + escapar(configuracion.nombre) + '">Editar ruta</button>' +
+      '</article>';
+    }).join("") : '<p class="vacio">Registra una terminal para asignarle impresoras por destino.</p>';
+  }
+
+  function limpiarFormularioConfiguracionImpresion() {
+    estado.configuracionImpresionId = "";
+    $("#form-configuracion-impresion").reset();
+    $("#configuracion-impresion-id").value = "";
+    $("#configuracion-impresion-puerto").value = "9100";
+    $("#configuracion-impresion-activa").checked = true;
+    $("#titulo-form-configuracion-impresion").textContent = "Nueva terminal";
+    $("#cancelar-configuracion-impresion").hidden = true;
+    $("#desactivar-configuracion-impresion").hidden = true;
+    renderConfiguracionesImpresion();
+  }
+
+  function editarConfiguracionImpresion(id) {
+    if (!exigirPermisoAdministrador("gestionar_configuracion_tecnica")) return;
+    const configuracion = estado.configuracionesImpresion.find(
+      item => String(item.id) === String(id)
+    );
+    if (!configuracion) return toast("La ruta seleccionada ya no está disponible.", true);
+    estado.configuracionImpresionId = String(configuracion.id);
+    $("#configuracion-impresion-id").value = configuracion.id;
+    $("#configuracion-impresion-nombre").value = configuracion.nombre;
+    $("#configuracion-impresion-device-id").value = configuracion.device_id;
+    $("#configuracion-impresion-host-caja").value = configuracion.host_caja || "";
+    $("#configuracion-impresion-host-cocina").value = configuracion.host_cocina || "";
+    $("#configuracion-impresion-host-barra").value = configuracion.host_barra || "";
+    $("#configuracion-impresion-puerto").value = String(configuracion.puerto || 9100);
+    $("#configuracion-impresion-activa").checked = Boolean(configuracion.activa);
+    $("#titulo-form-configuracion-impresion").textContent = "Editar terminal";
+    $("#cancelar-configuracion-impresion").hidden = false;
+    $("#desactivar-configuracion-impresion").hidden = !configuracion.activa;
+    renderConfiguracionesImpresion();
+    $(".hoja-formulario-ruta").scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      block: "start",
+    });
+    $("#configuracion-impresion-nombre").focus({ preventScroll: true });
+  }
+
+  async function apiConfiguracionImpresion(url, opciones = {}) {
+    try {
+      return await api(url, opciones);
+    } catch (error) {
+      if (error.status !== 401 || !(await autorizarEntrada())) throw error;
+      return api(url, opciones);
+    }
+  }
+
+  async function cargarConfiguracionesImpresion(control = null) {
+    if (!tienePermisoAdministrador("gestionar_configuracion_tecnica")) return false;
+    if (estado.configuracionesImpresionCargando) return false;
+    estado.configuracionesImpresionCargando = true;
+    marcarControlPendiente(control, true, "Actualizando…");
+    const aviso = $("#estado-configuraciones-impresion");
+    aviso.textContent = "Consultando rutas de impresión…";
+    try {
+      const datos = await apiConfiguracionImpresion(RUTAS.configuracionesImpresion);
+      estado.configuracionesImpresion = Array.isArray(datos.configuraciones)
+        ? datos.configuraciones
+        : [];
+      if (
+        estado.configuracionImpresionId
+        && !configuracionImpresionSeleccionada()
+      ) {
+        limpiarFormularioConfiguracionImpresion();
+      } else {
+        renderConfiguracionesImpresion();
+      }
+      return true;
+    } catch (error) {
+      aviso.textContent = error.message;
+      const listaError = $("#lista-configuraciones-impresion");
+      if (listaError) listaError.innerHTML = '<p class="vacio error">No fue posible consultar las rutas.</p>';
+      if (error.status === 403) await cargarResumen(false);
+      toast(error.message, true);
+      return false;
+    } finally {
+      estado.configuracionesImpresionCargando = false;
+      marcarControlPendiente(control, false);
+    }
+  }
+
+  function cuerpoConfiguracionImpresion() {
+    return {
+      nombre: $("#configuracion-impresion-nombre").value.trim(),
+      device_id: $("#configuracion-impresion-device-id").value.trim(),
+      host_caja: $("#configuracion-impresion-host-caja").value.trim(),
+      host_cocina: $("#configuracion-impresion-host-cocina").value.trim(),
+      host_barra: $("#configuracion-impresion-host-barra").value.trim(),
+      puerto: Number($("#configuracion-impresion-puerto").value),
+      activa: $("#configuracion-impresion-activa").checked,
+    };
+  }
+
+  async function guardarConfiguracionImpresion(evento) {
+    evento.preventDefault();
+    if (!exigirPermisoAdministrador("gestionar_configuracion_tecnica")) return;
+    const formulario = evento.currentTarget;
+    if (!formulario.reportValidity()) return;
+    const id = $("#configuracion-impresion-id").value;
+    const boton = $("#guardar-configuracion-impresion");
+    marcarControlPendiente(boton, true, "Guardando…");
+    ajustarEstadoOcupado(1);
+    try {
+      const datos = await apiConfiguracionImpresion(
+        id ? RUTAS.configuracionesImpresion + id + "/" : RUTAS.configuracionesImpresion,
+        {
+          method: id ? "PATCH" : "POST",
+          body: JSON.stringify(cuerpoConfiguracionImpresion()),
+        }
+      );
+      estado.configuracionImpresionId = String(datos.configuracion.id);
+      await cargarConfiguracionesImpresion();
+      editarConfiguracionImpresion(datos.configuracion.id);
+      toast(id ? "Ruta de impresión actualizada." : "Terminal registrada.");
+    } catch (error) {
+      if (error.status === 403) await cargarResumen(false);
+      toast(error.message, true);
+    } finally {
+      ajustarEstadoOcupado(-1);
+      marcarControlPendiente(boton, false);
+    }
+  }
+
+  async function desactivarConfiguracionImpresion() {
+    if (!exigirPermisoAdministrador("gestionar_configuracion_tecnica")) return;
+    const configuracion = configuracionImpresionSeleccionada();
+    if (!configuracion || !configuracion.activa) return;
+    if (!window.confirm("¿Desactivar la ruta de " + configuracion.nombre + "? La terminal volverá a las rutas generales.")) return;
+    const boton = $("#desactivar-configuracion-impresion");
+    marcarControlPendiente(boton, true, "Desactivando…");
+    ajustarEstadoOcupado(1);
+    try {
+      await apiConfiguracionImpresion(
+        RUTAS.configuracionesImpresion + configuracion.id + "/",
+        { method: "PATCH", body: JSON.stringify({ activa: false }) }
+      );
+      await cargarConfiguracionesImpresion();
+      limpiarFormularioConfiguracionImpresion();
+      toast("Ruta desactivada; la terminal usará las rutas generales.");
+    } catch (error) {
+      if (error.status === 403) await cargarResumen(false);
+      toast(error.message, true);
+    } finally {
+      ajustarEstadoOcupado(-1);
+      marcarControlPendiente(boton, false);
+    }
+  }
+
   function renderTodo() {
     aplicarPermisosAdministrativos();
     const admin = estado.administrador;
@@ -1144,9 +1539,19 @@
   });
 
   document.addEventListener("click", async evento => {
+    const regreso = evento.target.closest("[data-regreso-admin]");
+    if (regreso) {
+      await regresarDesdeAdministrador();
+      return;
+    }
+    const editarRuta = evento.target.closest("[data-editar-configuracion-impresion]");
+    if (editarRuta) {
+      editarConfiguracionImpresion(editarRuta.dataset.editarConfiguracionImpresion);
+      return;
+    }
     const navegacion = evento.target.closest("[data-panel], [data-panel-ir]");
     if (navegacion) {
-      mostrarPanel(navegacion.dataset.panel || navegacion.dataset.panelIr);
+      await navegarPanel(navegacion.dataset.panel || navegacion.dataset.panelIr);
       return;
     }
     const tabPedidosSucursal = evento.target.closest("#mapa-posiciones [data-pedidos-sucursal-tab]");
@@ -1166,6 +1571,11 @@
     const accion = evento.target.closest("[data-accion-ticket]");
     if (accion) {
       await accionTicket(accion);
+      return;
+    }
+    const seleccionarCanal = evento.target.closest("[data-seleccionar-canal]");
+    if (seleccionarCanal) {
+      alternarSeleccionCobrablesCanal(seleccionarCanal.dataset.seleccionarCanal);
       return;
     }
     const acordeonPedidos = evento.target.closest("[data-acordeon-canal]");
@@ -1360,6 +1770,24 @@
   $("#pantalla-completa-admin").addEventListener("click", alternarPantallaCompletaAdmin);
   document.addEventListener("fullscreenchange", actualizarBotonPantallaCompleta);
   document.addEventListener("webkitfullscreenchange", actualizarBotonPantallaCompleta);
+  document.addEventListener("pointerdown", activarPantallaCompletaAdminConPrimerToque, true);
+  $("#actualizar-configuraciones-impresion").addEventListener("click", evento => {
+    cargarConfiguracionesImpresion(evento.currentTarget);
+  });
+  $("#nueva-configuracion-impresion").addEventListener("click", () => {
+    if (!exigirPermisoAdministrador("gestionar_configuracion_tecnica")) return;
+    limpiarFormularioConfiguracionImpresion();
+    $("#configuracion-impresion-nombre").focus();
+  });
+  $("#usar-device-id-actual").addEventListener("click", () => {
+    if (!exigirPermisoAdministrador("gestionar_configuracion_tecnica")) return;
+    $("#configuracion-impresion-device-id").value = POS_DEVICE_ID;
+    $("#configuracion-impresion-device-id").focus();
+  });
+  $("#cancelar-configuracion-impresion").addEventListener("click", limpiarFormularioConfiguracionImpresion);
+  $("#desactivar-configuracion-impresion").addEventListener("click", desactivarConfiguracionImpresion);
+  $("#form-configuracion-impresion").addEventListener("submit", guardarConfiguracionImpresion);
+
   $("#nuevo-usuario").addEventListener("click", () => {
     if (!exigirPermisoAdministrador("gestionar_usuarios")) return;
     limpiarFormularioUsuario();
@@ -1442,5 +1870,9 @@
   if ($(`[data-admin-panel="${CSS.escape(panelInicial)}"]`)) {
     estado.panelInicialSolicitado = panelInicial;
   }
+  configurarRegresoAdministrador();
+  actualizarDeviceIdActual();
+  limpiarFormularioConfiguracionImpresion();
+  iniciarPantallaCompletaAdmin();
   cargarResumen();
 })();

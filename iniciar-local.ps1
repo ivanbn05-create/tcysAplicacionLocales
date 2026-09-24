@@ -2,7 +2,8 @@ param(
     [string]$ListenAddress,
     [ValidateRange(1, 65535)][int]$Port,
     [ValidateRange(2, 64)][int]$Threads,
-    [switch]$AllowInsecureHttpLan
+    [switch]$AllowInsecureHttpLan,
+    [switch]$AllowExternalSync
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,7 +58,7 @@ function Set-CanonicalProcessEnvironment {
     param([string]$Path)
 
     Set-SafePythonProcessEnvironment
-    $patronConfiguracion = '^(?:DJANGO_|WAITRESS_|POSTGRES_|POS_|PRINT_|PRINTER_|PEDIDOS_SUCURSALES_|THERMAL_|ALLOW_INSECURE_HTTP_LAN$|DB_ENGINE$|SQLITE_PATH$|SUCURSAL_CLAVE$)'
+    $patronConfiguracion = '^(?:DJANGO_|WAITRESS_|POSTGRES_|POS_|PRINT_|PRINTER_|PEDIDOS_SUCURSALES_|PEDIDOS_API_|CENTRAL_|VPS_CONSOLIDACION_|THERMAL_|ALLOW_INSECURE_HTTP_LAN$|DB_ENGINE$|SQLITE_PATH$|SUCURSAL_CLAVE$)'
     foreach ($variable in Get-ChildItem Env:) {
         if ($variable.Name -match $patronConfiguracion) {
             [Environment]::SetEnvironmentVariable($variable.Name, $null, "Process")
@@ -81,6 +82,43 @@ function Set-CanonicalProcessEnvironment {
     [Environment]::SetEnvironmentVariable("DJANGO_SETTINGS_MODULE", "pos.settings", "Process")
     [Environment]::SetEnvironmentVariable("DJANGO_ALLOW_INSECURE_DEVELOPMENT", $null, "Process")
     [Environment]::SetEnvironmentVariable("DJANGO_ALLOW_INSECURE_TEST_SETTINGS", $null, "Process")
+}
+
+function Disable-ExternalSynchronization {
+    # Un espacio deliberado conserva cada clave en el entorno del proceso hijo:
+    # asi pos.settings no repone el valor real mediante setdefault.
+    foreach ($nombre in @(
+        "PEDIDOS_SUCURSALES_DATABASE_URL",
+        "PEDIDOS_SUCURSALES_DB_PASSWORD",
+        "PEDIDOS_API_BASE_URL",
+        "PEDIDOS_API_TOKEN",
+        "PEDIDOS_API_CA_BUNDLE",
+        "PEDIDOS_API_SUCURSAL_IDS",
+        "CENTRAL_API_BASE_URL",
+        "CENTRAL_BRANCH_ID",
+        "CENTRAL_BRANCH_CODE",
+        "CENTRAL_POS_INSTANCE_ID",
+        "CENTRAL_INGEST_TOKEN",
+        "CENTRAL_CATALOG_TOKEN",
+        "CENTRAL_API_CA_BUNDLE",
+        "VPS_CONSOLIDACION_URL",
+        "VPS_CONSOLIDACION_TOKEN"
+    )) {
+        [Environment]::SetEnvironmentVariable($nombre, " ", "Process")
+    }
+    [Environment]::SetEnvironmentVariable(
+        "PEDIDOS_SUCURSALES_FUENTE", "desactivada", "Process"
+    )
+    [Environment]::SetEnvironmentVariable(
+        "PEDIDOS_SUCURSALES_AUTO_SYNC", "false", "Process"
+    )
+    foreach ($nombre in @(
+        "CENTRAL_ENABLE_SALES_V2",
+        "CENTRAL_ENABLE_CUSTOMERS_V2",
+        "CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2"
+    )) {
+        [Environment]::SetEnvironmentVariable($nombre, "false", "Process")
+    }
 }
 
 function Enter-MaintenanceMutex {
@@ -235,6 +273,13 @@ $env:DJANGO_SETTINGS_MODULE = "pos.settings"
 $env:WAITRESS_HOST = $ListenAddress
 $env:WAITRESS_TRUSTED_PROXY = $trustedProxy
 $env:ALLOW_INSECURE_HTTP_LAN = $(if ($httpLanPermitido) { "true" } else { "false" })
+if ($AllowExternalSync) {
+    Write-Warning "La sincronizacion externa fue habilitada expresamente para este diagnostico."
+}
+else {
+    Disable-ExternalSynchronization
+    Write-Host "Pedidos, Central y consolidacion permanecen aislados en este diagnostico." -ForegroundColor Cyan
+}
 # El diagnóstico jamás contacta impresoras físicas, aunque producción use TCP.
 $env:PRINT_BACKEND = "archivo"
 $env:PRINT_SYNC = "true"

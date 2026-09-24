@@ -80,6 +80,7 @@ class Command(BaseCommand):
                 sucursal__clave=settings.SUCURSAL_CLAVE,
                 sucursal__activa=True,
                 activo=True,
+                es_sistema=False,
                 cuenta__isnull=True,
             )
             .order_by("creado_en")

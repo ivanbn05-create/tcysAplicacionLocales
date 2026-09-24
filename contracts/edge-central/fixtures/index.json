@@ -1,0 +1,279 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "consolidacion_mensual_primera_recepcion",
+      "schema": "schemas/consolidacion-mensual-v1-request.schema.json",
+      "fixture": "fixtures/consolidacion-mensual-v1-request.json",
+      "expected_valid": true,
+      "semantic": "monthly-request",
+      "http": {
+        "method": "POST",
+        "path": "/api/v1/edge/consolidaciones-mensuales/",
+        "scope": "sales:v1:write",
+        "headers": {
+          "Authorization": "Bearer ${VPS_CONSOLIDACION_TOKEN}",
+          "Content-Type": "application/json",
+          "Idempotency-Key": "16161616-1616-4161-8161-161616161616"
+        },
+        "expected_status": 201
+      }
+    },
+    {
+      "name": "consolidacion_mensual_compatibilidad_receptor_a931c46",
+      "schema": "schemas/consolidacion-mensual-v1-receptor-actual.schema.json",
+      "fixture": "fixtures/consolidacion-mensual-v1-receptor-actual-compat.json",
+      "expected_valid": true,
+      "semantic": "monthly-request",
+      "http": {
+        "method": "POST",
+        "path": "/api/v1/edge/consolidaciones-mensuales/",
+        "scope": "sales:v1:write",
+        "headers": {
+          "Authorization": "Bearer ${VPS_CONSOLIDACION_TOKEN}",
+          "Content-Type": "application/json",
+          "Idempotency-Key": "16161616-1616-4161-8161-161616161617"
+        },
+        "expected_status": 201
+      }
+    },
+    {
+      "name": "consolidacion_mensual_compatibilidad_rechazada_por_perfil_pos",
+      "schema": "schemas/consolidacion-mensual-v1-request.schema.json",
+      "fixture": "fixtures/consolidacion-mensual-v1-receptor-actual-compat.json",
+      "expected_valid": false,
+      "semantic": "monthly-request"
+    },
+    {
+      "name": "consolidacion_mensual_ack_recibido",
+      "schema": "schemas/consolidacion-mensual-v1-response.schema.json",
+      "fixture": "fixtures/consolidacion-mensual-v1-response-recibido.json",
+      "expected_valid": true,
+      "semantic": "monthly-response",
+      "http": {
+        "method": "RESPONSE",
+        "path": "/api/v1/edge/consolidaciones-mensuales/",
+        "expected_status": 201
+      }
+    },
+    {
+      "name": "consolidacion_mensual_ack_purgado",
+      "schema": "schemas/consolidacion-mensual-v1-response.schema.json",
+      "fixture": "fixtures/consolidacion-mensual-v1-response-purgado.json",
+      "expected_valid": true,
+      "semantic": "monthly-response",
+      "http": {
+        "method": "RESPONSE",
+        "path": "/api/v1/edge/consolidaciones-mensuales/",
+        "expected_status": 200
+      }
+    },
+    {
+      "name": "ventas_v2_lote_inmutable",
+      "schema": "schemas/ventas-lote-v2-request.schema.json",
+      "fixture": "fixtures/ventas-lote-v2-request.json",
+      "expected_valid": true,
+      "semantic": "sales-request",
+      "http": {
+        "method": "POST",
+        "path": "/api/v2/edge/ventas/lotes/",
+        "scope": "sales:v2:write",
+        "headers": {
+          "Authorization": "Bearer ${CENTRAL_INGEST_TOKEN}",
+          "Content-Type": "application/json",
+          "Idempotency-Key": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+        },
+        "expected_status": 201
+      }
+    },
+    {
+      "name": "ventas_v2_ack_recibido",
+      "schema": "schemas/ventas-lote-v2-response.schema.json",
+      "fixture": "fixtures/ventas-lote-v2-response-recibido.json",
+      "expected_valid": true,
+      "semantic": "sales-response",
+      "relates_to": "fixtures/ventas-lote-v2-request.json",
+      "http": {
+        "method": "RESPONSE",
+        "path": "/api/v2/edge/ventas/lotes/",
+        "expected_status": 201
+      }
+    },
+    {
+      "name": "ventas_v2_ack_purgado",
+      "schema": "schemas/ventas-lote-v2-response.schema.json",
+      "fixture": "fixtures/ventas-lote-v2-response-purgado.json",
+      "expected_valid": true,
+      "semantic": "sales-response",
+      "relates_to": "fixtures/ventas-lote-v2-request.json",
+      "http": {
+        "method": "RESPONSE",
+        "path": "/api/v2/edge/ventas/lotes/",
+        "expected_status": 200
+      }
+    },
+    {
+      "name": "cliente_v2_upsert",
+      "schema": "schemas/cliente-evento-v2-request.schema.json",
+      "fixture": "fixtures/cliente-evento-v2-request.json",
+      "expected_valid": true,
+      "semantic": "customer-request",
+      "http": {
+        "method": "POST",
+        "path": "/api/v2/edge/clientes/eventos/",
+        "scope": "customers:v2:write",
+        "headers": {
+          "Authorization": "Bearer ${CENTRAL_INGEST_TOKEN}",
+          "Content-Type": "application/json",
+          "Idempotency-Key": "12121212-1212-4121-8121-121212121212"
+        },
+        "expected_status": 201
+      }
+    },
+    {
+      "name": "cliente_v2_ack_creado",
+      "schema": "schemas/cliente-evento-v2-response.schema.json",
+      "fixture": "fixtures/cliente-evento-v2-response-creado.json",
+      "expected_valid": true,
+      "semantic": "customer-response",
+      "relates_to": "fixtures/cliente-evento-v2-request.json",
+      "http": {
+        "method": "RESPONSE",
+        "path": "/api/v2/edge/clientes/eventos/",
+        "expected_status": 201
+      }
+    },
+    {
+      "name": "catalogo_v2_lab01_precio_global",
+      "schema": "schemas/catalogo-publicacion-v2.schema.json",
+      "fixture": "fixtures/catalogo-publicacion-v2-lab01-global.json",
+      "expected_valid": true,
+      "semantic": "catalog-publication",
+      "http": {
+        "method": "RESPONSE",
+        "path": "/api/v2/edge/catalogo/publicaciones/actual/",
+        "expected_status": 200
+      }
+    },
+    {
+      "name": "catalogo_v2_lab02_precio_excepcion",
+      "schema": "schemas/catalogo-publicacion-v2.schema.json",
+      "fixture": "fixtures/catalogo-publicacion-v2-lab02-excepcion.json",
+      "expected_valid": true,
+      "semantic": "catalog-publication",
+      "http": {
+        "method": "RESPONSE",
+        "path": "/api/v2/edge/catalogo/publicaciones/actual/",
+        "expected_status": 200
+      }
+    },
+    {
+      "name": "catalogo_v2_ack_aplicado",
+      "schema": "schemas/catalogo-ack-v2-request.schema.json",
+      "fixture": "fixtures/catalogo-ack-v2-request-aplicado.json",
+      "expected_valid": true,
+      "semantic": "catalog-ack",
+      "relates_to": "fixtures/catalogo-publicacion-v2-lab01-global.json",
+      "http": {
+        "method": "POST",
+        "path": "/api/v2/edge/catalogo/publicaciones/19191919-1919-4191-8191-191919191919/acuse/",
+        "scope": "catalog:v2:ack",
+        "headers": {
+          "Authorization": "Bearer ${CENTRAL_CATALOG_TOKEN}",
+          "Content-Type": "application/json",
+          "Idempotency-Key": "21212121-2121-4212-8212-212121212121"
+        },
+        "expected_status": 201
+      }
+    },
+    {
+      "name": "catalogo_v2_ack_rechazado",
+      "schema": "schemas/catalogo-ack-v2-request.schema.json",
+      "fixture": "fixtures/catalogo-ack-v2-request-rechazado.json",
+      "expected_valid": true,
+      "semantic": "catalog-ack",
+      "http": {
+        "method": "POST",
+        "path": "/api/v2/edge/catalogo/publicaciones/19191919-1919-4191-8191-191919191919/acuse/",
+        "scope": "catalog:v2:ack",
+        "headers": {
+          "Authorization": "Bearer ${CENTRAL_CATALOG_TOKEN}",
+          "Content-Type": "application/json",
+          "Idempotency-Key": "21212121-2121-4212-8212-212121212122"
+        },
+        "expected_status": 201
+      }
+    },
+    {
+      "name": "catalogo_v2_ack_response",
+      "schema": "schemas/catalogo-ack-v2-response.schema.json",
+      "fixture": "fixtures/catalogo-ack-v2-response-aplicado.json",
+      "expected_valid": true,
+      "semantic": "catalog-ack-response",
+      "relates_to": "fixtures/catalogo-ack-v2-request-aplicado.json",
+      "http": {
+        "method": "RESPONSE",
+        "path": "/api/v2/edge/catalogo/publicaciones/19191919-1919-4191-8191-191919191919/acuse/",
+        "expected_status": 201
+      }
+    },
+    {
+      "name": "matriz_identidades_sintetica",
+      "schema": "schemas/matriz-identidades-v1.schema.json",
+      "fixture": "fixtures/matriz-identidades-v1.json",
+      "expected_valid": true,
+      "semantic": "identity-map"
+    },
+    {
+      "name": "invalido_periodo_mensual_inconsistente",
+      "schema": "schemas/consolidacion-mensual-v1-request.schema.json",
+      "fixture": "fixtures/invalid/consolidacion-mensual-periodo-inconsistente.json",
+      "expected_valid": false,
+      "semantic": "monthly-request"
+    },
+    {
+      "name": "invalido_checksum_ventas",
+      "schema": "schemas/ventas-lote-v2-request.schema.json",
+      "fixture": "fixtures/invalid/ventas-lote-checksum-invalido.json",
+      "expected_valid": false,
+      "semantic": "sales-request"
+    },
+    {
+      "name": "invalido_cliente_propiedad_desconocida",
+      "schema": "schemas/cliente-evento-v2-request.schema.json",
+      "fixture": "fixtures/invalid/cliente-evento-propiedad-desconocida.json",
+      "expected_valid": false,
+      "semantic": "customer-request"
+    },
+    {
+      "name": "invalido_checksum_catalogo",
+      "schema": "schemas/catalogo-publicacion-v2.schema.json",
+      "fixture": "fixtures/invalid/catalogo-publicacion-checksum-invalido.json",
+      "expected_valid": false,
+      "semantic": "catalog-publication"
+    },
+    {
+      "name": "invalido_catalogo_salto_version",
+      "schema": "schemas/catalogo-publicacion-v2.schema.json",
+      "fixture": "fixtures/invalid/catalogo-publicacion-salto-version.json",
+      "expected_valid": false,
+      "semantic": "catalog-publication",
+      "relates_to": "fixtures/catalogo-publicacion-v2-lab01-global.json"
+    },
+    {
+      "name": "invalido_catalogo_predecesora_incorrecta",
+      "schema": "schemas/catalogo-publicacion-v2.schema.json",
+      "fixture": "fixtures/invalid/catalogo-publicacion-predecesora-incorrecta.json",
+      "expected_valid": false,
+      "semantic": "catalog-publication",
+      "relates_to": "fixtures/catalogo-publicacion-v2-lab01-global.json"
+    },
+    {
+      "name": "invalido_estado_ack_catalogo",
+      "schema": "schemas/catalogo-ack-v2-request.schema.json",
+      "fixture": "fixtures/invalid/catalogo-ack-estado-desconocido.json",
+      "expected_valid": false,
+      "semantic": "catalog-ack"
+    }
+  ]
+}

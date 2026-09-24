@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.lostocayos.invalid/edge-central/consolidacion-mensual-v1-request.schema.json",
+  "title": "Consolidación mensual POS a central v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version_contrato", "idempotencia", "sucursal", "periodo", "totales"],
+  "properties": {
+    "version_contrato": {"const": 1},
+    "idempotencia": {"type": "string", "format": "uuid"},
+    "sucursal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "clave", "nombre"],
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "clave": {"type": "string", "minLength": 1, "maxLength": 64},
+        "nombre": {"type": "string", "minLength": 1, "maxLength": 180}
+      }
+    },
+    "periodo": {"type": "string", "format": "date", "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-01$"},
+    "totales": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["periodo", "cortes", "ventas", "resultado_caja", "ingresos", "gastos", "terminales", "canales", "apps", "sucursales"],
+      "properties": {
+        "periodo": {"type": "string", "format": "date", "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-01$"},
+        "cortes": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "ventas": {"type": "string", "pattern": "^-?[0-9]{1,12}\\.[0-9]{2}$"},
+        "resultado_caja": {"type": "string", "pattern": "^-?[0-9]{1,12}\\.[0-9]{2}$"},
+        "ingresos": {"type": "string", "pattern": "^-?[0-9]{1,12}\\.[0-9]{2}$"},
+        "gastos": {"type": "string", "pattern": "^-?[0-9]{1,12}\\.[0-9]{2}$"},
+        "terminales": {"type": "string", "pattern": "^-?[0-9]{1,12}\\.[0-9]{2}$"},
+        "canales": {"$ref": "#/$defs/mapaImportes"},
+        "apps": {"$ref": "#/$defs/mapaImportes"},
+        "sucursales": {"$ref": "#/$defs/mapaImportes"}
+      }
+    }
+  },
+  "$defs": {
+    "mapaImportes": {
+      "type": "object",
+      "maxProperties": 100,
+      "additionalProperties": {"type": "string", "pattern": "^-?[0-9]{1,12}\\.[0-9]{2}$"}
+    }
+  }
+}

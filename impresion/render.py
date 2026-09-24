@@ -1200,7 +1200,10 @@ def escpos_raster(imagen):
     return b"\x1b@" + cabecera + bytes(datos) + b"\n\n\n\x1dV\x00"
 
 
-def enviar_tcp(imagen, destino):
-    host = settings.PRINTER_HOSTS[destino]
-    with socket.create_connection((host, settings.PRINTER_PORT), timeout=settings.PRINTER_TIMEOUT) as conexion:
+def enviar_tcp(imagen, destino, host=None, puerto=None):
+    host = str(host or settings.PRINTER_HOSTS[destino]).strip()
+    puerto = int(puerto or settings.PRINTER_PORT)
+    if not host:
+        raise OSError("No hay una impresora configurada para este destino.")
+    with socket.create_connection((host, puerto), timeout=settings.PRINTER_TIMEOUT) as conexion:
         conexion.sendall(escpos_raster(imagen))

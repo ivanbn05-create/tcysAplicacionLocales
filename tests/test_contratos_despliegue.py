@@ -12,6 +12,15 @@ RAIZ = Path(__file__).resolve().parents[1]
 
 
 class ContratosDespliegueTests(unittest.TestCase):
+    def test_release_incluye_contratos_ejecutables(self):
+        from herramientas.release_servidor import (
+            PREFIJOS_CONTRATO_REQUERIDOS,
+            RUTAS_REQUERIDAS,
+        )
+
+        self.assertIn("contracts", RUTAS_REQUERIDAS)
+        self.assertIn("contracts/", PREFIJOS_CONTRATO_REQUERIDOS)
+
     def test_validacion_aislada_incluye_version_de_release(self):
         validador = (
             RAIZ / "herramientas" / "validar_despliegue.py"
@@ -129,6 +138,14 @@ class ContratosDespliegueTests(unittest.TestCase):
         self.assertIn("VPS_CONSOLIDACION_URL=", lineas)
         self.assertIn("VPS_CONSOLIDACION_TOKEN=", lineas)
         self.assertIn("VPS_CONSOLIDACION_TIMEOUT=10", lineas)
+        self.assertIn("PEDIDOS_API_BASE_URL=", lineas)
+        self.assertIn("PEDIDOS_API_TOKEN=", lineas)
+        self.assertIn("CENTRAL_API_BASE_URL=", lineas)
+        self.assertIn("CENTRAL_INGEST_TOKEN=", lineas)
+        self.assertIn("CENTRAL_CATALOG_TOKEN=", lineas)
+        self.assertIn("CENTRAL_ENABLE_SALES_V2=false", lineas)
+        self.assertIn("CENTRAL_ENABLE_CUSTOMERS_V2=false", lineas)
+        self.assertIn("CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2=false", lineas)
 
     def test_perfiles_de_prueba_anulan_vps_heredado(self):
         for ruta in (
@@ -156,8 +173,8 @@ class ContratosDespliegueTests(unittest.TestCase):
             if not nombre.startswith(
                 (
                     "DJANGO_", "WAITRESS_", "POSTGRES_", "POS_", "PRINT_",
-                    "PRINTER_", "PEDIDOS_SUCURSALES_", "VPS_CONSOLIDACION_",
-                    "THERMAL_",
+                    "PRINTER_", "PEDIDOS_SUCURSALES_", "PEDIDOS_API_",
+                    "CENTRAL_", "VPS_CONSOLIDACION_", "THERMAL_",
                 )
             )
             and nombre not in {"DB_ENGINE", "SQLITE_PATH", "SUCURSAL_CLAVE"}

@@ -1,0 +1,60 @@
+{
+  "version_contrato": 2,
+  "tipo": "snapshot_completo",
+  "release_id": "18181818-1818-4181-8181-181818181818",
+  "publicacion_id": "19191919-1919-4191-8191-191919191919",
+  "publicacion_anterior_id": null,
+  "version_sucursal": 1,
+  "sucursal": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "clave": "LAB01"
+  },
+  "publicada_en": "2026-09-24T12:00:00-06:00",
+  "aplicar_desde": "2026-09-25",
+  "moneda": "MXN",
+  "conteos": {
+    "categorias": 1,
+    "productos": 1
+  },
+  "contenido": {
+    "categorias": [
+      {
+        "categoria_central_id": "ffffffff-ffff-4fff-8fff-fffffffffff1",
+        "codigo": "LAB-CAT",
+        "nombre": "Categoría sintética",
+        "orden": 10,
+        "activa": true
+      }
+    ],
+    "productos": [
+      {
+        "producto_central_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1",
+        "categoria_central_id": "ffffffff-ffff-4fff-8fff-fffffffffff1",
+        "codigo": "LAB-TACO",
+        "nombre": "Producto sintético",
+        "nombre_corto": "PS",
+        "orden": 10,
+        "permite_termino": true,
+        "termino_predeterminado": "medio",
+        "abreviaturas_termino": {
+          "dorado": "D",
+          "medio": "M",
+          "blando": "B"
+        },
+        "destino_impresion": "cocina",
+        "activo": true,
+        "imagen": {
+          "politica": "conservar_local_o_placeholder",
+          "asset": null
+        },
+        "precio": {
+          "importe": "100.00",
+          "origen": "global",
+          "vigente_desde": "2026-09-25",
+          "vigente_hasta": null
+        }
+      }
+    ]
+  },
+  "contenido_sha256": "cb3faac81824f82341e4651ad2c946cb8d6d56aac58852f669fa2e5a1314e42b"
+}

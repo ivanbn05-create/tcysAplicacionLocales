@@ -129,6 +129,66 @@ def cambiar_clave_administrador(sucursal, actual, nueva):
     configuracion.save(update_fields=["clave_administrador", "actualizado_en"])
 
 
+def asegurar_actor_administrador(sucursal):
+    """Crea o repara el actor protegido usado por la clave maestra en Ventas."""
+
+    with transaction.atomic():
+        configuracion = (
+            ConfiguracionSucursal.objects.select_for_update()
+            .select_related("actor_administrador__rol")
+            .get(sucursal=sucursal)
+        )
+        actor = configuracion.actor_administrador
+        if actor is not None and actor.sucursal_id == sucursal.id and actor.es_sistema:
+            cambios = []
+            if not actor.activo:
+                actor.activo = True
+                cambios.append("activo")
+            if actor.nombre != "Administrador":
+                actor.nombre = "Administrador"
+                cambios.append("nombre")
+            if cambios:
+                actor.save(update_fields=cambios)
+            return actor
+
+        actor = (
+            UsuarioPOS.objects.select_for_update()
+            .filter(sucursal=sucursal, es_sistema=True)
+            .first()
+        )
+        rol, _ = Rol.objects.get_or_create(
+            sucursal=sucursal,
+            tipo=Rol.Tipo.ENCARGADO,
+            defaults={
+                "nombre": "Encargado",
+                "puede_cobrar": True,
+                "puede_reimprimir": True,
+                "puede_cancelar": True,
+                "puede_sincronizar": True,
+            },
+        )
+        if actor is None:
+            actor = UsuarioPOS(
+                sucursal=sucursal,
+                rol=rol,
+                nombre="Administrador",
+                activo=True,
+                es_sistema=True,
+                clave=make_password(None),
+            )
+            actor.save()
+        else:
+            actor.rol = rol
+            actor.nombre = "Administrador"
+            actor.activo = True
+            actor.clave = make_password(None)
+            actor.save(update_fields=["rol", "nombre", "activo", "clave"])
+
+        configuracion.actor_administrador = actor
+        configuracion.save(update_fields=["actor_administrador", "actualizado_en"])
+        return actor
+
+
 def identificar_usuario_ventas(sucursal, clave, perfil_administrador=None):
     clave = _clave_cuatro_digitos(clave, "El código")
     perfil = _perfil_por_clave(sucursal, clave)
@@ -141,21 +201,7 @@ def identificar_usuario_ventas(sucursal, clave, perfil_administrador=None):
             and perfil_administrador.activo
         ):
             return perfil_administrador
-        perfil = (
-            UsuarioPOS.objects.select_related("rol")
-            .filter(
-                sucursal=sucursal,
-                activo=True,
-                rol__tipo=Rol.Tipo.ENCARGADO,
-            )
-            .order_by("creado_en", "id")
-            .first()
-        )
-        if perfil is not None:
-            return perfil
-        raise ErrorVenta(
-            "El administrador no tiene un perfil POS activo para operar Ventas."
-        )
+        return asegurar_actor_administrador(sucursal)
     raise ErrorVenta("El código no corresponde a un usuario activo.")
 
 
@@ -191,6 +237,8 @@ def guardar_usuario(sucursal, datos, usuario=None):
             .select_related("rol")
             .get(pk=usuario.pk, sucursal=sucursal)
         )
+        if usuario.es_sistema:
+            raise ErrorVenta("El actor Administrador es parte del sistema y no puede modificarse.")
     es_operador_principal = bool(
         usuario is not None and usuario.rol.tipo == Rol.Tipo.ENCARGADO
     )
@@ -322,15 +370,9 @@ def _posicion_libre(sucursal, canal, ticket=None):
 
 @transaction.atomic
 def activar_programados(sucursal, ahora=None):
-    # También se invoca al consultar el estado: el cierre pendiente deja
-    # PROGRAMADO intacto y no convierte una lectura en un error 500.
-    from .consolidacion import exigir_mes_operativo
-
+    # La activación de pedidos programados es local y debe continuar aunque
+    # el VPS o la consolidación mensual estén pendientes.
     sucursal = Sucursal.objects.select_for_update().get(pk=sucursal.pk)
-    try:
-        exigir_mes_operativo(sucursal)
-    except ErrorVenta:
-        return 0
     if isinstance(ahora, datetime):
         instante = ahora
         if timezone.is_naive(instante):
@@ -1106,9 +1148,12 @@ def _purgar_detalle_diario(
         SolicitudRepeticionTicket.objects.filter(
             Q(ticket_origen_id__in=ticket_ids) | Q(ticket_nuevo_id__in=ticket_ids)
         ).delete()
+        # El payload Central es autosuficiente y debe sobrevivir al borrado del
+        # ticket local hasta una política explícita posterior al ACK.
         EventoOutbox.objects.filter(
             agregado="ticket",
             agregado_id__in=ticket_ids,
+            destino=EventoOutbox.Destino.LOCAL,
         ).delete()
     if liquidaciones:
         LiquidacionRepartidor.objects.filter(
@@ -1560,6 +1605,7 @@ def resumen_administrador(sucursal):
         UsuarioPOS.objects.select_related("rol")
         .filter(
             sucursal=sucursal,
+            es_sistema=False,
             rol__tipo__in=[
                 Rol.Tipo.ENCARGADO,
                 Rol.Tipo.ELEVADO,

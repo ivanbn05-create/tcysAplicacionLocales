@@ -1,0 +1,142 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "tcysPedidosSucursales · API POS v2 candidata",
+    "version": "8fad56815f856b4286a2f60f488480960e34cde5",
+    "description": "Contrato ejecutable observado por el cliente POS. Candidato sin merge ni despliegue; API v1 y Supabase legacy se conservan como rollback."
+  },
+  "servers": [
+    {
+      "url": "https://pedidos.example.invalid",
+      "description": "Host sintético; no representa DNS productivo"
+    }
+  ],
+  "paths": {
+    "/api/v2/pos/pedidos/": {
+      "get": {
+        "operationId": "listarPedidosConfirmadosPosV2",
+        "summary": "Listar pedidos confirmados para un Edge autorizado",
+        "x-contract-status": "candidato-sin-merge-sin-deploy",
+        "x-source-candidate": "8fad56815f856b4286a2f60f488480960e34cde5",
+        "x-required-scope": "orders:v2:read",
+        "x-current-candidate-authorization-gap": "La allowlist es global; falta ligar credencial, scope e identidades a un Edge/sucursal.",
+        "security": [
+          {
+            "PedidosBearer": []
+          }
+        ],
+        "parameters": [
+          {"$ref": "#/components/parameters/Desde"},
+          {"$ref": "#/components/parameters/Hasta"},
+          {"$ref": "#/components/parameters/SucursalIds"},
+          {"$ref": "#/components/parameters/Limite"},
+          {"$ref": "#/components/parameters/Cursor"},
+          {"$ref": "#/components/parameters/RequestId"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Página válida, incluida una página vacía",
+            "headers": {
+              "X-Request-ID": {"$ref": "#/components/headers/RequestId"}
+            },
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "./schemas/pagina-pedidos-v2.schema.json"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/Error"},
+          "401": {"$ref": "#/components/responses/Error"},
+          "403": {"$ref": "#/components/responses/Error"},
+          "404": {"$ref": "#/components/responses/Error"},
+          "410": {
+            "description": "Cursor legado, expirado o fuera de retención. code debe ser retention_gap y exige conciliación.",
+            "headers": {
+              "X-Request-ID": {"$ref": "#/components/headers/RequestId"}
+            },
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "./schemas/error-pedidos-v2.schema.json"}
+              }
+            }
+          },
+          "426": {"$ref": "#/components/responses/Error"},
+          "429": {"$ref": "#/components/responses/Error"},
+          "500": {"$ref": "#/components/responses/Error"},
+          "502": {"$ref": "#/components/responses/Error"},
+          "503": {"$ref": "#/components/responses/Error"},
+          "504": {"$ref": "#/components/responses/Error"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "PedidosBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque",
+        "description": "Bearer estático existente. El requisito objetivo orders:v2:read y el binding por Edge/SucursalCliente.id se documentan en x-required-scope; no existe endpoint OAuth."
+      }
+    },
+    "parameters": {
+      "Desde": {
+        "name": "desde",
+        "in": "query",
+        "required": true,
+        "schema": {"type": "string", "format": "date-time"}
+      },
+      "Hasta": {
+        "name": "hasta",
+        "in": "query",
+        "required": true,
+        "schema": {"type": "string", "format": "date-time"}
+      },
+      "SucursalIds": {
+        "name": "sucursal_id",
+        "in": "query",
+        "required": true,
+        "description": "IDs enteros de SucursalCliente aprobados explícitamente; no se resuelven por nombre.",
+        "schema": {"type": "string", "pattern": "^[1-9][0-9]*(,[1-9][0-9]*)*$"}
+      },
+      "Limite": {
+        "name": "limite",
+        "in": "query",
+        "required": true,
+        "schema": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Cursor firmado opaco. Un cursor legado numérico recibe 410 retention_gap.",
+        "schema": {"type": "string", "minLength": 1, "maxLength": 2048}
+      },
+      "RequestId": {
+        "name": "X-Request-ID",
+        "in": "header",
+        "required": true,
+        "schema": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"}
+      }
+    },
+    "headers": {
+      "RequestId": {
+        "required": true,
+        "schema": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"}
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Error tipificado",
+        "headers": {
+          "X-Request-ID": {"$ref": "#/components/headers/RequestId"}
+        },
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "./schemas/error-pedidos-v2.schema.json"}
+          }
+        }
+      }
+    }
+  }
+}

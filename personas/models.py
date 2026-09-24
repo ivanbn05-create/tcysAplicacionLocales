@@ -103,11 +103,22 @@ class UsuarioPOS(models.Model):
     nombre = models.CharField(max_length=100)
     clave = models.CharField(max_length=128)
     activo = models.BooleanField(default=True)
+    es_sistema = models.BooleanField(
+        default=False,
+        help_text="Actor tecnico protegido; no se administra como personal operativo.",
+    )
     creado_en = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         verbose_name = "Usuario POS"
         verbose_name_plural = "Usuarios POS"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sucursal"],
+                condition=models.Q(es_sistema=True),
+                name="usuario_sistema_unico_sucursal",
+            )
+        ]
 
     def __str__(self):
         return self.nombre

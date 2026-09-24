@@ -52,6 +52,10 @@ class TrabajoImpresion(models.Model):
     archivo = models.CharField(max_length=300, blank=True)
     intentos = models.PositiveIntegerField(default=0)
     error = models.TextField(blank=True)
+    device_id = models.CharField(max_length=128, blank=True)
+    printer_host = models.GenericIPAddressField(null=True, blank=True)
+    printer_port = models.PositiveIntegerField(null=True, blank=True)
+    origen_ruta = models.CharField(max_length=20, blank=True)
     creado_en = models.DateTimeField(auto_now_add=True)
     procesado_en = models.DateTimeField(null=True, blank=True)
 
@@ -73,3 +77,42 @@ class TrabajoImpresion(models.Model):
         # Mantener la salida del worker compatible con la consola cp1252 de Windows.
         referencia = self.ticket.folio if self.ticket_id else str(self.reporte_id)[:8]
         return f"{self.formato} {referencia} -> {self.destino}"
+
+
+class ConfiguracionImpresionTerminal(models.Model):
+    """Rutas por terminal. El device_id selecciona configuracion, no autoriza."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(
+        Sucursal,
+        on_delete=models.CASCADE,
+        related_name="configuraciones_impresion_terminal",
+    )
+    device_id = models.CharField(max_length=128)
+    nombre = models.CharField(max_length=100)
+    activa = models.BooleanField(default=True)
+    host_caja = models.GenericIPAddressField(null=True, blank=True)
+    host_cocina = models.GenericIPAddressField(null=True, blank=True)
+    host_barra = models.GenericIPAddressField(null=True, blank=True)
+    puerto = models.PositiveIntegerField(default=9100)
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["nombre", "device_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sucursal", "device_id"],
+                name="impresion_terminal_unica_sucursal",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(puerto__gte=1, puerto__lte=65535),
+                name="impresion_terminal_puerto_valido",
+            ),
+        ]
+
+    def host_para(self, destino):
+        return getattr(self, f"host_{destino}", None)
+
+    def __str__(self):
+        return f"{self.nombre} - {self.sucursal.clave}"

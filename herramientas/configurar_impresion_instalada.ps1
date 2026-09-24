@@ -376,7 +376,7 @@ function Get-BlockingPrintQueueState {
     $inicio.RedirectStandardError = $true
     foreach ($nombre in @($inicio.EnvironmentVariables.Keys)) {
         $canonico = ([string]$nombre).ToUpperInvariant()
-        if ($canonico -match '^(?:DJANGO_|DB_|WAITRESS_|POSTGRES_|POS_|SUCURSAL_|PRINT_|PRINTER_|PEDIDOS_SUCURSALES_|VPS_CONSOLIDACION_|THERMAL_|PYTHON|PIP_)' -or
+        if ($canonico -match '^(?:DJANGO_|DB_|WAITRESS_|POSTGRES_|POS_|SUCURSAL_|PRINT_|PRINTER_|PEDIDOS_SUCURSALES_|PEDIDOS_API_|CENTRAL_|VPS_CONSOLIDACION_|THERMAL_|PYTHON|PIP_)' -or
             $canonico -in @('ALLOW_INSECURE_HTTP_LAN', 'SQLITE_PATH', 'VIRTUAL_ENV', '__PYVENV_LAUNCHER__')) {
             $inicio.EnvironmentVariables.Remove([string]$nombre)
         }
@@ -444,7 +444,7 @@ function Invoke-SafePrinterDiagnostic {
     $inicio.RedirectStandardError = $true
     foreach ($nombre in @($inicio.EnvironmentVariables.Keys)) {
         $canonico = ([string]$nombre).ToUpperInvariant()
-        if ($canonico -match '^(?:DJANGO_|DB_|WAITRESS_|POSTGRES_|POS_|SUCURSAL_|PRINT_|PRINTER_|PEDIDOS_SUCURSALES_|VPS_CONSOLIDACION_|THERMAL_|PYTHON|PIP_)' -or
+        if ($canonico -match '^(?:DJANGO_|DB_|WAITRESS_|POSTGRES_|POS_|SUCURSAL_|PRINT_|PRINTER_|PEDIDOS_SUCURSALES_|PEDIDOS_API_|CENTRAL_|VPS_CONSOLIDACION_|THERMAL_|PYTHON|PIP_)' -or
             $canonico -in @('ALLOW_INSECURE_HTTP_LAN', 'SQLITE_PATH', 'VIRTUAL_ENV', '__PYVENV_LAUNCHER__')) {
             $inicio.EnvironmentVariables.Remove([string]$nombre)
         }

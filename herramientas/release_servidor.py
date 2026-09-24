@@ -63,7 +63,7 @@ RUTAS_REQUERIDAS = (
     "iniciar-servicio-lan.ps1", "verificar-servicio-lan.ps1",
     "respaldar-db-sqlite.ps1", "certs/prod-ca-2021.crt",
     RUTA_CATALOGO_HISTORICO,
-    "catalogo", "herramientas", "impresion",
+    "catalogo", "contracts", "herramientas", "impresion",
     "personas", "pos", "tests", "ventas",
 )
 ARCHIVOS_CONTRATO_REQUERIDOS = (
@@ -82,7 +82,7 @@ ARCHIVOS_CONTRATO_REQUERIDOS = (
     "personas/management/commands/verificar_identidad_local.py",
 )
 PREFIJOS_CONTRATO_REQUERIDOS = (
-    "catalogo/", "herramientas/", "impresion/", "personas/", "pos/",
+    "catalogo/", "contracts/", "herramientas/", "impresion/", "personas/", "pos/",
     "tests/", "ventas/",
 )
 RUTAS_OPCIONALES = (

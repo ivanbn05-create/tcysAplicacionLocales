@@ -25,6 +25,14 @@ class SucursalPedido(models.Model):
     nombre = models.CharField(max_length=120)
     tipo = models.CharField(max_length=24, choices=Tipo.choices)
     activa = models.BooleanField(default=True)
+    identidad_confirmada_en = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            "Confirmacion manual del vinculo con SucursalCliente. "
+            "El nombre remoto nunca confirma la identidad."
+        ),
+    )
 
     class Meta:
         ordering = ["tipo", "nombre"]
@@ -129,6 +137,7 @@ class Cliente(models.Model):
         help_text="Solicita el nombre y teléfono del contacto en cada pedido.",
     )
     activo = models.BooleanField(default=True)
+    version_entidad = models.PositiveIntegerField(default=1)
     creado_en = models.DateTimeField(auto_now_add=True)
     actualizado_en = models.DateTimeField(auto_now=True)
 
@@ -166,6 +175,7 @@ class TelefonoCliente(models.Model):
     principal = models.BooleanField(default=False)
     activo = models.BooleanField(default=True)
     creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-principal", "creado_en"]
@@ -198,6 +208,7 @@ class DomicilioCliente(models.Model):
     principal = models.BooleanField(default=False)
     activo = models.BooleanField(default=True)
     creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-principal", "creado_en"]
@@ -243,7 +254,20 @@ class ConfiguracionSucursal(models.Model):
         on_delete=models.CASCADE,
         related_name="configuracion_pos",
     )
+    instalacion_id = models.UUIDField(
+        default=uuid.uuid4,
+        editable=False,
+        unique=True,
+        help_text="Identidad durable de esta instalacion Edge; no cambia en updates.",
+    )
     clave_administrador = models.CharField(max_length=128)
+    actor_administrador = models.OneToOneField(
+        UsuarioPOS,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="configuracion_como_administrador",
+    )
     actualizado_en = models.DateTimeField(auto_now=True)
 
     def __str__(self):
@@ -456,6 +480,13 @@ class Partida(models.Model):
     comanda_numero = models.PositiveIntegerField(default=1)
     cantidad = models.DecimalField(max_digits=8, decimal_places=3, default=Decimal("1.000"))
     precio_unitario = models.DecimalField(max_digits=10, decimal_places=2)
+    # Congela el precio de lista al capturar la línea, incluso si luego se bonifica por promoción.
+    precio_lista_capturado = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
     cantidad_por_precio = models.DecimalField(max_digits=8, decimal_places=3, default=Decimal("1.000"))
     unidad = models.CharField(max_length=8, blank=True)
     nombre_producto = models.CharField(max_length=180)
@@ -503,12 +534,43 @@ class ModificadorTicket(models.Model):
 
 
 class EventoOutbox(models.Model):
+    class Destino(models.TextChoices):
+        LOCAL = "local", "Auditoria local"
+        CENTRAL_VENTAS = "central_ventas_v2", "Central: ventas v2"
+        CENTRAL_CLIENTES = "central_clientes_v2", "Central: clientes v2"
+        CENTRAL_CATALOGO_ACK = "central_catalogo_ack_v2", "Central: ACK catalogo v2"
+
+    class EstadoEntrega(models.TextChoices):
+        LOCAL = "local", "Solo local"
+        PENDIENTE = "pendiente", "Pendiente"
+        ENTREGADO = "entregado", "Entregado"
+        CONCILIACION = "conciliacion", "Requiere conciliacion"
+        CUARENTENA = "cuarentena", "Cuarentena"
+        SUSPENDIDO = "suspendido", "Suspendido"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="eventos_outbox")
     agregado = models.CharField(max_length=40)
     agregado_id = models.UUIDField()
     tipo = models.CharField(max_length=80)
     datos = models.JSONField(default=dict)
+    destino = models.CharField(
+        max_length=32,
+        choices=Destino.choices,
+        default=Destino.LOCAL,
+    )
+    estado_entrega = models.CharField(
+        max_length=16,
+        choices=EstadoEntrega.choices,
+        default=EstadoEntrega.LOCAL,
+    )
+    version_contrato = models.PositiveSmallIntegerField(default=1)
+    version_origen = models.PositiveIntegerField(default=1)
+    payload_hash = models.CharField(max_length=64, blank=True)
+    acuse_remoto = models.CharField(max_length=160, blank=True)
+    estado_remoto = models.CharField(max_length=32, blank=True)
+    ultima_respuesta_http = models.PositiveSmallIntegerField(null=True, blank=True)
+    proximo_intento_en = models.DateTimeField(null=True, blank=True)
     creado_en = models.DateTimeField(auto_now_add=True)
     publicado_en = models.DateTimeField(null=True, blank=True)
     intentos = models.PositiveIntegerField(default=0)
@@ -516,7 +578,13 @@ class EventoOutbox(models.Model):
 
     class Meta:
         ordering = ["creado_en"]
-        indexes = [models.Index(fields=["publicado_en", "creado_en"])]
+        indexes = [
+            models.Index(fields=["publicado_en", "creado_en"]),
+            models.Index(
+                fields=["destino", "estado_entrega", "proximo_intento_en", "creado_en"],
+                name="ventas_outbox_entrega_idx",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.tipo} · {self.agregado_id}"
@@ -536,11 +604,59 @@ class PedidoSucursalImportado(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["sucursal", "origen", "origen_id"], name="pedido_sucursal_importado_unico")
+            models.UniqueConstraint(
+                fields=["sucursal", "origen", "origen_id"],
+                name="pedido_sucursal_importado_unico",
+            ),
+            models.UniqueConstraint(
+                fields=["sucursal", "codigo_publico"],
+                condition=models.Q(
+                    origen="pedidos_sucursales_api_v2",
+                    codigo_publico__gt="",
+                ),
+                name="pedido_api_v2_codigo_publico_unico",
+            ),
         ]
 
     def __str__(self):
         return f"{self.origen} #{self.origen_id} → {self.ticket.folio}"
+
+
+class EstadoSincronizacionPedidos(models.Model):
+    """Checkpoint durable de Pedidos v2; un gap nunca se interpreta como vacio."""
+
+    class Estado(models.TextChoices):
+        LISTO = "listo", "Listo"
+        RECONCILIACION = "reconciliacion", "Requiere conciliacion"
+        CONTRATO_RECHAZADO = "contrato_rechazado", "Contrato rechazado"
+        AUTENTICACION = "autenticacion", "Requiere credencial"
+        ERROR_TRANSITORIO = "error_transitorio", "Error transitorio"
+        PAUSADO = "pausado", "Pausado"
+
+    sucursal = models.OneToOneField(
+        Sucursal,
+        primary_key=True,
+        on_delete=models.CASCADE,
+        related_name="estado_sincronizacion_pedidos",
+    )
+    version_api = models.CharField(max_length=8, default="v2")
+    estado = models.CharField(max_length=24, choices=Estado.choices, default=Estado.LISTO)
+    ventana_desde = models.DateTimeField(null=True, blank=True)
+    ventana_hasta = models.DateTimeField(null=True, blank=True)
+    agua_alta_hasta = models.DateTimeField(null=True, blank=True)
+    sucursales_origen = models.JSONField(default=list, blank=True)
+    cursor = models.TextField(blank=True)
+    ultimo_cursor_confirmado = models.TextField(blank=True)
+    ultimo_request_id = models.CharField(max_length=64, blank=True)
+    ultimo_codigo_http = models.PositiveSmallIntegerField(null=True, blank=True)
+    detalle_seguro = models.CharField(max_length=240, blank=True)
+    intentos = models.PositiveIntegerField(default=0)
+    ultima_sincronizacion_en = models.DateTimeField(null=True, blank=True)
+    conciliacion_requerida_en = models.DateTimeField(null=True, blank=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Pedidos {self.version_api} - {self.sucursal.clave} - {self.estado}"
 
 
 class MovimientoCaja(models.Model):
@@ -664,6 +780,7 @@ class ConsolidacionMensual(models.Model):
         CONFIRMADA = "confirmada", "Confirmada por VPS"
         PURGADA = "purgada", "Datos locales eliminados"
         ERROR = "error", "Error"
+        CONCILIACION = "conciliacion", "Requiere conciliacion"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="consolidaciones_mensuales")
@@ -671,8 +788,11 @@ class ConsolidacionMensual(models.Model):
     idempotencia = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     estado = models.CharField(max_length=12, choices=Estado.choices, default=Estado.PENDIENTE)
     totales = models.JSONField(default=dict)
+    payload_inmutable = models.JSONField(default=dict, blank=True)
+    payload_hash = models.CharField(max_length=64, blank=True)
     intentos = models.PositiveIntegerField(default=0)
     acuse_vps = models.CharField(max_length=160, blank=True)
+    estado_vps = models.CharField(max_length=16, blank=True)
     ultimo_error = models.TextField(blank=True)
     creado_en = models.DateTimeField(auto_now_add=True)
     confirmado_en = models.DateTimeField(null=True, blank=True)

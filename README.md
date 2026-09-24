@@ -4,19 +4,20 @@ Primera versión local del punto de venta de Los Tocayos. Permite operar pedidos
 comedor, domicilio y sucursales, capturar partidas por comensal, procesar la orden,
 cobrarla y generar comandas/cuentas térmicas en modo ráster.
 
-> **Estado al 19 de septiembre de 2026:** `0.4.0-dev.8` es la candidata vigente de
-> laboratorio; no existe ninguna sucursal en producción. La instalación y actualización
-> reales preservaron configuración y datos, y la impresión TCP fue aceptada con una
-> hoja correcta cuyo contenido coincidió con la comanda. Siguen pendientes la aceptación
-> física en Android, el nuevo frente del VPS y la decisión explícita de promover una
-> candidata como base estándar.
+> **Estado al 24 de septiembre de 2026:** `0.4.0-dev.10` es la candidata vigente de
+> desarrollo y no existe ninguna sucursal en producción. `dev.8` conserva la última
+> evidencia de actualización física del laboratorio. `dev.10` aún no tiene commit final,
+> artefacto, actualización ni E2E con PostgreSQL acreditados; las rutas centrales v2
+> permanecen apagadas. Consulta el [índice documental](docs/README.md) y la
+> [guía dev.10](docs/candidatas/INTEGRACION_OPERACION_Y_VALIDACION_0.4.0-dev.10.md).
 
 La dirección futura de paquete único, módulos por sucursal, actualización segura,
 sincronización y servidor central Hostinger KVM 2 está documentada en
 [ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md](ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md).
-Esa arquitectura está aceptada, pero el backend central todavía no está
-implementado. El ciclo recomendado para desarrollar, versionar y desplegar por
-sucursal, junto con el estado real de `.exe`, PWA y `.apk`, está en
+Esa arquitectura está aceptada. Existe un receptor mensual v1 privado y candidatos
+de portal/catálogo; las APIs centrales v2 de ventas, clientes y distribución de
+catálogo todavía no están activadas ni acreditadas E2E. El ciclo recomendado para
+desarrollar, versionar y desplegar por sucursal, junto con el estado real de `.exe`, PWA y `.apk`, está en
 [FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md](FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md).
 
 ## Flujo de desarrollo y actualización
@@ -385,7 +386,7 @@ el servidor local existentes; no requiere Docker ni conexión a un VPS.
 El modo táctil se abre con `TocayosPOS.exe --tableta`. Consulta
 `desktop/README.md` para configurar un servidor de red o iniciar sólo el servicio.
 
-`diagnostico_calidad_pos_local.md` conserva el diagnóstico histórico del
+[`docs/auditorias/diagnostico_calidad_pos_local.md`](docs/auditorias/diagnostico_calidad_pos_local.md) conserva el diagnóstico histórico del
 2026-08-23. Varias brechas que enumera —autenticación, Waitress, locks, worker y
 respaldo— se corrigieron después; no debe utilizarse como matriz vigente. El
 estado actual de despliegue está en `DESPLIEGUE_WINDOWS.md` y en la arquitectura
@@ -651,11 +652,12 @@ del corte elimina el detalle de los pedidos del turno —incluidas cancelaciones
 movimientos de caja ya incorporados, reportes intermedios y archivos de impresión
 relacionados. Los pedidos programados para el futuro quedan fuera de esa purga.
 
-Al detectar un mes anterior con cortes pendientes, el sistema impide iniciar ventas
-nuevas hasta consolidarlo. Envía al VPS los totales mensuales con una clave de
+Al detectar un mes anterior con cortes pendientes, el Administrador conserva una alerta,
+pero el POS sigue abriendo, procesando, cobrando e imprimiendo ventas locales. Envía al VPS los totales mensuales con una clave de
 idempotencia y sólo purga las instantáneas mensuales y reinicia folios cuando recibe
 HTTP exitoso y un JSON con `recibido: true` y un `acuse` no vacío. Un error de red, un
-acuse inválido o una URL ausente conserva los datos locales y deja el mes pendiente.
+acuse inválido o una URL ausente conserva los datos locales y deja el mes pendiente sin
+bloquear la operación.
 
 La candidata reconoce estas variables, pero el endpoint y sus credenciales reales aún
 no están configurados:
@@ -699,12 +701,13 @@ aislada y activó el rollback automático. La copia temporal incluía el código
 omitía el archivo raíz `VERSION` que ahora es parte del contrato de runtime. La
 instalación anterior quedó restaurada; no se perdió configuración ni información.
 
-`dev.8` es la evidencia vigente: completó 192 pruebas Django, 13 pruebas de respaldo
-SQLite, 5 del host Windows y 85 de infraestructura. Dos builds idénticos, la
-actualización real de `C:\LosTocayosPOS`, el respaldo privado de configuración y
-la impresión física aceptada quedaron acreditados en
-[EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.8.md](EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.8.md).
-Las evidencias de `dev.3`, `dev.4` y `dev.6` se conservan como antecedentes.
+`dev.8` conserva la última evidencia de actualización física: completó 192 pruebas
+Django, 13 pruebas de respaldo SQLite, 5 del host Windows y 85 de infraestructura.
+Dos builds idénticos, la actualización de laboratorio de `C:\LosTocayosPOS`, el
+respaldo privado de configuración y la impresión física aceptada quedaron acreditados
+en [su evidencia histórica](docs/historico/releases/EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.8.md).
+`dev.10` es la candidata de desarrollo actual y aún no tiene release ni despliegue
+acreditados. Las evidencias anteriores se conservan como antecedentes.
 
 ## Corrección de identidad en `0.4.0-dev.5`
 
@@ -723,7 +726,7 @@ de instalar una release nueva, las tabletas deben recargar o volver a abrir la
 aplicación una vez para tomar los recursos vigentes.
 
 Los cambios funcionales y la evidencia de distribución de `dev.4` se conservan en
-[EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.4.md](EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.4.md).
+[EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.4.md](docs/historico/releases/EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.4.md).
 Ese artefacto sigue siendo una referencia histórica reproducible, pero no debe
 promoverse como base por la discrepancia de caché descubierta después de su
 instalación.

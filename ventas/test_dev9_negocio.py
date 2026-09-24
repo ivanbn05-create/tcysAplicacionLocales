@@ -598,9 +598,9 @@ class NegocioDev9Tests(TestCase):
         profundidad_base = len(connection.atomic_blocks)
         profundidades_encolado = []
 
-        def encolar_dentro_de_transaccion(reporte):
+        def encolar_dentro_de_transaccion(reporte, *, device_id=""):
             profundidades_encolado.append(len(connection.atomic_blocks))
-            return encolar_reporte(reporte)
+            return encolar_reporte(reporte, device_id=device_id)
 
         with patch(
             "ventas.views.encolar_reporte",

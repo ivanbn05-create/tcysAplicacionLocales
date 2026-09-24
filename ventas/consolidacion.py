@@ -1,11 +1,14 @@
 """Consolidación mensual del edge local y purga autorizada por el VPS."""
 
+import hashlib
 import json
+import ssl
 import threading
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
@@ -36,6 +39,71 @@ from .services import ErrorVenta
 
 
 _CONSOLIDACION_LOCAL_LOCK = threading.RLock()
+
+
+class ErrorConsolidacionHTTP(ErrorVenta):
+    def __init__(self, mensaje, *, status):
+        super().__init__(mensaje)
+        self.status = int(status)
+
+
+class _BloquearRedirecciones(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _origen_https(url):
+    try:
+        partes = urlsplit(str(url))
+        puerto = partes.port
+    except ValueError as exc:
+        raise ErrorVenta("La URL de consolidacion no es valida.") from exc
+    if (
+        partes.scheme.lower() != "https"
+        or not partes.hostname
+        or partes.username is not None
+        or partes.password is not None
+    ):
+        raise ErrorVenta("La consolidacion exige HTTPS sin credenciales en la URL.")
+    return partes.hostname.lower(), puerto or 443
+
+
+def _urlopen_sin_redireccion(solicitud, *, timeout):
+    contexto = ssl.create_default_context()
+    if contexto.verify_mode != ssl.CERT_REQUIRED or not contexto.check_hostname:
+        raise ErrorVenta("La verificacion TLS de consolidacion debe permanecer activa.")
+    opener = build_opener(
+        HTTPSHandler(context=contexto),
+        _BloquearRedirecciones(),
+    )
+    return opener.open(solicitud, timeout=timeout)
+
+
+# Punto de inyeccion conservado para las pruebas; la implementacion real bloquea 30x.
+urlopen = _urlopen_sin_redireccion
+
+
+def _json_sin_duplicados(pares):
+    resultado = {}
+    for clave, valor in pares:
+        if clave in resultado:
+            raise ValueError("clave duplicada")
+        resultado[clave] = valor
+    return resultado
+
+
+def _payload_bytes(payload):
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _payload_hash(payload):
+    return hashlib.sha256(_payload_bytes(payload)).hexdigest()
 
 
 def _inicio_mes(valor):
@@ -144,8 +212,8 @@ def periodos_pendientes(sucursal, hoy=None):
         ).only("fecha", "fondo_anterior", "fondo_siguiente", "ventas_apps")
         if _control_tiene_actividad(control)
     )
-    # Una consolidación confirmada conserva el bloqueo aunque su detalle lógico
-    # ya haya sido eliminado: sólo SYSTEM puede cerrar su purga física.
+    # Una consolidación confirmada conserva la alerta administrativa aunque su detalle
+    # lógico ya haya sido eliminado: sólo SYSTEM puede cerrar su purga física.
     periodos.update(
         ConsolidacionMensual.objects.filter(
             sucursal=sucursal,
@@ -185,14 +253,6 @@ def estado_cierre_mensual(sucursal, hoy=None):
         "intervalo_purga_segundos": 300,
     }
 
-
-def exigir_mes_operativo(sucursal, hoy=None):
-    estado = estado_cierre_mensual(sucursal, hoy=hoy)
-    if estado["requerido"]:
-        raise ErrorVenta(
-            "Debes consolidar el mes "
-            f"{estado['periodo'][:7]} con el VPS y reiniciar folios antes de iniciar ventas."
-        )
 
 
 def _sumar_mapas(filas, campo):
@@ -258,8 +318,11 @@ def construir_totales(sucursal, periodo):
 def _enviar_vps(payload):
     if not settings.VPS_CONSOLIDACION_URL:
         raise ErrorVenta(
-            "La consolidación mensual está pendiente: configura VPS_CONSOLIDACION_URL."
+            "La consolidacion mensual esta pendiente: configura VPS_CONSOLIDACION_URL."
         )
+    contenido = _payload_bytes(payload)
+    if len(contenido) > 256 * 1024:
+        raise ErrorVenta("La consolidacion supera el limite contractual de 256 KiB.")
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
@@ -267,27 +330,53 @@ def _enviar_vps(payload):
     }
     if settings.VPS_CONSOLIDACION_TOKEN:
         headers["Authorization"] = f"Bearer {settings.VPS_CONSOLIDACION_TOKEN}"
+    origen_esperado = _origen_https(settings.VPS_CONSOLIDACION_URL)
     solicitud = Request(
         settings.VPS_CONSOLIDACION_URL,
-        data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        data=contenido,
         headers=headers,
         method="POST",
     )
     try:
         with urlopen(solicitud, timeout=settings.VPS_CONSOLIDACION_TIMEOUT) as respuesta:
-            codigo = getattr(respuesta, "status", respuesta.getcode())
-            datos = json.loads(respuesta.read().decode("utf-8"))
+            if _origen_https(respuesta.geturl()) != origen_esperado:
+                raise ErrorVenta("El VPS intento cambiar el origen de la consolidacion.")
+            codigo = int(getattr(respuesta, "status", respuesta.getcode()))
+            content_type = str(respuesta.headers.get("Content-Type", "")).split(";", 1)[0].lower()
+            cuerpo = respuesta.read(64 * 1024 + 1)
     except HTTPError as exc:
-        raise ErrorVenta(f"El VPS rechazó la consolidación (HTTP {exc.code}).") from exc
+        raise ErrorConsolidacionHTTP(
+            f"El VPS rechazo la consolidacion (HTTP {exc.code}).",
+            status=exc.code,
+        ) from exc
     except (URLError, TimeoutError, OSError) as exc:
         raise ErrorVenta("No fue posible conectar con el VPS para consolidar el mes.") from exc
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ErrorVenta("El VPS respondió sin un acuse JSON válido.") from exc
-    if not 200 <= int(codigo) < 300:
-        raise ErrorVenta(f"El VPS rechazó la consolidación (HTTP {codigo}).")
-    if datos.get("recibido") is not True or not str(datos.get("acuse", "")).strip():
-        raise ErrorVenta("El VPS no confirmó explícitamente la recepción de los datos.")
-    return str(datos["acuse"]).strip()[:160]
+    if len(cuerpo) > 64 * 1024:
+        raise ErrorVenta("El VPS respondio un acuse demasiado grande.")
+    if content_type != "application/json":
+        raise ErrorVenta("El VPS no respondio application/json.")
+    try:
+        datos = json.loads(
+            cuerpo,
+            object_pairs_hook=_json_sin_duplicados,
+            parse_constant=lambda _valor: (_ for _ in ()).throw(ValueError("constante")),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as exc:
+        raise ErrorVenta("El VPS respondio sin un acuse JSON valido.") from exc
+    if not 200 <= codigo < 300:
+        raise ErrorConsolidacionHTTP(
+            f"El VPS rechazo la consolidacion (HTTP {codigo}).",
+            status=codigo,
+        )
+    if type(datos) is not dict or set(datos) != {"recibido", "acuse", "estado"}:
+        raise ErrorVenta("El VPS respondio un esquema de acuse desconocido.")
+    acuse = str(datos.get("acuse") or "").strip()
+    estado = str(datos.get("estado") or "").strip()
+    if datos.get("recibido") is not True or not acuse or len(acuse) > 160:
+        raise ErrorVenta("El VPS no confirmo explicitamente la recepcion de los datos.")
+    if estado not in {"recibido", "purgado"}:
+        raise ErrorVenta("El VPS respondio un estado de consolidacion desconocido.")
+    return acuse, estado
 
 
 @transaction.atomic
@@ -357,6 +446,7 @@ def _purgar_periodo(sucursal, consolidacion):
         EventoOutbox.objects.filter(
             agregado="ticket",
             agregado_id__in=ids_tickets,
+            destino=EventoOutbox.Destino.LOCAL,
         ).delete()
         Ticket.objects.filter(id__in=ids_tickets).delete()
 
@@ -437,21 +527,18 @@ def _obtener_consolidacion_bloqueada(sucursal, periodo):
 def consolidar_periodo(sucursal, periodo=None):
     periodo = periodo or (periodos_pendientes(sucursal) or [None])[0]
     if periodo is None:
-        raise ErrorVenta("No hay un mes anterior pendiente de consolidación.")
+        raise ErrorVenta("No hay un mes anterior pendiente de consolidacion.")
     if isinstance(periodo, str):
         try:
             periodo = date.fromisoformat(f"{periodo[:7]}-01")
         except ValueError as exc:
-            raise ErrorVenta("El periodo mensual no es válido.") from exc
+            raise ErrorVenta("El periodo mensual no es valido.") from exc
     periodo = _inicio_mes(periodo)
     if periodo >= _inicio_mes(timezone.localdate()):
-        raise ErrorVenta("Sólo se pueden consolidar meses ya terminados.")
+        raise ErrorVenta("Solo se pueden consolidar meses ya terminados.")
 
-    error = None
-    resultado = None
-    # Waitress atiende varias terminales con hilos. Este bloqueo evita la
-    # carrera de creación propia de SQLite; select_for_update mantiene la
-    # misma garantía entre procesos cuando se usa PostgreSQL.
+    # El lock evita envios simultaneos dentro de Waitress. La idempotencia
+    # remota cubre procesos distintos; la red ocurre fuera de transaction.atomic.
     with _CONSOLIDACION_LOCAL_LOCK:
         with transaction.atomic():
             type(sucursal).objects.select_for_update().get(pk=sucursal.pk)
@@ -459,51 +546,115 @@ def consolidar_periodo(sucursal, periodo=None):
             consolidacion.refresh_from_db()
 
             if consolidacion.estado == ConsolidacionMensual.Estado.PURGADA:
-                resultado = consolidacion
-            elif consolidacion.estado == ConsolidacionMensual.Estado.CONFIRMADA:
-                # Si el proceso cayó justo después del acuse, completa una sola
-                # vez la purga lógica. Después sólo espera a la tarea SYSTEM.
+                return consolidacion
+            if consolidacion.estado == ConsolidacionMensual.Estado.CONCILIACION:
+                raise ErrorVenta(
+                    "La consolidacion requiere conciliacion; no se genero otro identificador."
+                )
+            if consolidacion.estado == ConsolidacionMensual.Estado.CONFIRMADA:
                 if consolidacion.purgado_en is None:
                     _purgar_periodo(sucursal, consolidacion)
-                resultado = consolidacion
-            else:
-                try:
-                    totales = construir_totales(sucursal, periodo)
-                    consolidacion.totales = totales
-                    consolidacion.intentos += 1
-                    consolidacion.estado = ConsolidacionMensual.Estado.PENDIENTE
-                    consolidacion.ultimo_error = ""
-                    consolidacion.save(
-                        update_fields=["totales", "intentos", "estado", "ultimo_error"]
-                    )
-                    payload = {
-                        "version_contrato": 1,
-                        "idempotencia": str(consolidacion.idempotencia),
-                        "sucursal": {
-                            "id": str(sucursal.id),
-                            "clave": sucursal.clave,
-                            "nombre": sucursal.nombre,
-                        },
-                        "periodo": periodo.isoformat(),
-                        "totales": totales,
-                    }
-                    acuse = _enviar_vps(payload)
-                except ErrorVenta as exc:
-                    consolidacion.estado = ConsolidacionMensual.Estado.ERROR
-                    consolidacion.ultimo_error = str(exc)
-                    consolidacion.save(update_fields=["estado", "ultimo_error"])
-                    error = ErrorVenta(str(exc))
-                else:
-                    consolidacion.estado = ConsolidacionMensual.Estado.CONFIRMADA
-                    consolidacion.acuse_vps = acuse
-                    consolidacion.confirmado_en = timezone.now()
-                    consolidacion.save(
-                        update_fields=["estado", "acuse_vps", "confirmado_en"]
-                    )
-                    _purgar_periodo(sucursal, consolidacion)
-                    resultado = consolidacion
+                consolidacion.refresh_from_db()
+                return consolidacion
 
-        if error is not None:
-            raise error
-        resultado.refresh_from_db()
-        return resultado
+            if not consolidacion.payload_inmutable:
+                totales = construir_totales(sucursal, periodo)
+                payload = {
+                    "version_contrato": 1,
+                    "idempotencia": str(consolidacion.idempotencia),
+                    "sucursal": {
+                        "id": str(sucursal.id),
+                        "clave": sucursal.clave,
+                        "nombre": sucursal.nombre,
+                    },
+                    "periodo": periodo.isoformat(),
+                    "totales": totales,
+                }
+                consolidacion.totales = totales
+                consolidacion.payload_inmutable = payload
+                consolidacion.payload_hash = _payload_hash(payload)
+            else:
+                payload = consolidacion.payload_inmutable
+                if _payload_hash(payload) != consolidacion.payload_hash:
+                    consolidacion.estado = ConsolidacionMensual.Estado.CONCILIACION
+                    consolidacion.ultimo_error = (
+                        "El payload mensual local no coincide con su hash inmutable."
+                    )
+                    consolidacion.save(update_fields=["estado", "ultimo_error"])
+                    raise ErrorVenta(
+                        "La consolidacion requiere conciliacion por integridad local."
+                    )
+            consolidacion.intentos += 1
+            consolidacion.estado = ConsolidacionMensual.Estado.PENDIENTE
+            consolidacion.ultimo_error = ""
+            consolidacion.save(
+                update_fields=[
+                    "totales",
+                    "payload_inmutable",
+                    "payload_hash",
+                    "intentos",
+                    "estado",
+                    "ultimo_error",
+                ]
+            )
+            payload = dict(consolidacion.payload_inmutable)
+            hash_esperado = consolidacion.payload_hash
+
+        try:
+            acuse, estado_vps = _enviar_vps(payload)
+        except ErrorConsolidacionHTTP as exc:
+            with transaction.atomic():
+                actual = ConsolidacionMensual.objects.select_for_update().get(
+                    pk=consolidacion.pk
+                )
+                if exc.status in {409, 422}:
+                    actual.estado = ConsolidacionMensual.Estado.CONCILIACION
+                else:
+                    actual.estado = ConsolidacionMensual.Estado.ERROR
+                actual.ultimo_error = str(exc)
+                actual.save(update_fields=["estado", "ultimo_error"])
+            raise ErrorVenta(str(exc)) from exc
+        except ErrorVenta as exc:
+            with transaction.atomic():
+                actual = ConsolidacionMensual.objects.select_for_update().get(
+                    pk=consolidacion.pk
+                )
+                actual.estado = ConsolidacionMensual.Estado.ERROR
+                actual.ultimo_error = str(exc)
+                actual.save(update_fields=["estado", "ultimo_error"])
+            raise
+
+        with transaction.atomic():
+            actual = ConsolidacionMensual.objects.select_for_update().get(
+                pk=consolidacion.pk
+            )
+            if actual.estado == ConsolidacionMensual.Estado.CONFIRMADA and actual.purgado_en:
+                return actual
+            if (
+                actual.payload_hash != hash_esperado
+                or actual.payload_inmutable != payload
+                or _payload_hash(actual.payload_inmutable) != hash_esperado
+            ):
+                actual.estado = ConsolidacionMensual.Estado.CONCILIACION
+                actual.ultimo_error = "El payload cambio mientras se esperaba el ACK."
+                actual.save(update_fields=["estado", "ultimo_error"])
+                raise ErrorVenta(
+                    "La consolidacion requiere conciliacion por una carrera de integridad."
+                )
+            actual.estado = ConsolidacionMensual.Estado.CONFIRMADA
+            actual.acuse_vps = acuse
+            actual.estado_vps = estado_vps
+            actual.confirmado_en = timezone.now()
+            actual.ultimo_error = ""
+            actual.save(
+                update_fields=[
+                    "estado",
+                    "acuse_vps",
+                    "estado_vps",
+                    "confirmado_en",
+                    "ultimo_error",
+                ]
+            )
+            _purgar_periodo(sucursal, actual)
+        actual.refresh_from_db()
+        return actual

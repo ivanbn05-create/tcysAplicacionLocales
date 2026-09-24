@@ -30,6 +30,19 @@ class ConfiguradorImpresionTests(unittest.TestCase):
         posiciones = [flujo.index(paso) for paso in pasos]
         self.assertEqual(posiciones, sorted(posiciones))
 
+    def test_subprocesos_descartan_integraciones_heredadas(self):
+        contenido = SCRIPT.read_text(encoding="utf-8-sig")
+        for funcion, siguiente in (
+            ("Get-BlockingPrintQueueState", "Invoke-SafePrinterDiagnostic"),
+            ("Invoke-SafePrinterDiagnostic", "Enter-MaintenanceMutex"),
+        ):
+            inicio = contenido.index(f"function {funcion}")
+            fin = contenido.index(f"function {siguiente}", inicio)
+            cuerpo = contenido[inicio:fin]
+            self.assertIn("PEDIDOS_API_", cuerpo)
+            self.assertIn("CENTRAL_", cuerpo)
+            self.assertIn("VPS_CONSOLIDACION_", cuerpo)
+
     @unittest.skipUnless(POWERSHELL, "Windows PowerShell no está disponible")
     def test_powershell_tiene_sintaxis_valida(self):
         comando = (

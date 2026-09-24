@@ -59,6 +59,12 @@ class EntornoServicioWindowsTests(unittest.TestCase):
                         "PRINT_BACKEND=archivo",
                         "print_backend=tcp",
                         "PRINTER_CAJA_HOST=10.0.0.20",
+                        "PEDIDOS_API_BASE_URL=https://pedidos.local",
+                        "PEDIDOS_API_TOKEN=pedidos-desde-archivo-0123456789",
+                        "PEDIDOS_API_SUCURSAL_IDS=101",
+                        "CENTRAL_API_BASE_URL=https://central.local",
+                        "CENTRAL_INGEST_TOKEN=central-desde-archivo-0123456789",
+                        "CENTRAL_ENABLE_SALES_V2=false",
                         "VPS_CONSOLIDACION_URL=https://vps.local/api/consolidaciones",
                         "VPS_CONSOLIDACION_TOKEN=desde-archivo",
                         "VPS_CONSOLIDACION_TIMEOUT=12",
@@ -84,6 +90,12 @@ class EntornoServicioWindowsTests(unittest.TestCase):
                 "PRINT_BACKEND": "tcp",
                 "PRINT_SYNC": "false",
                 "PRINTER_CAJA_HOST": "192.0.2.50",
+                "PEDIDOS_API_BASE_URL": "https://pedidos-heredado.invalid",
+                "PEDIDOS_API_TOKEN": "pedidos-heredado-0123456789",
+                "PEDIDOS_API_SUCURSAL_IDS": "999",
+                "CENTRAL_API_BASE_URL": "https://central-heredado.invalid",
+                "CENTRAL_INGEST_TOKEN": "central-heredado-0123456789",
+                "CENTRAL_ENABLE_SALES_V2": "true",
                 "VPS_CONSOLIDACION_URL": "https://host-ajeno.invalid/consolidar",
                 "VPS_CONSOLIDACION_TOKEN": "token-ajeno",
                 "VPS_CONSOLIDACION_TIMEOUT": "59",
@@ -111,6 +123,16 @@ class EntornoServicioWindowsTests(unittest.TestCase):
                 self.assertEqual(os.environ["SUCURSAL_CLAVE"], "NORTE")
                 self.assertEqual(os.environ["PRINT_BACKEND"], "archivo")
                 self.assertEqual(os.environ["PRINTER_CAJA_HOST"], "10.0.0.20")
+                self.assertEqual(os.environ["PEDIDOS_API_BASE_URL"], "https://pedidos.local")
+                self.assertEqual(
+                    os.environ["PEDIDOS_API_TOKEN"], "pedidos-desde-archivo-0123456789"
+                )
+                self.assertEqual(os.environ["PEDIDOS_API_SUCURSAL_IDS"], "101")
+                self.assertEqual(os.environ["CENTRAL_API_BASE_URL"], "https://central.local")
+                self.assertEqual(
+                    os.environ["CENTRAL_INGEST_TOKEN"], "central-desde-archivo-0123456789"
+                )
+                self.assertEqual(os.environ["CENTRAL_ENABLE_SALES_V2"], "false")
                 self.assertEqual(
                     os.environ["VPS_CONSOLIDACION_URL"],
                     "https://vps.local/api/consolidaciones",
@@ -151,6 +173,9 @@ class EntornoServicioWindowsTests(unittest.TestCase):
                 "DB_ENGINE": "oracle",
                 "SUCURSAL_CLAVE": "OTRA",
                 "PRINT_BACKEND": "tcp",
+                "PEDIDOS_API_TOKEN": "pedidos-heredado-0123456789",
+                "CENTRAL_INGEST_TOKEN": "central-heredado-0123456789",
+                "CENTRAL_ENABLE_SALES_V2": "true",
                 "VPS_CONSOLIDACION_URL": "https://host-ajeno.invalid/consolidar",
                 "VPS_CONSOLIDACION_TOKEN": "token-ajeno",
                 "VPS_CONSOLIDACION_TIMEOUT": "59",
@@ -166,6 +191,9 @@ class EntornoServicioWindowsTests(unittest.TestCase):
                     "DB_ENGINE",
                     "SUCURSAL_CLAVE",
                     "PRINT_BACKEND",
+                    "PEDIDOS_API_TOKEN",
+                    "CENTRAL_INGEST_TOKEN",
+                    "CENTRAL_ENABLE_SALES_V2",
                     "VPS_CONSOLIDACION_URL",
                     "VPS_CONSOLIDACION_TOKEN",
                     "VPS_CONSOLIDACION_TIMEOUT",

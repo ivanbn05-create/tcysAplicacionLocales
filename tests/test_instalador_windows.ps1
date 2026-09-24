@@ -107,6 +107,80 @@ foreach ($casoVpsInvalido in @(
     catch { $falloVps = $true }
     Assert-True $falloVps "Se aceptó una configuración VPS incompleta o insegura."
 }
+$verifierSecurityFunctionNames = @(
+    "Assert-UniqueDotEnvKeys",
+    "Assert-CanonicalDjangoEnvironment"
+)
+foreach ($functionName in $verifierSecurityFunctionNames) {
+    $definitions = @($astsSeparados["Verificador"].FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq $functionName
+    }, $true))
+    Assert-True ($definitions.Count -eq 1) "El verificador no define una sola funcion $functionName."
+    . ([scriptblock]::Create($definitions[0].Extent.Text))
+}
+$integrationFixture = Join-Path ([IO.Path]::GetTempPath()) (
+    "tocayos-verifier-integrations-" + [Guid]::NewGuid().ToString("N")
+)
+New-Item -ItemType Directory -Path $integrationFixture | Out-Null
+$envPath = Join-Path $integrationFixture ".env"
+try {
+    [IO.File]::WriteAllLines(
+        $envPath,
+        @(
+            "CENTRAL_FUTURE_SCOPE=ventas",
+            "central_future_scope=catalogo"
+        ),
+        (New-Object Text.UTF8Encoding($false))
+    )
+    $duplicateRejected = $false
+    try { Assert-UniqueDotEnvKeys -Names @("PEDIDOS_API_TOKEN") -Prefixes @("PEDIDOS_API_", "CENTRAL_") }
+    catch { $duplicateRejected = $true }
+    Assert-True $duplicateRejected "El verificador acepta claves futuras duplicadas bajo los prefijos API."
+
+    [IO.File]::WriteAllLines(
+        $envPath,
+        @(
+            "PEDIDOS_API_TOKEN=token-uno-012345678901234567890123",
+            "CENTRAL_INGEST_TOKEN=token-central-01234567890123456789"
+        ),
+        (New-Object Text.UTF8Encoding($false))
+    )
+    $envBytesBefore = [IO.File]::ReadAllBytes($envPath)
+    Assert-UniqueDotEnvKeys -Names @("PEDIDOS_API_TOKEN", "CENTRAL_INGEST_TOKEN")
+    $envBytesAfter = [IO.File]::ReadAllBytes($envPath)
+    Assert-True (
+        [BitConverter]::ToString($envBytesBefore) -ceq
+        [BitConverter]::ToString($envBytesAfter)
+    ) "La validacion de duplicados modifica .env."
+
+    $fakePythonOk = Join-Path $integrationFixture "fake-python-ok.ps1"
+    [IO.File]::WriteAllText(
+        $fakePythonOk,
+        'Write-Output "OK"; exit 0',
+        (New-Object Text.UTF8Encoding($false))
+    )
+    Assert-CanonicalDjangoEnvironment -PythonPath $fakePythonOk -ProjectRoot $integrationFixture
+
+    $fakePythonFail = Join-Path $integrationFixture "fake-python-fail.ps1"
+    [IO.File]::WriteAllText(
+        $fakePythonFail,
+        'Write-Error "token-no-debe-salir"; exit 7',
+        (New-Object Text.UTF8Encoding($false))
+    )
+    $safeFailure = ""
+    try {
+        Assert-CanonicalDjangoEnvironment -PythonPath $fakePythonFail -ProjectRoot $integrationFixture
+    }
+    catch { $safeFailure = $_.Exception.Message }
+    Assert-True ($safeFailure -and -not $safeFailure.Contains("token-no-debe-salir")) "El verificador expone la salida sensible del proceso de validacion."
+}
+finally {
+    Remove-Variable envPath -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $integrationFixture -Recurse -Force
+}
+
 function New-SqliteScheduledTaskFixture {
     param(
         [ValidateSet("Backup", "Purge")][string]$Kind,
@@ -359,6 +433,15 @@ Assert-True ($verificadorTexto.Contains('DelayedAutoStart')) "El verificador no 
 Assert-True ($verificadorTexto.Contains('Ejecuta este verificador desde PowerShell como administrador.')) "El verificador no exige elevación explícita."
 Assert-True ($verificadorTexto.Contains('$requiredEnvironmentKeys')) "El verificador no exige un .env completo y no ambiguo."
 Assert-True ($verificadorTexto.Contains('$optionalEnvironmentKeys')) "El verificador no rechaza duplicados en la configuración opcional."
+foreach ($integrationKey in @("PEDIDOS_API_TOKEN", "PEDIDOS_API_SUCURSAL_IDS", "CENTRAL_INGEST_TOKEN", "CENTRAL_CATALOG_TOKEN", "CENTRAL_ENABLE_SALES_V2")) {
+    Assert-True ($verificadorTexto.Contains('"' + $integrationKey + '"')) "El verificador no incluye todas las claves API candidatas."
+}
+Assert-True ($verificadorTexto.Contains("Assert-CanonicalDjangoEnvironment")) "El verificador no valida settings con el entorno canonico del servicio."
+Assert-True ($verificadorTexto.Contains("sw._cargar_entorno()")) "El verificador puede validar variables heredadas en vez de .env."
+Assert-True ($verificadorTexto.Contains('$validationOutput = @(& $PythonPath')) "El verificador no captura la salida de validacion."
+Assert-True ($verificadorTexto.Contains('$envHashBeforeValidation') -and $verificadorTexto.Contains('$envHashAfterValidation') -and $verificadorTexto.Contains('$envHashFinal')) "El verificador no acredita que .env permanezca intacto."
+$verifierOutputBlock = $verificadorTexto.Substring($verificadorTexto.LastIndexOf("[pscustomobject]@{"))
+Assert-True (-not $verifierOutputBlock.Contains("TOKEN") -and -not $verifierOutputBlock.Contains("BASE_URL")) "La salida final del verificador expone configuracion sensible."
 Assert-True ($verificadorTexto.Contains('$printBackend =')) "El verificador no valida el backend de impresión."
 Assert-True ($verificadorTexto.Contains('PRINT_BACKEND=tcp exige tres hosts')) "El verificador no exige las impresoras concretas del backend TCP."
 Assert-True ($verificadorTexto.Contains('$printerPort = ConvertFrom-DotEnvInteger')) "El verificador no valida el puerto de impresora."
@@ -414,6 +497,19 @@ Assert-True ($respaldoTexto.Contains('"--media-root"')) "El wrapper no transmite
 Assert-True ($respaldoTexto.Contains('"--process-pending-only"')) "La tarea frecuente no preprocesa solicitudes antes de respaldar."
 Assert-True (-not $diagnosticoTexto.Contains('if (-not $env:PRINT_BACKEND)')) "La impresión de diagnóstico sólo cambia si falta la configuración."
 Assert-True ($diagnosticoTexto.IndexOf('Set-CanonicalProcessEnvironment -Path $entorno') -lt $diagnosticoTexto.IndexOf('$env:PRINT_BACKEND = "archivo"')) "El .env TCP puede volver a activar impresoras tras aislar el diagnóstico."
+Assert-True ($diagnosticoTexto.Contains('[switch]$AllowExternalSync')) "El diagnostico no exige autorizacion explicita para salidas externas."
+Assert-True ($diagnosticoTexto.Contains('function Disable-ExternalSynchronization')) "El diagnostico no define aislamiento externo."
+Assert-True ($diagnosticoTexto.Contains('if ($AllowExternalSync)')) "El switch externo no gobierna el aislamiento."
+$aislamientoInvocado = $diagnosticoTexto.LastIndexOf('    Disable-ExternalSynchronization')
+Assert-True ($aislamientoInvocado -ge 0) "El diagnostico no invoca el aislamiento externo por defecto."
+Assert-True ($aislamientoInvocado -lt $diagnosticoTexto.IndexOf('& $python manage.py check --deploy')) "El aislamiento ocurre despues de cargar Django."
+$disableExternalDefinitions = @($astsSeparados["Diagnostico"].FindAll({
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq "Disable-ExternalSynchronization"
+}, $true))
+Assert-True ($disableExternalDefinitions.Count -eq 1) "El diagnostico no contiene una unica funcion de aislamiento."
+. ([scriptblock]::Create($disableExternalDefinitions[0].Extent.Text))
 Assert-True ($diagnosticoTexto.Contains('from herramientas.host_servicio_windows import comprobar_host')) "El diagnóstico no comprueba el host de servicio."
 Assert-True (-not $diagnosticoTexto.Contains('--check-host')) "El diagnóstico puede modificar el host de servicio."
 Assert-True ($main.Contains('$sqliteConfigurada = Get-DotEnvValue')) "Actualizar no resuelve SQLITE_PATH desde .env."
@@ -423,6 +519,9 @@ Assert-ComesBefore '& $python manage.py verificar_identidad_local' '$migracionIn
 Assert-ComesBefore '& $python manage.py verificar_identidad_local' '& $python manage.py migrate' "Se migra antes de comprobar la identidad de una base existente."
 Assert-True ($ast.Extent.Text.Contains('ALLOW_INSECURE_HTTP_LAN$')) "El saneamiento no limpia ALLOW_INSECURE_HTTP_LAN."
 Assert-True ($ast.Extent.Text.Contains('VPS_CONSOLIDACION_')) "El saneamiento no limpia variables VPS heredadas."
+Assert-True ($ast.Extent.Text.Contains('PEDIDOS_API_')) "El saneamiento no limpia variables API Pedidos heredadas."
+Assert-True ($ast.Extent.Text.Contains('CENTRAL_')) "El saneamiento no limpia variables Central heredadas."
+Assert-True ($aprovisionarTexto.Contains('PEDIDOS_API_') -and $aprovisionarTexto.Contains('CENTRAL_') -and $aprovisionarTexto.Contains('VPS_CONSOLIDACION_')) "Aprovisionar no usa el entorno remoto canonico."
 Assert-True ($main.Contains('Set-DotEnvValue -Path $entorno -Name "VPS_CONSOLIDACION_URL"')) "La instalación no persiste la URL VPS."
 Assert-True ($main.Contains('Set-DotEnvValue -Path $entorno -Name "VPS_CONSOLIDACION_TOKEN"')) "La instalación no persiste el token VPS."
 Assert-True ($main.Contains('Set-DotEnvValue -Path $entorno -Name "VPS_CONSOLIDACION_TIMEOUT"')) "La instalación no persiste el timeout VPS."
@@ -517,10 +616,16 @@ Set-DotEnvValue -Path $configEnv -Name "DB_ENGINE" -Value "sqlite"
 Set-DotEnvValue -Path $configEnv -Name "SQLITE_PATH" -Value "runtime/correcta.sqlite3"
 Set-DotEnvValue -Path $configEnv -Name "ALLOW_INSECURE_HTTP_LAN" -Value "false"
 Set-DotEnvValue -Path $configEnv -Name "SUCURSAL_CLAVE" -Value "PRUEBA"
+Set-DotEnvValue -Path $configEnv -Name "PEDIDOS_API_TOKEN" -Value "pedidos-desde-archivo-0123456789"
+Set-DotEnvValue -Path $configEnv -Name "CENTRAL_INGEST_TOKEN" -Value "central-desde-archivo-0123456789"
+Set-DotEnvValue -Path $configEnv -Name "VPS_CONSOLIDACION_TOKEN" -Value "vps-desde-archivo"
 $env:DB_ENGINE = "postgres"
 $env:SQLITE_PATH = "otra-base.sqlite3"
 $env:ALLOW_INSECURE_HTTP_LAN = "true"
 $env:DJANGO_SETTINGS_MODULE = "pos.settings_development"
+$env:PEDIDOS_API_TOKEN = "pedidos-heredado-0123456789"
+$env:CENTRAL_INGEST_TOKEN = "central-heredado-0123456789"
+$env:VPS_CONSOLIDACION_TOKEN = "vps-heredado"
 $env:PYTHONPATH = "C:\ruta-no-confiable"
 $env:PYTHONUSERBASE = "C:\perfil-no-confiable"
 $env:PIP_TARGET = "C:\destino-no-confiable"
@@ -531,6 +636,9 @@ Assert-True ($env:DB_ENGINE -eq "sqlite") "Se heredó otro motor de base."
 Assert-True ($env:SQLITE_PATH -eq "runtime/correcta.sqlite3") "Se heredó otra SQLite."
 Assert-True ($env:ALLOW_INSECURE_HTTP_LAN -eq "false") "Se heredó la exposición HTTP."
 Assert-True ($env:DJANGO_SETTINGS_MODULE -eq "pos.settings") "Se heredaron settings no productivos."
+Assert-True ($env:PEDIDOS_API_TOKEN -eq "pedidos-desde-archivo-0123456789") "Se heredo el token API de Pedidos."
+Assert-True ($env:CENTRAL_INGEST_TOKEN -eq "central-desde-archivo-0123456789") "Se heredo el token Central."
+Assert-True ($env:VPS_CONSOLIDACION_TOKEN -eq "vps-desde-archivo") "Se heredo el token VPS."
 Assert-True (-not $env:PYTHONPATH) "Se heredo PYTHONPATH."
 Assert-True (-not $env:PYTHONUSERBASE) "Se heredo PYTHONUSERBASE."
 Assert-True (-not $env:PIP_TARGET) "Se heredo PIP_TARGET."
@@ -538,6 +646,20 @@ Assert-True ($env:PIP_CONFIG_FILE -eq "NUL") "pip puede cargar configuración gl
 Assert-True (-not $env:VIRTUAL_ENV) "Se heredo otra venv."
 Assert-True ($env:PYTHONNOUSERSITE -eq "1") "No se desactivo el user-site de Python."
 Assert-True ($env:PIP_NO_INPUT -eq "1") "pip elevado puede usar configuracion interactiva heredada."
+$env:PEDIDOS_SUCURSALES_FUENTE = "api_v2"
+$env:PEDIDOS_SUCURSALES_AUTO_SYNC = "true"
+$env:PEDIDOS_API_TOKEN = "token-real-no-debe-heredarse"
+$env:CENTRAL_INGEST_TOKEN = "central-real-no-debe-heredarse"
+$env:CENTRAL_ENABLE_SALES_V2 = "true"
+$env:VPS_CONSOLIDACION_TOKEN = "vps-real-no-debe-heredarse"
+Disable-ExternalSynchronization
+Assert-True ($env:PEDIDOS_SUCURSALES_FUENTE -eq "desactivada") "El diagnostico conserva Pedidos activo."
+Assert-True ($env:PEDIDOS_SUCURSALES_AUTO_SYNC -eq "false") "El diagnostico conserva auto-sync activo."
+Assert-True ($env:CENTRAL_ENABLE_SALES_V2 -eq "false") "El diagnostico conserva Central activo."
+foreach ($nombreSecreto in @("PEDIDOS_API_TOKEN", "CENTRAL_INGEST_TOKEN", "VPS_CONSOLIDACION_TOKEN")) {
+    $valorAislado = [Environment]::GetEnvironmentVariable($nombreSecreto, "Process")
+    Assert-True ($null -ne $valorAislado -and [string]::IsNullOrWhiteSpace($valorAislado)) "El diagnostico conserva un secreto externo real."
+}
 $mutexPrueba = Enter-MaintenanceMutex
 try {
     Assert-True ($mutexPrueba -is [Threading.Mutex]) "El bloqueo global no devolvio un mutex adquirido."

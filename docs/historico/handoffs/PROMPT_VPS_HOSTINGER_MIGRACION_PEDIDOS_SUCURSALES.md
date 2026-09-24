@@ -1,5 +1,7 @@
 # Prompt para VPS Hostinger, migración de pedidos y nuevo frente central
 
+> Documento histórico. Conserva el encargo de esa etapa; no es una instrucción vigente ni autorización para ejecutar cambios.
+
 Fecha de contexto: 2026-09-19
 
 Continúa el proyecto de Los Tocayos desde el frente de infraestructura. El objetivo es preparar de forma segura y reproducible un VPS Hostinger KVM 2 con Ubuntu Server sin interfaz gráfica, migrar la aplicación `tcysPedidosSucursales` que actualmente corre en Render y trasladar su base PostgreSQL de Supabase al VPS. También debes conservar la integración vigente con el POS local o sustituirla mediante una transición probada que no exponga PostgreSQL a Internet.
@@ -66,12 +68,12 @@ El backend central general aún no existe. `EventoOutbox`, el contrato de acuse 
 
 Documentos vigentes que debes leer y contrastar:
 
-- `ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md`
-- `FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md`
-- `DESPLIEGUE_WINDOWS.md`
-- `PROTOCOLO_RELEASE_ACTUALIZACION_REUTILIZABLE.md`
-- `EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.8.md`
-- `seguridad/supabase/REMEDIACION_SUPABASE_2026-08-29.md`
+- `../../../ARQUITECTURA_DESPLIEGUE_Y_SINCRONIZACION_MULTISUCURSAL.md`
+- `../../../FLUJO_DESARROLLO_MANTENIMIENTO_Y_CLIENTES.md`
+- `../../../DESPLIEGUE_WINDOWS.md`
+- `../../../PROTOCOLO_RELEASE_ACTUALIZACION_REUTILIZABLE.md`
+- `../releases/EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.8.md`
+- `../../../seguridad/supabase/REMEDIACION_SUPABASE_2026-08-29.md`
 
 ## Estado de `tcysPedidosSucursales`
 

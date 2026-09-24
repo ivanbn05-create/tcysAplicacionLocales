@@ -71,7 +71,10 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
   align-content: center;
   justify-items: start;
   gap: 2px;
+  border: 0;
   color: #111;
+  background: transparent;
+  text-align: left;
   text-decoration: none;
 }
 .admin-logotipo {
@@ -122,6 +125,7 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
   align-items: center;
   justify-content: center;
   gap: 8px;
+  border: 0;
   color: #fff;
   background: var(--carbon);
   text-decoration: none;
@@ -141,10 +145,12 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
   height: calc(100vh - 64px);
   padding: 24px 0 18px;
   display: grid;
-  grid-template-rows: repeat(8, auto) 1fr;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(9, auto) 1fr;
   align-content: start;
   color: rgba(255,255,255,.82);
   background: var(--riel);
+  overflow-x: hidden;
   overflow-y: auto;
 }
 .rail-item {
@@ -216,10 +222,12 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
 }
 .movimientos-bandeja {
   min-width: 0;
-  padding: 12px;
+  width: 100%;
+  max-width: 100%;
+  padding: 10px;
   display: grid;
-  grid-template-columns: minmax(280px, .82fr) minmax(0, 1.38fr);
-  gap: 12px;
+  grid-template-columns: minmax(250px, .68fr) minmax(0, 1.5fr);
+  gap: 10px;
   align-items: start;
   border: 1px solid var(--borde);
   border-top: 5px solid var(--carbon);
@@ -240,9 +248,11 @@ svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width:
   line-height: 1.55;
 }
 .movimiento-campos {
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
   display: grid;
-  grid-template-columns: minmax(120px, .75fr) minmax(130px, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr));
   gap: 12px;
 }
 .movimiento-concepto { grid-column: 1 / -1; }
@@ -479,7 +489,13 @@ input:focus, select:focus { border-color: var(--carbon); }
 .estado-pedidos.error { color: #fff; border-color: var(--rojo); background: var(--rojo); }
 .mapa-posiciones { display: grid; gap: 10px; }
 .mapa-grupo { min-width: 0; border: 2px solid var(--carbon); background: #fff; }
-.mapa-grupo h3 { margin: 0; }
+.mapa-grupo-encabezado {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+}
+.mapa-grupo h3 { min-width: 0; margin: 0; }
 .mapa-grupo-toggle {
   width: 100%;
   min-height: 62px;
@@ -515,6 +531,37 @@ input:focus, select:focus { border-color: var(--carbon); }
 .mapa-grupo-resumen strong, .mapa-grupo-resumen small { font-size: .61rem; font-weight: 850; text-transform: uppercase; white-space: nowrap; }
 .mapa-grupo-resumen small { color: var(--muted); }
 .mapa-grupo-toggle[aria-expanded="true"] .mapa-grupo-resumen small { color: rgba(255,255,255,.84); }
+.mapa-grupo-seleccion {
+  min-width: 148px;
+  min-height: 44px;
+  padding: 8px 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-left: 1px solid var(--borde);
+  color: var(--carbon);
+  background: var(--amarillo-suave);
+  font-size: .59rem;
+  font-weight: 850;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+.mapa-grupo-seleccion:hover { background: var(--amarillo); }
+.mapa-grupo-seleccion strong {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 4px 6px;
+  display: inline-grid;
+  place-items: center;
+  color: #fff;
+  background: var(--carbon);
+  font-size: .62rem;
+  line-height: 1;
+}
+.mapa-grupo-seleccion.activo { color: #fff; background: var(--verde-oscuro); }
+.mapa-grupo-seleccion.activo strong { color: var(--carbon); background: var(--amarillo); }
 .mapa-grupo-celdas {
   padding: 12px;
   display: grid;
@@ -605,8 +652,20 @@ input:focus, select:focus { border-color: var(--carbon); }
 .barra-lote .boton.mini { min-height: 44px; }
 .acciones-pedido-seleccionado { flex: 0 1 270px; display: grid; grid-template-columns: repeat(2, minmax(116px, 1fr)); gap: 8px; }
 .accion-lote { flex: 1 1 310px; display: grid; grid-template-columns: minmax(120px, 1fr) minmax(160px, 1fr) auto; align-items: center; gap: 8px; }
-.accion-lote[data-lote-grupo="cobrar"], .accion-lote[data-lote-grupo="sucursales"] { grid-template-columns: minmax(140px, 1fr) auto; }
-.accion-lote span { font-size: .68rem; font-weight: 850; text-transform: uppercase; }
+.accion-lote[data-lote-grupo="cobrar"] { grid-template-columns: minmax(130px, 1fr) minmax(130px, .72fr) auto; }
+.accion-lote[data-lote-grupo="sucursales"] { grid-template-columns: minmax(140px, 1fr) auto; }
+.accion-lote > span { font-size: .68rem; font-weight: 850; text-transform: uppercase; }
+.lote-forma-pago {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  color: rgba(255,255,255,.82);
+  font-size: .54rem;
+  font-weight: 850;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.lote-forma-pago select { min-width: 0; min-height: 44px; }
 .zona-peligro { margin-top: 16px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-color: var(--rojo); }
 .zona-peligro h2 { margin: 0 0 4px; font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.6rem; font-weight: 400; text-transform: uppercase; }
 .zona-peligro p { margin: 0; color: var(--muted); font-size: .67rem; line-height: 1.45; }
@@ -637,7 +696,9 @@ input:focus, select:focus { border-color: var(--carbon); }
 .control-efectivo > .nota-operativa { margin: -4px 0 16px; }
 #form-control-efectivo { min-width: 0; display: grid; gap: 18px; }
 .control-efectivo-grid {
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
@@ -670,7 +731,9 @@ input:focus, select:focus { border-color: var(--carbon); }
   line-height: 1.45;
 }
 .denominaciones-grid {
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(78px, 100%), 1fr));
   gap: 7px;
@@ -687,6 +750,8 @@ input:focus, select:focus { border-color: var(--carbon); }
 .denominaciones-grid label span { font-variant-numeric: tabular-nums; }
 .denominaciones-grid input { min-width: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .ventas-apps {
+  width: 100%;
+  max-width: 100%;
   grid-column: 1 / -1;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-content: start;
@@ -965,7 +1030,7 @@ dialog::backdrop { background: rgba(20,20,20,.72); }
     width: 100%;
     height: auto;
     padding: 0;
-    grid-template-columns: repeat(8, minmax(70px, 1fr));
+    grid-template-columns: repeat(9, minmax(70px, 1fr));
     grid-template-rows: auto;
     overflow-x: auto;
     overflow-y: hidden;
@@ -1019,7 +1084,12 @@ dialog::backdrop { background: rgba(20,20,20,.72); }
   .mapa-pedidos-sucursales-tabs { padding: 8px; scroll-padding-inline: 8px; }
   .mapa-pedidos-sucursal-tab { flex-basis: min(170px, 78vw); }
   .mapa-grupo-celdas { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .barra-lote { position: static; align-items: stretch; flex-direction: column; }
+  .barra-lote {
+    position: sticky;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    align-items: stretch;
+    flex-direction: column;
+  }
   .barra-lote-resumen, .acciones-pedido-seleccionado, .accion-lote { flex-basis: auto; }
   .dialogo-pedido { padding: 22px 16px 20px; }
   .pedido-ficha dl div { grid-template-columns: 1fr; gap: 3px; }
@@ -1035,7 +1105,7 @@ dialog::backdrop { background: rgba(20,20,20,.72); }
   .admin-panel.activo:not([hidden]) { animation: none; }
 }
 
-/* Candidata dev.9 · movimientos compactos, corte previo y controles accesibles */
+/* Candidata dev.10 · operaciones administrativas adaptables y accesibles */
 #pantalla-completa-admin {
   width: 64px;
   min-width: 64px;
@@ -1048,10 +1118,14 @@ dialog::backdrop { background: rgba(20,20,20,.72); }
   background: var(--lienzo);
   box-shadow: inset 0 3px 0 var(--amarillo);
 }
-.movimientos-bandeja {
-  grid-template-columns: minmax(250px, .68fr) minmax(0, 1.5fr);
-  gap: 10px;
-  padding: 10px;
+/* La retícula base de Movimientos vive arriba; los breakpoints finales deben prevalecer. */
+.movimientos-bandeja > *,
+.control-efectivo-grid > *,
+.movimiento-campos > *,
+.denominaciones-grid > *,
+.ventas-apps > * {
+  min-width: 0;
+  max-width: 100%;
 }
 .hoja-captura-movimiento {
   position: sticky;
@@ -1106,7 +1180,16 @@ dialog::backdrop { background: rgba(20,20,20,.72); }
 .total-desglose { min-height: 44px; }
 
 @container movimientos (max-width: 780px) {
+  .movimientos-bandeja,
+  .control-efectivo-grid { grid-template-columns: minmax(0, 1fr); }
   .hoja-captura-movimiento { position: static; }
+  .ventas-apps {
+    grid-column: auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ventas-apps legend,
+  .ventas-apps > p,
+  .ventas-apps .total-desglose { grid-column: auto; }
   .denominaciones-grid {
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   }
@@ -1121,10 +1204,210 @@ dialog::backdrop { background: rgba(20,20,20,.72); }
 }
 
 @media (max-width: 760px) {
+  .movimientos-bandeja,
+  .control-efectivo-grid { grid-template-columns: minmax(0, 1fr); }
+  .ventas-apps {
+    grid-column: auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ventas-apps legend,
+  .ventas-apps > p,
+  .ventas-apps .total-desglose { grid-column: auto; }
   #pantalla-completa-admin {
     width: 55px;
     min-width: 55px;
     padding-inline: 11px;
   }
   .hoja-captura-movimiento { position: static; }
+}
+
+@media (max-width: 520px) {
+  .mapa-grupo-encabezado { grid-template-columns: minmax(0, 1fr); }
+  .mapa-grupo-seleccion {
+    width: 100%;
+    min-width: 0;
+    border-left: 0;
+    border-top: 1px solid var(--borde);
+  }
+}
+
+
+/* Configuración técnica · rutas de impresión por dispositivo */
+.configuracion-tecnica-layout {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(310px, .9fr) minmax(420px, 1.35fr);
+  gap: 18px;
+  align-items: start;
+}
+.configuracion-tecnica-layout > * { min-width: 0; }
+.hoja-rutas-impresion .hoja-titulo { align-items: start; }
+.hoja-rutas-impresion .hoja-titulo p,
+.hoja-formulario-ruta .hoja-titulo p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: .68rem;
+  font-weight: 650;
+  line-height: 1.45;
+}
+.estado-configuraciones {
+  min-height: 22px;
+  margin: 10px 0;
+  color: var(--muted);
+  font-size: .69rem;
+  font-weight: 750;
+}
+.lista-configuraciones-impresion { display: grid; gap: 10px; }
+.terminal-configuracion {
+  position: relative;
+  min-width: 0;
+  padding: 13px;
+  display: grid;
+  gap: 11px;
+  border: 1px solid var(--borde);
+  border-top: 4px solid var(--carbon);
+  background: var(--papel);
+}
+.terminal-configuracion.seleccionada { box-shadow: inset 0 0 0 2px var(--amarillo); }
+.terminal-configuracion.terminal-actual { border-top-color: var(--verde-oscuro); }
+.terminal-configuracion.inactiva { border-top-color: var(--muted); background: var(--lienzo); }
+.terminal-configuracion > header {
+  min-width: 0;
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.terminal-configuracion > header > div { min-width: 0; display: grid; gap: 3px; }
+.terminal-configuracion strong { color: var(--carbon); font-size: .88rem; }
+.terminal-configuracion code,
+.device-actual code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #4f4a42;
+  font-family: "Montserrat Tocayos", Montserrat, Arial, sans-serif;
+  font-size: .68rem;
+  font-variant-numeric: tabular-nums;
+}
+.estado-ruta {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  color: #fff;
+  background: var(--verde);
+  font-size: .57rem;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.estado-ruta.inactiva { color: var(--carbon); background: var(--borde); }
+.terminal-configuracion dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+.terminal-configuracion dl div {
+  min-width: 0;
+  padding: 7px 8px;
+  display: grid;
+  gap: 3px;
+  background: var(--lienzo);
+}
+.terminal-configuracion dt {
+  color: var(--muted);
+  font-size: .55rem;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.terminal-configuracion dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--carbon);
+  font-size: .66rem;
+  font-weight: 800;
+}
+.terminal-actual-etiqueta {
+  margin: 0;
+  color: var(--verde-oscuro);
+  font-size: .62rem;
+  font-weight: 900;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.device-actual {
+  margin-bottom: 15px;
+  padding: 11px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--borde);
+  background: var(--amarillo-suave);
+}
+.device-actual > span {
+  color: var(--muted);
+  font-size: .59rem;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.formulario-configuracion-impresion { min-width: 0; }
+.configuracion-identidad-grid,
+.configuracion-puerto-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.configuracion-destinos {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  border: 1px solid var(--borde);
+}
+.configuracion-destinos legend {
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: .61rem;
+  font-weight: 900;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.configuracion-destinos label { min-width: 0; }
+.configuracion-puerto-grid { align-items: end; }
+.configuracion-puerto-grid .casilla {
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--borde);
+  background: var(--lienzo);
+}
+.configuracion-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+.configuracion-acciones .boton { flex: 1 1 150px; }
+
+@media (max-width: 1180px) {
+  .configuracion-tecnica-layout {
+    grid-template-columns: minmax(270px, .8fr) minmax(360px, 1.2fr);
+  }
+  .configuracion-destinos { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 860px) {
+  .configuracion-tecnica-layout { grid-template-columns: minmax(0, 1fr); }
+  .hoja-formulario-ruta { order: -1; }
+}
+
+@media (max-width: 560px) {
+  .device-actual { grid-template-columns: minmax(0, 1fr); }
+  .configuracion-identidad-grid,
+  .configuracion-puerto-grid { grid-template-columns: minmax(0, 1fr); }
+  .terminal-configuracion dl { grid-template-columns: minmax(0, 1fr); }
 }

@@ -17,8 +17,8 @@ actualizador remoto o desatendido.
 Los commits fuente acreditados fueron `2739944ee5da28b35fa7b4c6330e76ba83605aab`
 para `dev.4`, `c5731e4` para `dev.5` y
 `8beb9a7957bc4f3833868454230519f5dac21392` para `dev.6`. Las evidencias históricas
-están en `EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.4.md` y
-`EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.6.md`.
+están en `docs/historico/releases/EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.4.md` y
+`docs/historico/releases/EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.6.md`.
 
 ## 2. Datos que deben definirse antes de empezar
 
@@ -321,7 +321,7 @@ el procedimiento debe abortar; no se corrige silenciosamente durante el update.
 
 ## 10. Evidencia mínima por candidata
 
-Crear un archivo nuevo `EVIDENCIA_PREPARACION_RELEASE_<version>.md` y un directorio
+Crear un archivo nuevo `docs/candidatas/EVIDENCIA_PREPARACION_RELEASE_<version>.md` y un directorio
 local de evidencia. Incluir:
 
 - fecha, entorno y declaración de laboratorio/producción;

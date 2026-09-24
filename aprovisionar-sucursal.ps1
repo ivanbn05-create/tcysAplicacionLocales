@@ -47,7 +47,7 @@ function Set-CanonicalProcessEnvironment {
     param([string]$Path)
 
     Set-SafePythonProcessEnvironment
-    $patronConfiguracion = '^(?:DJANGO_|WAITRESS_|POSTGRES_|POS_|PRINT_|PRINTER_|PEDIDOS_SUCURSALES_|THERMAL_|ALLOW_INSECURE_HTTP_LAN$|DB_ENGINE$|SQLITE_PATH$|SUCURSAL_CLAVE$)'
+    $patronConfiguracion = '^(?:DJANGO_|WAITRESS_|POSTGRES_|POS_|PRINT_|PRINTER_|PEDIDOS_SUCURSALES_|PEDIDOS_API_|CENTRAL_|VPS_CONSOLIDACION_|THERMAL_|ALLOW_INSECURE_HTTP_LAN$|DB_ENGINE$|SQLITE_PATH$|SUCURSAL_CLAVE$)'
     foreach ($variable in Get-ChildItem Env:) {
         if ($variable.Name -match $patronConfiguracion) {
             [Environment]::SetEnvironmentVariable($variable.Name, $null, "Process")

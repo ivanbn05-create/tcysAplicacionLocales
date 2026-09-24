@@ -3,6 +3,7 @@ from uuid import UUID
 
 from django.db import transaction
 from django.db.models import Prefetch, Q
+from django.utils import timezone
 
 from personas.models import Sucursal
 
@@ -340,6 +341,7 @@ def guardar_cliente(sucursal, datos, cliente=None):
         cliente.nombre = nombre
         cliente.notas = notas
         cliente.comentarios_multiples = comentarios_multiples
+        cliente.version_entidad += 1
         cliente.save()
     else:
         cliente = Cliente.objects.create(
@@ -350,7 +352,7 @@ def guardar_cliente(sucursal, datos, cliente=None):
             comentarios_multiples=comentarios_multiples,
         )
 
-    cliente.telefonos.update(activo=False, principal=False)
+    cliente.telefonos.update(activo=False, principal=False, actualizado_en=timezone.now())
     for indice, item in enumerate(telefonos):
         telefono = None
         if item["id"]:
@@ -366,7 +368,7 @@ def guardar_cliente(sucursal, datos, cliente=None):
         telefono.activo = True
         telefono.save()
 
-    cliente.domicilios.update(activo=False, principal=False)
+    cliente.domicilios.update(activo=False, principal=False, actualizado_en=timezone.now())
     for indice, item in enumerate(domicilios):
         domicilio = cliente.domicilios.filter(pk=item["id"]).first() if item["id"] else None
         if not domicilio:
@@ -403,4 +405,7 @@ def guardar_cliente(sucursal, datos, cliente=None):
         domicilio.save()
 
     cliente.refresh_from_db()
+    from .sincronizacion_central import encolar_cliente_central
+
+    encolar_cliente_central(cliente)
     return cliente

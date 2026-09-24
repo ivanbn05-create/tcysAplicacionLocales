@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.lostocayos.invalid/edge-central/cliente-evento-v2-response.schema.json",
+  "title": "Acuse de evento de cliente v2 propuesto",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recibido", "acuse", "evento_id", "cliente_id", "estado", "version_aplicada"],
+  "properties": {
+    "recibido": {"const": true},
+    "acuse": {"type": "string", "format": "uuid"},
+    "evento_id": {"type": "string", "format": "uuid"},
+    "cliente_id": {"type": "string", "format": "uuid"},
+    "estado": {"type": "string", "enum": ["creado", "actualizado", "repetido", "desactualizado"]},
+    "version_aplicada": {"type": "integer", "minimum": 1, "maximum": 2147483647}
+  }
+}

@@ -227,6 +227,7 @@ class AccesoElevadoTests(TestCase):
                 "gestionar_usuarios": False,
                 "reiniciar_folios": False,
                 "cambiar_clave_maestra": False,
+                "gestionar_configuracion_tecnica": False,
             },
         )
 
@@ -297,7 +298,7 @@ class AccesoElevadoTests(TestCase):
     def test_todos_los_pines_activos_y_la_clave_maestra_identifican_ventas(self):
         self._crear_elevado()
         casos = (
-            ("0000", "Administrador de prueba"),
+            ("0000", "Administrador"),
             ("9876", "Administrador de prueba"),
             ("2468", "Supervisora"),
             ("1111", "Operador de prueba"),
@@ -414,7 +415,9 @@ class InterfazPermisosAdministrativosTests(SimpleTestCase):
     def test_javascript_aplica_visibilidad_y_bloquea_eventos_reservados(self):
         for contrato in (
             'estado.administrador?.acceso?.permisos?.[nombre] === true',
-            'if (!destino || !elementoPermitido(destino)) nombre = "inicio";',
+            'if (!elementoPermitido(destino)) {',
+            'toast("Tu acceso administrativo no permite abrir esta sección.", true);',
+            'return false;',
             'estado.administrador.usuarios = [];',
             'if (!exigirPermisoAdministrador("gestionar_usuarios")) return;',
             'if (!exigirPermisoAdministrador("reiniciar_folios")) return;',
