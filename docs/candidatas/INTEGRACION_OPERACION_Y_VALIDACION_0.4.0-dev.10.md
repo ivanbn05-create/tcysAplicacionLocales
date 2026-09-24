@@ -3,7 +3,7 @@
 - **Fecha de corte documental:** 24 de septiembre de 2026
 - **Rama de trabajo:** codex/candidata-0.4.0-dev.10
 - **Base al iniciar la candidata:** f230ba06b9464e1541820a931037fde9b4d38dce
-- **Commit funcional de la candidata:** pendiente
+- **Commit funcional de la candidata:** c3ba43d9f410ee95bbec060751ed1aba43a16fe6
 - **Entorno:** laboratorio, sin sucursales en producción
 
 Esta guía describe el estado candidato del POS. No acredita una release, un E2E con PostgreSQL ni un despliegue. Tampoco autoriza modificar C:\LosTocayosPOS, Pedidos en 8002, los previews centrales en 8010/8011, DNS, TLS o bases remotas.
@@ -151,6 +151,6 @@ El arranque aislado descrito en el README usa runtime\prueba y no debe apuntar a
 - Faltan concurrencia, restore y E2E sobre PostgreSQL real.
 - Exportación, confirmación y purga de retención siguen siendo operaciones CLI.
 - Falta un procedimiento firmado para salir de retention_gap.
-- Falta aceptación completa de la candidata, commit funcional, artefactos reproducibles y decisión humana de promoción.
+- El commit funcional y dos artefactos byte a byte reproducibles están acreditados; faltan E2E PostgreSQL/TLS, firma criptográfica, aceptación manual y decisión humana de promoción.
 
 Hasta resolverlos, dev.10 es una candidata de laboratorio.

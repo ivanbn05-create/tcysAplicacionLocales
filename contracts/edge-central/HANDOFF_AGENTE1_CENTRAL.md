@@ -34,9 +34,10 @@ Candidato POS que contiene este paquete:
 C:\Users\Srv1\.codex\visualizations\2026\09\14\01a0a104-1066-79f1-9e18-9de37c022fa6\tcys-base-work\base-a-src
 rama: codex/candidata-0.4.0-dev.10
 base auditada al iniciar el paquete: f230ba06b9464e1541820a931037fde9b4d38dce
+commit funcional POS y contratos: c3ba43d9f410ee95bbec060751ed1aba43a16fe6
 ```
 
-No se creó commit para estos contratos; agente integrador debe revisar el estado del worktree y conservar los cambios concurrentes de la candidata.
+Los contratos y el cliente POS quedaron congelados en c3ba43d9f410ee95bbec060751ed1aba43a16fe6. Dos builds verificados produjeron el mismo ZIP SHA-256 1a875b45f2787d01bb3d644bfd6c329265b47ea30246677e34623eb5fea51752 con 303 archivos. El artefacto aún no tiene firma criptográfica y no autoriza despliegue.
 
 ## Diferencias de los servicios privados
 
@@ -94,6 +95,8 @@ Ejecutar:
 python -m unittest tests.test_contracts_vps -v
 python contracts/pedidos-v2/test_contract.py -v
 ```
+
+Resultado POS acreditado al entregar: contratos Edge–Central 8/8, contrato Pedidos 7/7, suite Django 313/313, stdlib 105/105 y preflight oficial 313/313. La evidencia completa y hashes están en docs/candidatas/EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.10.md.
 
 Variables Edge que deben conservar nombre y separacion: `PEDIDOS_API_TOKEN` para lectura de Pedidos, `CENTRAL_INGEST_TOKEN` para escritura de ventas/clientes y `CENTRAL_CATALOG_TOKEN` para lectura/ACK de catalogo. No compartir ni acoplar su rotacion.
 
@@ -179,5 +182,6 @@ Los payloads exactos están en el índice y fixtures; no reconstruirlos desde ej
 - Falta un procedimiento firmado de resincronización después de `retention_gap`.
 - Falta comprobar restore real, MFA de propietario real y custodia de secretos/CA.
 - No existe todavía DNS/TLS público aprobado para central, ni una decisión de exposición. Mantener privado durante esta fase.
+- Los artefactos POS tienen manifiesto y SHA-256 reproducible, pero aún carecen de firma criptográfica y cadena de confianza para distribución.
 
 Al devolver el trabajo, agente1 debe reportar commits exactos, migraciones, rutas/flags que permanecen desactivadas, scopes emitibles, prueba PostgreSQL, resultado E2E, hash de artefactos y cualquier divergencia respecto de los schemas/fixtures. Cualquier divergencia requiere una versión nueva del contrato; no se corrige silenciosamente sólo en uno de los extremos.
