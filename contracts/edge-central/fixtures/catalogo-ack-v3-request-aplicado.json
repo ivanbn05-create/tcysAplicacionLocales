@@ -1,0 +1,39 @@
+{
+  "version_contrato": 3,
+  "ack_id": "31313131-3131-4313-8313-313131313131",
+  "pos_instance_id": "23232323-2323-4232-8232-232323232323",
+  "sucursal": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "clave": "LAB01"
+  },
+  "release_id": "28282828-2828-4282-8282-282828282828",
+  "publicacion_id": "29292929-2929-4292-8292-292929292929",
+  "version_sucursal": 1,
+  "contenido_sha256": "4d165dc63ddd523745538e3efef550d981540ab1e2ea7c79453d547a5bfc893d",
+  "estado": "aplicado",
+  "registrado_en": "2026-09-25T08:00:03-06:00",
+  "resultado": {
+    "codigo": "ok",
+    "detalle": ""
+  },
+  "mapeos_categoria": [
+    {
+      "categoria_central_id": "ffffffff-ffff-4fff-8fff-fffffffffff1",
+      "categoria_local_id": "27272727-2727-4272-8272-000000000001"
+    }
+  ],
+  "mapeos_producto": [
+    {
+      "producto_central_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2",
+      "producto_local_id": "24242424-2424-4242-8242-000000000001"
+    },
+    {
+      "producto_central_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1",
+      "producto_local_id": "24242424-2424-4242-8242-000000000002"
+    },
+    {
+      "producto_central_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee3",
+      "producto_local_id": "24242424-2424-4242-8242-000000000003"
+    }
+  ]
+}
