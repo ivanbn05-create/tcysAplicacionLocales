@@ -22,5 +22,5 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Contratos y enrolamiento
         run: python -m unittest tests.test_contracts_vps tests.test_enrolamiento_edge tests.test_dev10_settings -v
-      - name: Catálogo y compatibilidad Django
-        run: python manage.py test ventas.test_catalogo_v3_aprovisionamiento ventas.test_dev10_integraciones --noinput
+      - name: Suite Django completa
+        run: python manage.py test --noinput
