@@ -6,7 +6,7 @@ El operador prepara la sucursal en Central y exporta una tarjeta JSON privada co
 
 La identidad branch.id equivale exactamente a personas.Sucursal.id y CENTRAL_BRANCH_ID. edge.id es CENTRAL_POS_INSTANCE_ID, diferente del UUID de sucursal. pedidos_programados del contrato Central corresponde a la clave interna histórica programados del POS mediante adaptador explícito. pedidos_sucursales sólo puede autorizarse para Arboledas; la emisión de Central permanece bloqueada mientras no se apruebe su SucursalCliente.id. El token de lectura de Pedidos se provisiona por separado; Central no lo emite.
 
-La credencial ingest permite sales:v2:write, customers:v2:write y terminals:v1:write. La credencial catalog permite únicamente catalog:v2:read y catalog:v2:ack. Ninguna terminal recibe credenciales Edge. El Edge registra cada UUID durable de terminal en la ruta candidata /api/v1/edge/terminals/; el registro no participa en el camino crítico de venta/cobro/impresión.
+La credencial ingest permite sales:v2:write, customers:v2:write y terminals:v1:write. La credencial catalog admite los pares exactos catalog:v2:read/catalog:v2:ack o catalog:v3:read/catalog:v3:ack, y durante la transición los cuatro scopes juntos para drenar ACK v2 durables. Siempre queda limitada al Edge/sucursal y separada de ingesta y Pedidos. Ninguna terminal recibe credenciales Edge. El Edge registra cada UUID durable de terminal en la ruta candidata /api/v1/edge/terminals/; el registro no participa en el camino crítico de venta/cobro/impresión.
 
 ## Validación local
 
