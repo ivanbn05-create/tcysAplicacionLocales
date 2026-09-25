@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.lostocayos.invalid/edge-central/catalogo-ack-v3-response.schema.json",
+  "title": "Acuse central del ACK de catálogo v3 propuesto",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recibido", "acuse", "ack_id", "estado_registrado"],
+  "properties": {
+    "recibido": {"const": true},
+    "acuse": {"type": "string", "format": "uuid"},
+    "ack_id": {"type": "string", "format": "uuid"},
+    "estado_registrado": {"type": "string", "enum": ["recibido", "aplicado", "rechazado"]}
+  }
+}
