@@ -39,8 +39,8 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Primera recepción durable",
+          "200": {
+            "description": "Repetición idéntica o lote ya purgado; conserva el mismo acuse",
             "content": {
               "application/json": {
                 "schema": {
@@ -49,8 +49,8 @@
               }
             }
           },
-          "200": {
-            "description": "Repetición idéntica o lote ya purgado; conserva el mismo acuse",
+          "201": {
+            "description": "Primera recepción durable",
             "content": {
               "application/json": {
                 "schema": {
@@ -113,8 +113,8 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Primera recepción durable",
+          "200": {
+            "description": "Repetición exacta o lote purgado, con ACK estable",
             "content": {
               "application/json": {
                 "schema": {
@@ -123,8 +123,8 @@
               }
             }
           },
-          "200": {
-            "description": "Repetición exacta o lote purgado, con ACK estable",
+          "201": {
+            "description": "Primera recepción durable",
             "content": {
               "application/json": {
                 "schema": {
@@ -197,8 +197,8 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Cliente creado",
+          "200": {
+            "description": "Actualizado, repetido o desactualizado",
             "content": {
               "application/json": {
                 "schema": {
@@ -207,8 +207,8 @@
               }
             }
           },
-          "200": {
-            "description": "Actualizado, repetido o desactualizado",
+          "201": {
+            "description": "Cliente creado",
             "content": {
               "application/json": {
                 "schema": {
@@ -398,6 +398,16 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "Repetición exacta del ACK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/catalogo-ack-v2-response.schema.json"
+                }
+              }
+            }
+          },
           "201": {
             "description": "Primer registro del ACK",
             "content": {
@@ -408,12 +418,208 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v3/edge/catalogo/publicaciones/actual/": {
+      "get": {
+        "operationId": "obtenerCatalogoActualV3",
+        "summary": "Obtener el snapshot completo asignado a la sucursal autenticada",
+        "x-contract-status": "propuesto-desactivado",
+        "x-required-scope": "catalog:v3:read",
+        "security": [
+          {
+            "CentralCatalogBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfNoneMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Publicación completa e inmutable",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/catalogo-publicacion-v3.schema.json"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "La sucursal aún no tiene publicación"
+          },
+          "304": {
+            "description": "La publicación indicada por ETag continúa vigente"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "description": "Feature aún desactivado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/error-central.schema.json"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v3/edge/catalogo/publicaciones/{uuid}/": {
+      "get": {
+        "operationId": "obtenerCatalogoPorIdV3",
+        "summary": "Recuperar una publicación de la propia sucursal",
+        "x-contract-status": "propuesto-desactivado",
+        "x-required-scope": "catalog:v3:read",
+        "security": [
+          {
+            "CentralCatalogBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Publicación completa e inmutable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/catalogo-publicacion-v3.schema.json"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "description": "Versión no disponible; solicitar el snapshot completo actual",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/error-central.schema.json"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v3/edge/catalogo/publicaciones/{uuid}/acuse/": {
+      "post": {
+        "operationId": "registrarCatalogoAckV3",
+        "summary": "Registrar recepción, aplicación o rechazo durable",
+        "x-contract-status": "propuesto-desactivado",
+        "x-required-scope": "catalog:v3:ack",
+        "security": [
+          {
+            "CentralCatalogBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./schemas/catalogo-ack-v3-request.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
           "200": {
             "description": "Repetición exacta del ACK",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "./schemas/catalogo-ack-v2-response.schema.json"
+                  "$ref": "./schemas/catalogo-ack-v3-response.schema.json"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Primer registro del ACK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./schemas/catalogo-ack-v3-response.schema.json"
                 }
               }
             }
