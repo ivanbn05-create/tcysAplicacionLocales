@@ -6,7 +6,7 @@ from io import StringIO
 from types import SimpleNamespace
 import uuid
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from decimal import Decimal
 
 from django.contrib.auth.hashers import make_password
@@ -35,8 +35,10 @@ from ventas.catalogo_central import (
     ErrorCatalogoCentral,
     aplicar_publicacion_catalogo,
     checksum_snapshot,
+    encolar_ack_catalogo_rechazado,
 )
 from ventas.models import ConfiguracionSucursal, DefinicionPromocion, EventoOutbox
+from ventas.sincronizacion_central import _limite_payload_evento, _ruta_evento, json_canonico
 
 
 class CatalogoV3AprovisionamientoTests(TestCase):
@@ -129,7 +131,8 @@ class CatalogoV3AprovisionamientoTests(TestCase):
 
     def test_sincronizador_sin_snapshot_persiste_espera_y_no_habilita_menu(self):
         with override_settings(
-            CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2=True,
+            CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2=False,
+            CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3=True,
             SUCURSAL_CLAVE=self.sucursal.clave,
             CENTRAL_API_BASE_URL="https://central.example.invalid",
             CENTRAL_BRANCH_ID=str(self.sucursal.id),
@@ -137,12 +140,16 @@ class CatalogoV3AprovisionamientoTests(TestCase):
             CENTRAL_POS_INSTANCE_ID=str(self.config.instalacion_id),
             CENTRAL_CATALOG_TOKEN="T" * 40,
         ):
-            cliente = SimpleNamespace(solicitar=lambda **_kwargs: SimpleNamespace(status=204))
+            cliente = SimpleNamespace(solicitar=Mock(return_value=SimpleNamespace(status=204)))
             with patch(
                 "ventas.management.commands.sincronizar_catalogo_central.ClienteCentral",
                 return_value=cliente,
             ):
                 call_command("sincronizar_catalogo_central", stdout=StringIO())
+            cliente.solicitar.assert_called_once_with(
+                metodo="GET",
+                ruta="/api/v3/edge/catalogo/publicaciones/actual/",
+            )
             self.assertEqual(
                 estado_aprovisionamiento(self.sucursal)["estado"],
                 "esperando_catalogo_inicial",
@@ -168,13 +175,58 @@ class CatalogoV3AprovisionamientoTests(TestCase):
             self.assertFalse(Precio.objects.get(producto=no_disponible).activo)
             self.assertFalse(producto_vendible(self.sucursal, no_disponible))
             self.assertEqual(IdentidadProductoCentral.objects.count(), 2)
-            self.assertEqual(EventoOutbox.objects.filter(tipo="catalogo.aplicado").count(), 1)
+            ack = EventoOutbox.objects.get(tipo="catalogo.aplicado")
+            self.assertEqual(ack.version_contrato, 3)
+            self.assertEqual(ack.datos["version_contrato"], 3)
+            self.assertEqual(len(ack.datos["mapeos_producto"]), 2)
+            self.assertEqual(
+                _ruta_evento(ack),
+                f"/api/v3/edge/catalogo/publicaciones/{publicacion.publicacion_id}/acuse/",
+            )
             marcar_listo(self.sucursal)
             self.assertEqual(estado_aprovisionamiento(self.sucursal)["estado"], "listo")
             vendible = IdentidadProductoCentral.objects.get(central_id=self.vendible_id).producto
             self.assertTrue(producto_vendible(self.sucursal, vendible))
             self.assertFalse(producto_vendible(self.sucursal, no_disponible))
             exigir_catalogo_operativo(self.sucursal)
+
+    def test_rechazo_v3_encola_acuse_v3_sin_aplicar_catalogo(self):
+        datos = self.snapshot()
+        datos["contenido_sha256"] = "0" * 64
+        with self.identidad_settings():
+            with self.assertRaises(ErrorCatalogoCentral) as error:
+                aplicar_publicacion_catalogo(self.sucursal, datos)
+            ack = encolar_ack_catalogo_rechazado(
+                self.sucursal, datos, error.exception, version_contrato=3
+            )
+        self.assertIsNotNone(ack)
+        self.assertEqual(ack.version_contrato, 3)
+        self.assertEqual(ack.datos["version_contrato"], 3)
+        self.assertEqual(ack.datos["estado"], "rechazado")
+        self.assertEqual(
+            _ruta_evento(ack),
+            f"/api/v3/edge/catalogo/publicaciones/{datos['publicacion_id']}/acuse/",
+        )
+        self.assertFalse(PublicacionCatalogoCentral.objects.exists())
+
+    def test_acuse_v3_admite_mapeos_exhaustivos_mayores_de_16_kib(self):
+        datos = self.snapshot()
+        plantilla = datos["contenido"]["productos"][0]
+        for indice in range(130):
+            producto = copy.deepcopy(plantilla)
+            producto["producto_central_id"] = str(uuid.uuid4())
+            producto["codigo"] = f"MAS-{indice:03d}"
+            producto["nombre"] = f"Producto adicional {indice}"
+            producto["nombre_corto"] = f"MAS{indice}"
+            datos["contenido"]["productos"].append(producto)
+        datos["conteos"]["productos"] = len(datos["contenido"]["productos"])
+        datos["contenido_sha256"] = checksum_snapshot(datos)
+        with self.identidad_settings():
+            aplicar_publicacion_catalogo(self.sucursal, datos)
+        ack = EventoOutbox.objects.get(tipo="catalogo.aplicado")
+        self.assertEqual(len(ack.datos["mapeos_producto"]), 132)
+        self.assertGreater(len(json_canonico(ack.datos)), 16 * 1024)
+        self.assertLessEqual(len(json_canonico(ack.datos)), _limite_payload_evento(ack))
 
     def test_publicacion_corrupta_no_avanza_estado_precio_ni_ultima_valida(self):
         with self.identidad_settings():
