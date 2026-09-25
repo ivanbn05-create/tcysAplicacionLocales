@@ -1,13 +1,13 @@
 # Handoff Production 1.0 al responsable de Backend Central
 
-Fecha: 2026-09-25. Destino: agente1 y el integrador Central/Pedidos. **Candidata de laboratorio**: ninguna sucursal está en producción, esta nota no autoriza despliegue, corte, publicación pública de DNS/TLS, activación de clientes/catálogo ni uso de tokens reales. La rama POS es `codex/candidata-production-1.0-dev.1`, derivada de `e046f2bf74096d76eea50762aa07253f9b073a3d` (0.4.0-dev.10). Al redactar esto, la candidata aún contiene cambios sin commit; el integrador debe tomar el commit final que entregue el responsable POS, no asumir que ese HEAD base contiene Production 1.0.
+Fecha: 2026-09-25. Destino: agente1 y el integrador Central/Pedidos. **Candidata de laboratorio**: ninguna sucursal está en producción, esta nota no autoriza despliegue, corte, publicación pública de DNS/TLS, activación de clientes/catálogo ni uso de tokens reales. La rama POS es `codex/candidata-production-1.0-dev.1`, derivada de `e046f2bf74096d76eea50762aa07253f9b073a3d` (0.4.0-dev.10). El primer commit de integración POS es `f0ba9f21b11beb6479ec1ca401e4c7eeccc5e257`; confirmar el HEAD de la rama al consumir este handoff, ya que la documentación y las pruebas pueden tener commits posteriores.
 
 ## Contratos ejecutables que debe reconciliar Central
 
 | Flujo | Fuente POS | Estado al redactar |
 | --- | --- | --- |
 | Enrolamiento, tarjeta de un uso y registro de terminal | `contracts/edge-enrollment-v1/openapi.json`, `schemas/*.json`, `fixtures/*.json`, `README_EDGE.md`; cliente `herramientas/enrolamiento_edge.py`; prueba `tests/test_enrolamiento_edge.py` | Central lo implementó como candidato privado detrás de `CENTRAL_ENABLE_ENROLLMENT_V1=1`; no está habilitado en producción. |
-| Pedidos confirmados v2 | `contracts/pedidos-v2/openapi.json`, esquemas y fixtures; `contracts/pedidos-v2/test_contract.py`; cliente `ventas/pedidos_api_v2.py` | Candidato Pedidos `8fad56815f856b4286a2f60f488480960e34cde5` sin merge/despliegue según handoff previo; v1/Supabase legacy permanece como rollback. |
+| Pedidos confirmados v2 | `contracts/pedidos-v2/openapi.json`, esquemas y fixtures; `contracts/pedidos-v2/test_contract.py`; cliente `ventas/pedidos_api_v2.py` | El handoff previo refería `8fad56815f856b4286a2f60f488480960e34cde5`; agente2 reportó un candidato de recuperación 410 posterior `0de4a6d9c678ba651f3b86605e057259875ef7ef`, aún sin merge/despliegue. Reconciliar contrato vigente antes del E2E; v1/Supabase legacy sigue como rollback. |
 | Mensual v1, ventas y clientes v2, catálogo y ACK | `contracts/edge-central/openapi.json`, `schemas/*.json`, `fixtures/index.json`, `tests/test_contracts_vps.py` | Mensual v1 es privado; ventas/clientes/catálogo v2 son contratos candidatos. Las banderas POS v2 siguen apagadas. |
 | Identidades, credenciales y respuestas | `contracts/edge-central/MATRIZ_IDENTIDADES.md`, `fixtures/matriz-identidades-v1.json`, `CREDENCIALES_Y_VARIABLES.md` y `MATRIZ_HTTP_ACCIONES.md` | La matriz con `SucursalCliente.id` real requiere aprobación explícita. |
 
@@ -47,7 +47,7 @@ Central debe soportar rotación/revocación por `credential_id` y audience, sin 
 | Claim 201 válido | Persistir recibo privado sólo tras validar identidad, módulos y scopes; confirmar código de sucursal en el instalador. |
 | Claim 401/409/410/426/429 o timeout ambiguo | Detener instalación y resolver en Central; no reutilizar tarjeta ni continuar con identidad parcial. |
 | Pedidos v2 200 válido | Persistir pedidos, deduplicación y `next_cursor` en una transacción SQLite. Una página vacía válida puede significar “sin nuevos”. |
-| Pedidos v2 **410 `retention_gap`** (también cursor legado con época numérica) | `REQUIERE_CONCILIACION`; conservar cursor, high-water mark y pedidos locales; detener avance automático. **Nunca** interpretar como “no hay pedidos”. Recuperar mediante snapshot/exportación auditada y decisión explícita sobre nuevo cursor. |
+| Pedidos v2 **410 `retention_gap`** (también cursor legado con época numérica) | `REQUIERE_CONCILIACION`; conservar cursor, high-water mark y pedidos locales; detener avance automático. **Nunca** interpretar como “no hay pedidos”. Recuperar mediante snapshot/exportación auditada, importación idempotente por codigo_publico y decisión explícita sobre nuevo cursor. El acuse de custodia requiere autenticación criptográfica del Edge; UUID y SHA solos no autentican quién confirmó. |
 | Pedidos 401/403/404/409/422 | Detener sólo ese flujo o conciliar contrato/identidad; v1/Supabase sigue como rollback. No inventar cursor. |
 | Pedidos 429/5xx/timeout/TLS | Backoff acotado en segundo plano, sin bloquear POS. |
 | Ventas/clientes 200/201 con ACK válido | Confirmar evento outbox durable en transacción. `purgado` es entrega definitiva; no rehidratar. |
@@ -82,7 +82,7 @@ Comprobaciones locales existentes, sin red:
 `python contracts/pedidos-v2/test_contract.py -v`
 `python manage.py test ventas.test_pedidos_api_v2 ventas.test_dev10_integraciones ventas.test_dev10_outbox_concurrencia -v 1`
 
-Ejecución local el 2026-09-25: enrolamiento 6/6, contratos Central 8/8 y contrato Pedidos 7/7. Son pruebas sin red; la suite Django indicada arriba queda sujeta al informe de regresión integral de la candidata.
+Ejecución local el 2026-09-25: enrolamiento 7/7 tras prueba de nombre 120/121, contratos Central 8/8 y contrato Pedidos 7/7. Son pruebas sin red; la suite Django integrada de la candidata pasó en base de test aislada.
 
 El ensayo `python herramientas/ensayar_candidata_1_0.py` valida SQLite limpia y migración desde dev.10 de forma aislada; **no** demuestra enrolamiento Central real, impresión física, catálogo inicial o servicio Windows limpio. Las pruebas de contrato usan fixtures sintéticos, no prueban PostgreSQL ni autorización remota.
 
@@ -90,7 +90,7 @@ E2E privado mínimo, sin corte productivo:
 
 1. Congelar commits de Central, POS y Pedidos, hashes de contratos/fixtures y una base PostgreSQL exclusiva de laboratorio. Mantener 8010/8011 privados y Pedidos 8002 sin alterar; habilitar rutas sólo en servicios aislados y TLS/CA con hostname comprobado. No usar `verify=False`.
 2. Emitir tarjetas nuevas para Edge de laboratorio Arboledas y Santa Anita. Confirmar 201 una sola vez, 409 al repetir, 410 por caducidad, identidad ajena, scopes, CA errónea y timeout ambiguo. Registrar/repetir una terminal sin darle bearer.
-3. Aprobar en la matriz el `SucursalCliente.id` de Arboledas y emitir un token Pedidos por Edge limitado a ese ID. Probar que no puede consultar otra sucursal; un token Pedidos rotado no interrumpe ingesta/catálogo. Forzar `410 retention_gap` y validar el flujo de conciliación/exportación antes de adoptar cursor nuevo.
+3. Aprobar en la matriz el `SucursalCliente.id` de Arboledas y emitir un token Pedidos por Edge limitado a ese ID. Probar que no puede consultar otra sucursal; un token Pedidos rotado no interrumpe ingesta/catálogo. Forzar `410 retention_gap` y validar el flujo de conciliación/exportación antes de adoptar cursor nuevo. Definir con Pedidos un ACK firmado por la identidad Edge (recovery_id, sucursal/Edge, hashes, UUID cubiertos, nonce y tiempo) y su verificación/replay antes de considerar cerrado el gap.
 4. Publicar versión 1 completa para cada sucursal de laboratorio y demostrar menú vendible tras instalación limpia; luego versión 2 por excepción de precio, rechazo seguro de parcial/checksum incorrecto, corte/reinicio y ACK perdido. Comprobar que Arboledas no ve precios Santa Anita y viceversa.
 5. Probar outbox de venta/cliente con ACK perdido, mismo UUID/cuerpo repetido, cuerpo distinto 409, rotación de token, 401/403, 413 y fallo TLS. Restaurar backup SQLite y PostgreSQL aislados y verificar que cursor, ACK, mapeos y outbox sobreviven.
 6. Probar operación local offline: venta, cobro e impresión sin VPS, sin que sincronización o registro de terminal participen en esa ruta. Documentar resultado, limitaciones y aprobación de corte posterior por separado.
