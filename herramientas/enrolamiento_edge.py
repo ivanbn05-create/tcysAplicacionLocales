@@ -34,6 +34,8 @@ INGEST_SCOPES = frozenset({
     "sales:v2:write", "customers:v2:write", "terminals:v1:write",
 })
 CATALOG_SCOPES = frozenset({"catalog:v2:read", "catalog:v2:ack"})
+CATALOG_SCOPES_V3 = frozenset({"catalog:v3:read", "catalog:v3:ack"})
+CATALOG_SCOPES_TRANSITION = CATALOG_SCOPES | CATALOG_SCOPES_V3
 
 
 class EnrollmentError(ValueError):
@@ -143,7 +145,11 @@ def read_private_card(path: Path) -> EnrollmentCard:
     return validate_card(path.read_bytes())
 
 
-def _credential(value: object, expected_scopes: frozenset[str], label: str) -> tuple[str, str]:
+def _credential(
+    value: object,
+    expected_scopes: frozenset[str] | tuple[frozenset[str], ...],
+    label: str,
+) -> tuple[str, str]:
     data = _only_keys(
         value, {"token", "credential_id", "scopes", "expires_at"}, label,
     )
@@ -152,9 +158,10 @@ def _credential(value: object, expected_scopes: frozenset[str], label: str) -> t
         raise EnrollmentError(f"{label} contiene un token inválido.")
     credential_id = _uuid(data["credential_id"], f"{label}.credential_id")
     scopes = data["scopes"]
+    allowed = expected_scopes if isinstance(expected_scopes, tuple) else (expected_scopes,)
     if (
         not isinstance(scopes, list) or any(not isinstance(scope, str) for scope in scopes)
-        or len(scopes) != len(set(scopes)) or set(scopes) != expected_scopes
+        or len(scopes) != len(set(scopes)) or frozenset(scopes) not in allowed
     ):
         raise EnrollmentError(f"{label} tiene scopes inesperados.")
     expires_at = data["expires_at"]
@@ -209,7 +216,11 @@ def validate_receipt(payload: bytes, card: EnrollmentCard) -> EnrollmentReceipt:
         raise EnrollmentError("Pedidos de sucursales no autorizado para este piloto.")
     credentials = _only_keys(data["credentials"], {"ingest", "catalog"}, "Credenciales")
     ingest, ingest_id = _credential(credentials["ingest"], INGEST_SCOPES, "Ingesta")
-    catalog, catalog_id = _credential(credentials["catalog"], CATALOG_SCOPES, "Catálogo")
+    catalog, catalog_id = _credential(
+        credentials["catalog"],
+        (CATALOG_SCOPES, CATALOG_SCOPES_V3, CATALOG_SCOPES_TRANSITION),
+        "Catálogo",
+    )
     if ingest == catalog or ingest_id == catalog_id:
         raise EnrollmentError("Credenciales remotas reutilizadas.")
     return EnrollmentReceipt(
