@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 from decimal import Decimal
 
 from django.contrib.auth.hashers import make_password
-from django.core.management import call_command
+from django.core.management import call_command, CommandError
 from django.test import TestCase, override_settings
 
 from catalogo.models import (
@@ -208,6 +208,37 @@ class CatalogoV3AprovisionamientoTests(TestCase):
             _ruta_evento(ack),
             f"/api/v3/edge/catalogo/publicaciones/{datos['publicacion_id']}/acuse/",
         )
+        self.assertFalse(PublicacionCatalogoCentral.objects.exists())
+
+    def test_dos_polls_de_publicacion_invalida_reutilizan_ack(self):
+        datos = self.snapshot()
+        datos["contenido_sha256"] = "0" * 64
+        with override_settings(
+            CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2=False,
+            CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3=True,
+            SUCURSAL_CLAVE=self.sucursal.clave,
+            CENTRAL_API_BASE_URL="https://central.example.invalid",
+            CENTRAL_BRANCH_ID=str(self.sucursal.id),
+            CENTRAL_BRANCH_CODE=self.sucursal.clave,
+            CENTRAL_POS_INSTANCE_ID=str(self.config.instalacion_id),
+            CENTRAL_CATALOG_TOKEN="T" * 40,
+        ):
+            cliente = SimpleNamespace(
+                solicitar=Mock(return_value=SimpleNamespace(status=200, datos=datos))
+            )
+            with patch(
+                "ventas.management.commands.sincronizar_catalogo_central.ClienteCentral",
+                return_value=cliente,
+            ):
+                for _ in range(2):
+                    with self.assertRaises(CommandError):
+                        call_command("sincronizar_catalogo_central", stdout=StringIO())
+        self.assertEqual(cliente.solicitar.call_count, 2)
+        acks = EventoOutbox.objects.filter(tipo="catalogo.rechazado")
+        self.assertEqual(acks.count(), 1)
+        ack = acks.get()
+        self.assertEqual(ack.version_contrato, 3)
+        self.assertEqual(ack.payload_hash, hash_payload(ack.datos))
         self.assertFalse(PublicacionCatalogoCentral.objects.exists())
 
     def test_acuse_v3_admite_mapeos_exhaustivos_mayores_de_16_kib(self):
