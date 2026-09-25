@@ -49,7 +49,7 @@ def _ultima_publicacion(sucursal):
             sucursal=sucursal,
             estado=PublicacionCatalogoCentral.Estado.APLICADA,
         )
-        .order_by("-version")
+        .order_by("-version_contrato", "-version")
         .first()
     )
 
