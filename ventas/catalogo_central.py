@@ -557,12 +557,22 @@ def encolar_ack_catalogo_rechazado(
 
     from .sincronizacion_central import hash_payload, obtener_pos_instance_id
 
-    ack_id = uuid.uuid4()
     codigo = error.codigo if error.codigo in CODIGOS_RECHAZO else "schema_no_soportado"
+    pos_instance_id = obtener_pos_instance_id(sucursal)
+    # El mismo rechazo publicado en cada poll usa la misma identidad durable.
+    # Un cambio de version, release, checksum o codigo genera otro ACK.
+    ack_id = uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        (
+            f"lostocayos:catalogo:rechazado:{sucursal.id}:{pos_instance_id}:"
+            f"{version_contrato}:{release_id}:{publicacion_id}:{version}:"
+            f"{checksum}:{codigo}"
+        ),
+    )
     payload = {
         "version_contrato": version_contrato,
         "ack_id": str(ack_id),
-        "pos_instance_id": obtener_pos_instance_id(sucursal),
+        "pos_instance_id": pos_instance_id,
         "sucursal": {"id": str(sucursal.id), "clave": sucursal.clave},
         "release_id": str(release_id),
         "publicacion_id": str(publicacion_id),
@@ -574,20 +584,32 @@ def encolar_ack_catalogo_rechazado(
         "mapeos_categoria": [],
         "mapeos_producto": [],
     }
-    return EventoOutbox.objects.create(
+    evento, creada = EventoOutbox.objects.get_or_create(
         id=ack_id,
-        sucursal=sucursal,
-        agregado="catalogo_publicacion",
-        agregado_id=publicacion_id,
-        tipo="catalogo.rechazado",
-        datos=payload,
-        destino=EventoOutbox.Destino.CENTRAL_CATALOGO_ACK,
-        estado_entrega=EventoOutbox.EstadoEntrega.PENDIENTE,
-        version_contrato=version_contrato,
-        version_origen=version,
-        payload_hash=hash_payload(payload),
-        ultimo_error=codigo,
+        defaults={
+            "sucursal": sucursal,
+            "agregado": "catalogo_publicacion",
+            "agregado_id": publicacion_id,
+            "tipo": "catalogo.rechazado",
+            "datos": payload,
+            "destino": EventoOutbox.Destino.CENTRAL_CATALOGO_ACK,
+            "estado_entrega": EventoOutbox.EstadoEntrega.PENDIENTE,
+            "version_contrato": version_contrato,
+            "version_origen": version,
+            "payload_hash": hash_payload(payload),
+            "ultimo_error": codigo,
+        },
     )
+    if not creada and (
+        evento.sucursal_id != sucursal.id
+        or evento.tipo != "catalogo.rechazado"
+        or evento.version_contrato != version_contrato
+        or evento.datos.get("publicacion_id") != str(publicacion_id)
+        or evento.datos.get("contenido_sha256") != checksum
+        or evento.payload_hash != hash_payload(evento.datos)
+    ):
+        return None
+    return evento
 
 
 def _validar_raices_promocionales_historicas(sucursal, raiz):
