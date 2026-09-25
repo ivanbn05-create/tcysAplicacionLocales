@@ -426,6 +426,45 @@ class FixtureCatalogoV3Tests(TestCase):
         self.assertEqual(promocion.codigo, "LAB-PROMO")
         self.assertEqual(promocion.grupos.get().cantidad, 2)
 
+    def test_fixture_v3_promocion_se_activa_tras_dos_publicaciones_v2(self):
+        base = Path(__file__).resolve().parents[1] / "contracts/edge-central/fixtures"
+        legado = json.loads(
+            (base / "catalogo-publicacion-v2-lab01-global.json").read_text(encoding="utf-8")
+        )
+        inicial_v3 = json.loads(
+            (base / "catalogo-publicacion-v3-lab01-promocion.json").read_text(encoding="utf-8")
+        )
+        sucursal = Sucursal.objects.create(
+            id=uuid.UUID(legado["sucursal"]["id"]),
+            clave=legado["sucursal"]["clave"],
+            nombre="Laboratorio transición",
+        )
+        ConfiguracionSucursal.objects.create(
+            sucursal=sucursal, clave_administrador=make_password("7391")
+        )
+        primera_v2, _ = aplicar_publicacion_catalogo(sucursal, legado)
+        segunda = copy.deepcopy(legado)
+        segunda["release_id"] = str(uuid.uuid4())
+        segunda["publicacion_id"] = str(uuid.uuid4())
+        segunda["publicacion_anterior_id"] = str(primera_v2.publicacion_id)
+        segunda["version_sucursal"] = 2
+        segunda_v2, _ = aplicar_publicacion_catalogo(sucursal, segunda)
+        primera_v3, _ = aplicar_publicacion_catalogo(sucursal, inicial_v3)
+        self.assertEqual(primera_v3.version, 1)
+        self.assertEqual(_publicacion_activa(sucursal.id).pk, primera_v3.pk)
+        principal = IdentidadProductoCentral.objects.get(
+            sucursal=sucursal,
+            central_id=uuid.UUID(inicial_v3["contenido"]["promociones"][0]["producto_central_id"]),
+        ).producto
+        from ventas.promociones import configuracion_promocion
+        definicion = configuracion_promocion(principal)
+        self.assertIsNotNone(definicion)
+        self.assertEqual(definicion.publicacion_id, primera_v3.pk)
+        self.assertEqual(definicion.origen, DefinicionPromocion.Origen.CENTRAL)
+        self.assertEqual(
+            PublicacionCatalogoCentral.objects.get(pk=segunda_v2.pk).version_contrato, 2
+        )
+
     def test_retirar_promocion_exige_desactivar_su_producto_principal(self):
         ruta = (
             Path(__file__).resolve().parents[1]
