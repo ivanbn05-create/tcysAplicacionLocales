@@ -1,0 +1,436 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.lostocayos.invalid/edge-central/catalogo-publicacion-v3.schema.json",
+  "title": "Snapshot completo de catálogo y promociones por sucursal v3 candidato",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version_contrato",
+    "tipo",
+    "release_id",
+    "publicacion_id",
+    "publicacion_anterior_id",
+    "version_sucursal",
+    "sucursal",
+    "publicada_en",
+    "aplicar_desde",
+    "moneda",
+    "conteos",
+    "contenido",
+    "contenido_sha256"
+  ],
+  "properties": {
+    "version_contrato": {
+      "const": 3
+    },
+    "tipo": {
+      "const": "snapshot_completo"
+    },
+    "release_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "publicacion_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "publicacion_anterior_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "version_sucursal": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "sucursal": {
+      "$ref": "#/$defs/sucursal"
+    },
+    "publicada_en": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "aplicar_desde": {
+      "type": "string",
+      "format": "date"
+    },
+    "moneda": {
+      "const": "MXN"
+    },
+    "conteos": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "categorias",
+        "productos",
+        "promociones"
+      ],
+      "properties": {
+        "categorias": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "productos": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        },
+        "promociones": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 500
+        }
+      }
+    },
+    "contenido": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "categorias",
+        "productos",
+        "promociones"
+      ],
+      "properties": {
+        "categorias": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/categoria"
+          },
+          "minItems": 1
+        },
+        "productos": {
+          "type": "array",
+          "maxItems": 5000,
+          "items": {
+            "$ref": "#/$defs/producto"
+          },
+          "minItems": 1
+        },
+        "promociones": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/promocion"
+          }
+        }
+      }
+    },
+    "contenido_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  },
+  "$defs": {
+    "sucursal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "clave"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "clave": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 30
+        }
+      }
+    },
+    "categoria": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "categoria_central_id",
+        "codigo",
+        "nombre",
+        "orden",
+        "activa"
+      ],
+      "properties": {
+        "categoria_central_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "codigo": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 30
+        },
+        "nombre": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "orden": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "activa": {
+          "type": "boolean"
+        }
+      }
+    },
+    "producto": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "producto_central_id",
+        "categoria_central_id",
+        "codigo",
+        "nombre",
+        "nombre_corto",
+        "orden",
+        "permite_termino",
+        "termino_predeterminado",
+        "abreviaturas_termino",
+        "destino_impresion",
+        "activo",
+        "imagen",
+        "precio",
+        "disponible_sucursal"
+      ],
+      "properties": {
+        "producto_central_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "categoria_central_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "codigo": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 30
+        },
+        "nombre": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "nombre_corto": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24
+        },
+        "orden": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "permite_termino": {
+          "type": "boolean"
+        },
+        "termino_predeterminado": {
+          "type": "string",
+          "enum": [
+            "",
+            "dorado",
+            "medio",
+            "blando"
+          ]
+        },
+        "abreviaturas_termino": {
+          "type": "object",
+          "maxProperties": 3,
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 8
+          }
+        },
+        "destino_impresion": {
+          "type": "string",
+          "enum": [
+            "cocina",
+            "barra",
+            "caja"
+          ]
+        },
+        "activo": {
+          "type": "boolean"
+        },
+        "imagen": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "politica",
+            "asset"
+          ],
+          "properties": {
+            "politica": {
+              "const": "conservar_local_o_placeholder"
+            },
+            "asset": {
+              "const": null
+            }
+          }
+        },
+        "precio": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "importe",
+            "origen",
+            "vigente_desde",
+            "vigente_hasta"
+          ],
+          "properties": {
+            "importe": {
+              "type": "string",
+              "pattern": "^[0-9]{1,12}\\.[0-9]{2}$"
+            },
+            "origen": {
+              "type": "string",
+              "enum": [
+                "global",
+                "excepcion_sucursal"
+              ]
+            },
+            "vigente_desde": {
+              "type": "string",
+              "format": "date"
+            },
+            "vigente_hasta": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date"
+            }
+          }
+        },
+        "disponible_sucursal": {
+          "type": "boolean"
+        }
+      }
+    },
+    "promocion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "codigo",
+        "nombre",
+        "producto_central_id",
+        "precio",
+        "activo",
+        "dias_semana",
+        "fecha_desde",
+        "fecha_hasta",
+        "grupos"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "codigo": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 30
+        },
+        "nombre": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "producto_central_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "precio": {
+          "type": "string",
+          "pattern": "^[0-9]{1,8}\\.[0-9]{2}$"
+        },
+        "activo": {
+          "type": "boolean"
+        },
+        "dias_semana": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 7,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6
+          }
+        },
+        "fecha_desde": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "fecha_hasta": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "grupos": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/grupo_promocion"
+          }
+        }
+      }
+    },
+    "grupo_promocion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "nombre",
+        "orden",
+        "cantidad",
+        "productos_permitidos"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "nombre": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "orden": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "cantidad": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 999
+        },
+        "productos_permitidos": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 500,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      }
+    }
+  }
+}

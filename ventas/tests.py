@@ -2010,26 +2010,35 @@ class FlujoPOSTests(TestCase):
         with self.assertRaisesMessage(ErrorVenta, "no forma parte"):
             agregar_partida(ticket, consome, promocion_aplicada=partida_promocion)
 
-    def test_promocion_asigna_sin_modo_especial_y_al_eliminar_conserva_productos(self):
+    def test_promocion_exige_asignacion_expresa_y_al_eliminar_conserva_productos(self):
         ticket, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="MESA-17"))
         promocion = Producto.objects.get(sucursal=self.sucursal, codigo="PK")
         bistec = Producto.objects.get(sucursal=self.sucursal, codigo="TBI")
         with patch("ventas.services.timezone.localdate", return_value=date(2026, 8, 17)):
             partida_promocion = agregar_partida(ticket, promocion)
 
-        componente = agregar_partida(ticket, bistec, comensal=3, cantidad=Decimal("3"))
-        componente.refresh_from_db()
+        independiente = agregar_partida(ticket, bistec, comensal=3, cantidad=Decimal("3"))
+        independiente.refresh_from_db()
+        self.assertIsNone(independiente.promocion_aplicada_id)
+        self.assertEqual(independiente.precio_unitario, bistec.precio_actual().importe)
+        # La elección explícita agrega una partida separada; no consume la ajena.
+        componente = agregar_partida(
+            ticket, bistec, comensal=4, cantidad=Decimal("3"),
+            promocion_aplicada=partida_promocion,
+        )
         ticket.refresh_from_db()
         self.assertEqual(componente.promocion_aplicada_id, partida_promocion.id)
         self.assertEqual(componente.precio_unitario, Decimal("0.00"))
-        self.assertEqual(ticket.total, Decimal("90.00"))
+        self.assertEqual(ticket.total, Decimal("186.00"))
 
         actualizar_partida(partida_promocion, Decimal("0"))
-        componente = ticket.partidas.get(producto=bistec)
+        componente.refresh_from_db()
         ticket.refresh_from_db()
         self.assertIsNone(componente.promocion_aplicada_id)
         self.assertEqual(componente.cantidad, Decimal("3"))
         self.assertEqual(componente.precio_unitario, bistec.precio_actual().importe)
+        independiente.refresh_from_db()
+        self.assertIsNone(independiente.promocion_aplicada_id)
 
     def test_ticket_total_agrupa_producto_termino_cantidad_e_importe(self):
         ticket, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="MESA-18"))

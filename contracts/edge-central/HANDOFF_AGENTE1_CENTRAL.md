@@ -185,3 +185,10 @@ Los payloads exactos están en el índice y fixtures; no reconstruirlos desde ej
 - Los artefactos POS tienen manifiesto y SHA-256 reproducible, pero aún carecen de firma criptográfica y cadena de confianza para distribución.
 
 Al devolver el trabajo, agente1 debe reportar commits exactos, migraciones, rutas/flags que permanecen desactivadas, scopes emitibles, prueba PostgreSQL, resultado E2E, hash de artefactos y cualquier divergencia respecto de los schemas/fixtures. Cualquier divergencia requiere una versión nueva del contrato; no se corrige silenciosamente sólo en uno de los extremos.
+
+
+## Adenda 1.0.0-dev.2: catálogo/promociones v3
+
+Esta adenda reemplaza el objetivo de catálogo v2 descrito arriba para la integración nueva; v2 permanece sólo como compatibilidad durante el corte. El catálogo maestro inicial será el real vigente de Arboledas importado a Central. El contrato ejecutable Edge candidato está en `CATALOGO_V3_EDGE.md`, `schemas/catalogo-publicacion-v3.schema.json` y `fixtures/catalogo-publicacion-v3-lab01-promocion.json` (fixture exclusivamente sintético). Incluye disponibilidad por sucursal y promociones versionadas con grupos/UUID. PB, PL, P4 y PK se importan como datos, no como códigos con lógica especial. Producto extra por sucursal significa producto maestro + availability; Quesaking se pospone.
+
+Agente1 debe responder con commit Central, ruta GET/ACK y scopes finales, fixture generado por Central validado por el schema Edge, prueba de checksum y ACK PostgreSQL, y acta de import/reconciliación del catálogo real Arboledas. Probar dos sucursales y que token/URL ajenos no revelen productos ni promociones de otra. La venta local de un Edge nuevo permanece bloqueada hasta catálogo v3 completo y alistamiento explícito; una publicación parcial o corrupta no reemplaza la última válida. El cliente Edge mantiene rutas v2 candidatas hasta que se acuerde el versionado de transporte; las banderas siguen apagadas. No hacer deploy/corte desde esta adenda.

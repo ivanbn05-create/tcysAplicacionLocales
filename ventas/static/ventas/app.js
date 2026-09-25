@@ -140,6 +140,10 @@
   const productos = JSON.parse(document.getElementById("datos-productos").textContent);
   const posiciones = JSON.parse(document.getElementById("datos-posiciones").textContent);
   const permisos = JSON.parse(document.getElementById("datos-permisos").textContent);
+  const datosAprovisionamiento = document.getElementById("datos-aprovisionamiento");
+  const aprovisionamiento = datosAprovisionamiento
+    ? JSON.parse(datosAprovisionamiento.textContent)
+    : { estado: "listo", catalogo_aplicado: true, listo: true, mensaje: "" };
   const nombresCanal = {
     comedor: "Comedor",
     llevar: "Llevar",
@@ -232,6 +236,11 @@
     canal: "comedor",
     persona: 1,
     modoMenu: "productos",
+    promocionSeleccionada: "",
+    grupoPromocionSeleccionado: "",
+    promocionComponenteProductoId: "",
+    promocionComponenteTermino: "",
+    aprovisionamiento,
     objetivoModificador: { tipo: "persona", persona: 1 },
     edicion: null,
     colaEdicion: Promise.resolve(),
@@ -705,6 +714,7 @@
   }
 
   async function reanudarSesionOperador() {
+    if (!estado.aprovisionamiento?.listo) return false;
     if (modoTableta || idProgramadoSolicitado()) return false;
     try {
       const datos = await api("/api/operador/actual/");
@@ -724,6 +734,7 @@
   }
 
   async function entrarComoMesero({ mostrarPantalla = true } = {}) {
+    if (!estado.aprovisionamiento?.listo) { renderAprovisionamiento(); return false; }
     while (true) {
       const clave = await pedirClavePos("Acceso a Ventas", "Ingresa el código de 4 dígitos asignado a tu usuario.");
       if (!clave) return false;
@@ -779,6 +790,34 @@
     }
   }
 
+  function renderAprovisionamiento() {
+    const pendiente = !estado.aprovisionamiento?.listo;
+    const aviso = $("#aviso-aprovisionamiento");
+    if (!aviso) return;
+    aviso.hidden = !pendiente;
+    document.body.classList.toggle("aprovisionamiento-pendiente", pendiente);
+    if (pendiente) {
+      const estados = ["enrolado", "esperando_catalogo_inicial", "catalogo_aplicado", "listo"];
+      const indice = estados.indexOf(estado.aprovisionamiento?.estado);
+      $("#aprovisionamiento-estado").textContent = indice >= 0
+        ? ["Enrolado", "Esperando catálogo inicial", "Catálogo aplicado", "Listo"][indice]
+        : "Aprovisionamiento pendiente";
+      $("#aprovisionamiento-mensaje").textContent = estado.aprovisionamiento?.mensaje
+        || "El catálogo inicial de esta sucursal aún no está aplicado. Solicita al responsable técnico que revise la publicación en Central.";
+      $$("#aprovisionamiento-pasos li").forEach((paso, numero) => {
+        paso.classList.toggle("completo", indice >= 0 && numero < indice);
+        paso.classList.toggle("actual", numero === indice);
+      });
+      if (modoTableta && !estado.ticket) $("main")?.classList.add("oculto");
+    }
+    const accesoVentas = $("#entrar-mesero");
+    if (accesoVentas) {
+      accesoVentas.disabled = pendiente;
+      accesoVentas.setAttribute("aria-disabled", String(pendiente));
+      accesoVentas.title = pendiente ? "Esperando catálogo inicial de la sucursal" : "";
+    }
+  }
+
   function bloquear(valor, botonIniciador = null) {
     estado.operando = valor;
     document.body.setAttribute("aria-busy", String(valor));
@@ -811,6 +850,7 @@
       estado.botonOperacion = null;
     }
     $$("button").forEach(boton => boton.disabled = valor);
+    if (!valor) renderAprovisionamiento();
     if (!valor && estado.ticket) {
       renderMenu();
       renderComanda();
@@ -826,6 +866,16 @@
           await api("/api/sincronizacion/sucursales/", { method: "POST", body: "{}" });
         }
         const datos = await api("/api/estado/");
+        if (datos.aprovisionamiento) {
+          const estabaListo = Boolean(estado.aprovisionamiento?.listo);
+          estado.aprovisionamiento = datos.aprovisionamiento;
+          if (!estabaListo && datos.aprovisionamiento.listo) {
+            window.location.reload();
+            return true;
+          }
+          renderAprovisionamiento();
+          if (estabaListo && !datos.aprovisionamiento.listo && estado.ticket) renderMenu();
+        }
         estado.tickets = datos.tickets;
         estado.programados = datos.programados || [];
         if (!estado.ticket) renderPosiciones();
@@ -851,6 +901,7 @@
   }
 
   async function abrirProgramadoDesdeEnlace() {
+    if (!estado.aprovisionamiento?.listo) return false;
     const ticketId = idProgramadoSolicitado();
     if (!ticketId) return cargarEstado();
     $("#pantalla-acceso")?.classList.add("oculto");
@@ -914,6 +965,11 @@
 
   function renderPosiciones() {
     const contenedor = $("#rejilla-posiciones");
+    if (!estado.aprovisionamiento?.listo) {
+      contenedor.className = "rejilla-posiciones rejilla-simple";
+      contenedor.innerHTML = '<p class="vacio">Aprovisionamiento pendiente: aún no hay un catálogo inicial aplicado para vender.</p>';
+      return;
+    }
     if (modoTableta && estado.canal !== "comedor") {
       estado.canal = "comedor";
       estado.sucursalSeleccionada = null;
@@ -1094,6 +1150,10 @@
   }
 
   async function abrirPosicion(mesaId) {
+    if (!estado.aprovisionamiento?.listo) {
+      renderAprovisionamiento();
+      return;
+    }
     if (estado.operando) return;
     if (modoTableta || !estado.operador) {
       if (modoTableta) {
@@ -1368,9 +1428,11 @@
   }
 
   function clavePartidaEdicion(partida) {
-    return esPartidaPersonalizada(partida)
-      ? `personalizado:${partida.id}`
-      : `${partida.producto_id}:${partida.termino || "unico"}`;
+    if (esPartidaPersonalizada(partida)) return `personalizado:${partida.id}`;
+    const vinculacion = partida.promocion_id
+      ? `:${partida.promocion_id}:${partida.promocion_grupo_id || ""}`
+      : "";
+    return `${partida.producto_id}:${partida.termino || "unico"}${vinculacion}`;
   }
 
   async function abrirProductoPersonalizado() {
@@ -1459,6 +1521,198 @@
     renderComanda();
   }
 
+  function etiquetaVinculoPromocion(partida, ticket) {
+    if (!partida?.promocion_id) return "";
+    const raices = (ticket?.partidas || []).filter(item => item.es_promocion && !item.promocion_id);
+    const indice = raices.findIndex(item => String(item.id) === String(partida.promocion_id));
+    if (indice < 0) return "Promoción";
+    const raiz = raices[indice];
+    return `${raiz.nombre_corto || raiz.codigo || "Promoción"} ${indice + 1}`;
+  }
+
+  function promocionRaizSeleccionada() {
+    return estado.ticket?.partidas.find(partida =>
+      String(partida.id) === String(estado.promocionSeleccionada)
+      && partida.es_promocion
+      && !partida.promocion_id
+    );
+  }
+
+  function promocionEstaCompleta(partida) {
+    return Array.isArray(partida?.grupos)
+      && partida.grupos.length > 0
+      && partida.grupos.every(grupo => Number(grupo.seleccionada || 0) >= Number(grupo.cantidad || 0));
+  }
+
+  function abrirGuiaPromocion(partidaId) {
+    const partida = estado.ticket?.partidas.find(item =>
+      String(item.id) === String(partidaId) && item.es_promocion && !item.promocion_id
+    );
+    if (!partida) return;
+    estado.promocionSeleccionada = String(partida.id);
+    estado.grupoPromocionSeleccionado = "";
+    estado.promocionComponenteProductoId = "";
+    estado.promocionComponenteTermino = "";
+    estado.persona = Number(partida.comensal || 1);
+    estado.modoMenu = "promocion";
+    renderPersonas();
+    renderMenu();
+    renderComanda();
+  }
+
+  function renderGuiaPromocion(abierto) {
+    const raiz = promocionRaizSeleccionada();
+    if (!raiz) {
+      estado.modoMenu = "productos";
+      renderMenu();
+      return;
+    }
+    const grupos = Array.isArray(raiz.grupos) ? raiz.grupos : [];
+    const grupo = grupos.find(item => String(item.id) === estado.grupoPromocionSeleccionado)
+      || grupos.find(item => Number(item.seleccionada || 0) < Number(item.cantidad || 0))
+      || grupos[0];
+    estado.grupoPromocionSeleccionado = String(grupo?.id || "");
+    const componentes = (estado.ticket?.partidas || []).filter(item =>
+      String(item.promocion_id) === String(raiz.id)
+    );
+    const nombre = raiz.nombre || raiz.nombre_corto || raiz.codigo || "Promoción";
+    $("#menu-contexto").textContent = "Componentes de promoción";
+    $("#menu-indicacion").textContent = `Comensal ${raiz.comensal} · ${nombre}`;
+    if (!grupos.length) {
+      $("#productos").innerHTML = '<div class="promocion-sin-reglas" role="status"><strong>Reglas no disponibles</strong><p>La definición de esta promoción no está en el ticket. No se pueden añadir componentes hasta recuperar la publicación válida.</p></div>';
+      return;
+    }
+    const completa = promocionEstaCompleta(raiz);
+    const productosPermitidos = Array.isArray(grupo?.productos_permitidos) ? grupo.productos_permitidos : [];
+    const productoSeleccionado = productosPermitidos.find(item => String(item.id) === estado.promocionComponenteProductoId);
+    const catalogoProducto = productoSeleccionado && productos.find(item => String(item.id) === String(productoSeleccionado.id));
+    const requiereTermino = Boolean(catalogoProducto?.permite_termino);
+    const terminos = requiereTermino
+      ? `<div class="promocion-terminos" role="group" aria-label="Término de ${escapar(productoSeleccionado.nombre)}">
+          ${terminosPreparacion.map(termino => `<button type="button" data-promocion-termino="${termino}" aria-pressed="${estado.promocionComponenteTermino === termino}" class="${estado.promocionComponenteTermino === termino ? "activo" : ""}">${termino[0].toUpperCase() + termino.slice(1)}</button>`).join("")}
+        </div>`
+      : "";
+    $("#productos").innerHTML = `
+      <section class="guia-promocion" aria-label="Componentes de ${escapar(nombre)}">
+        <div class="guia-promocion-resumen">
+          <strong>${escapar(raiz.codigo || nombre)} · ${completa ? "Completa" : "En captura"}</strong>
+          <span>${cantidad(raiz.cantidad)} × ${escapar(nombre)} · ${dinero(raiz.precio)} c/u · ${dinero(raiz.importe)} total</span>
+          <button type="button" data-promocion-editar-raiz ${!abierto ? "disabled" : ""}>Editar cantidad de esta promoción</button>
+        </div>
+        <div class="guia-promocion-grupos" role="group" aria-label="Grupos de la promoción">
+          ${grupos.map((item, indice) => {
+            const seleccionado = String(item.id) === String(grupo?.id);
+            const actual = Number(item.seleccionada || 0);
+            const requerida = Number(item.cantidad || 0);
+            return `<button type="button" data-promocion-grupo="${escapar(item.id)}" class="${seleccionado ? "activo" : ""}" aria-pressed="${seleccionado}">
+              <span>${escapar(item.nombre || `Grupo ${indice + 1}`)}</span><strong>${cantidad(actual)} / ${cantidad(requerida)}</strong>
+            </button>`;
+          }).join("")}
+        </div>
+        <p class="guia-promocion-instruccion">${grupo && Number(grupo.seleccionada || 0) >= Number(grupo.cantidad || 0)
+          ? "Este grupo está completo. Puedes revisar sus componentes o elegir otro grupo."
+          : "Elige un producto permitido para este grupo. Cada toque añade una unidad."}</p>
+        <div class="guia-promocion-opciones">
+          ${productosPermitidos.map(item => {
+            const catalogo = productos.find(producto => String(producto.id) === String(item.id));
+            const disponible = Boolean(catalogo && catalogo.disponible_hoy !== false);
+            const seleccionado = String(item.id) === estado.promocionComponenteProductoId;
+            return `<button type="button" data-promocion-producto="${escapar(item.id)}" class="${seleccionado ? "activo" : ""}" ${!abierto || !disponible || Number(grupo.seleccionada || 0) >= Number(grupo.cantidad || 0) ? "disabled" : ""}>
+              <small>${escapar(item.corto || catalogo?.corto || "")}</small>
+              <strong>${escapar(item.nombre || catalogo?.nombre || "Producto")}</strong>
+              ${disponible ? "" : "<em>No disponible hoy</em>"}
+            </button>`;
+          }).join("")}
+        </div>
+        ${productoSeleccionado && requiereTermino ? `<div class="guia-promocion-confirmar">
+          <strong>${escapar(productoSeleccionado.nombre)}</strong>
+          ${terminos}
+          <button type="button" data-promocion-confirmar ${!abierto || !estado.promocionComponenteTermino ? "disabled" : ""}>Agregar componente</button>
+        </div>` : ""}
+        <div class="guia-promocion-componentes">
+          <strong>Vinculados a esta promoción</strong>
+          ${componentes.length
+            ? componentes.map(item => `<button type="button" data-promocion-editar="${escapar(item.id)}" ${!abierto ? "disabled" : ""}>
+                <span>${cantidad(item.cantidad)} × ${escapar(nombrePartida(item))}${item.termino ? ` · ${escapar(item.termino)}` : ""}</span>
+                <small>Editar</small>
+              </button>`).join("")
+            : "<p>Aún no hay componentes vinculados.</p>"}
+        </div>
+      </section>`;
+  }
+
+  async function agregarComponentePromocion(productoId, termino = "") {
+    const raiz = promocionRaizSeleccionada();
+    const grupo = raiz?.grupos?.find(item => String(item.id) === estado.grupoPromocionSeleccionado);
+    const permitido = grupo?.productos_permitidos?.some(item => String(item.id) === String(productoId));
+    const producto = productos.find(item => String(item.id) === String(productoId));
+    if (!raiz || !grupo || !permitido || !producto || producto.disponible_hoy === false
+      || !comandaVisibleEditable() || bloqueoDeOtro() || estado.operando) return;
+    if (Number(grupo.seleccionada || 0) >= Number(grupo.cantidad || 0)) return;
+    bloquear(true);
+    try {
+      const datos = await api(`/api/tickets/${estado.ticket.id}/partidas/`, {
+        method: "POST",
+        body: JSON.stringify({
+          producto_id: productoId,
+          promocion_id: raiz.id,
+          promocion_grupo_id: grupo.id,
+          comensal: raiz.comensal,
+          cantidad: 1,
+          termino,
+        }),
+      });
+      estado.ticket = datos.ticket;
+      estado.promocionComponenteProductoId = "";
+      estado.promocionComponenteTermino = "";
+      renderComanda();
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      bloquear(false);
+      renderMenu();
+    }
+  }
+
+  async function editarRaizPromocion() {
+    if (!(await finalizarEdicion())) return;
+    const raiz = promocionRaizSeleccionada();
+    if (!raiz || !comandaVisibleEditable()) return;
+    const producto = productos.find(item => String(item.id) === String(raiz.producto_id));
+    if (!producto) {
+      toast("La promoción ya no está en el catálogo vigente. Su precio histórico permanece en el ticket.", true);
+      return;
+    }
+    abrirCalculadora(producto, [raiz], "");
+    estado.edicion.vinculadaPromocion = true;
+    estado.edicion.clave = `promocion-raiz:${raiz.id}`;
+  }
+
+  async function editarComponentePromocion(idsTexto) {
+    if (!(await finalizarEdicion())) return;
+    if (!comandaVisibleEditable()) return;
+    const ids = String(idsTexto || "").split(",").filter(esUuid);
+    const partidas = (estado.ticket?.partidas || []).filter(item => ids.includes(String(item.id)));
+    const primera = partidas[0];
+    if (!primera?.promocion_id || partidas.some(item =>
+      String(item.promocion_id) !== String(primera.promocion_id)
+      || String(item.promocion_grupo_id) !== String(primera.promocion_grupo_id)
+      || String(item.producto_id) !== String(primera.producto_id)
+      || String(item.termino || "") !== String(primera.termino || "")
+    )) return;
+    const producto = productos.find(item => String(item.id) === String(primera.producto_id));
+    if (!producto) {
+      toast("El producto ya no está en el catálogo vigente. Conserva su histórico; solicita soporte para editarlo.", true);
+      return;
+    }
+    estado.promocionSeleccionada = String(primera.promocion_id);
+    estado.persona = Number(primera.comensal || 1);
+    abrirCalculadora(producto, partidas, primera.termino || "");
+    estado.edicion.vinculadaPromocion = true;
+    estado.edicion.clave = `promocion:${partidas.map(item => item.id).join(":")}`;
+    renderPersonas();
+  }
+
   function configurarAtajosMenu(nombresSecciones = []) {
     const contexto = $("#menu-contexto");
     const atajos = $("#atajos-menu");
@@ -1504,6 +1758,13 @@
     $("#productos")?.classList.toggle("modo-calculadora", modoCalculadora);
     const volverProductos = $("#menu-productos");
     volverProductos.classList.toggle("oculto", ["productos", "calculadora", "calculadora-sucursal"].includes(estado.modoMenu));
+    if (!estado.aprovisionamiento?.listo) {
+      $("#menu-contexto").textContent = "Sucursal en preparación";
+      $("#menu-indicacion").textContent = "No se pueden añadir productos hasta recuperar un catálogo local válido.";
+      $("#productos").innerHTML = '<p class="vacio">Aprovisionamiento pendiente. La comanda existente conserva sus datos para su revisión.</p>';
+      volverProductos.classList.add("oculto");
+      return;
+    }
     if (estado.modoMenu === "calculadora" && estado.edicion?.personalizado) {
       $("#menu-contexto").textContent = "Cantidad del producto";
       $("#menu-indicacion").textContent = `Comensal ${estado.edicion.persona} · ${estado.edicion.nombreProducto}`;
@@ -1524,6 +1785,10 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
           </button>
         </section>`;
+      return;
+    }
+    if (estado.modoMenu === "promocion") {
+      renderGuiaPromocion(abierto);
       return;
     }
     if (esSucursal) {
@@ -1762,7 +2027,9 @@
       principales,
       barbacoa,
       complementosGlobales,
-    } = clasificarPartidasPorNombres(ticket.partidas, esBebida);
+    } = clasificarPartidasPorNombres(ticket.partidas.filter(partida => !partida.promocion_id), esBebida);
+    const promocionesNombres = ticket.partidas.filter(partida => partida.es_promocion && !partida.promocion_id);
+    const componentesNombres = ticket.partidas.filter(partida => partida.promocion_id);
     const columnas = [];
     const indiceColumnas = new Map();
     for (const partida of principales) {
@@ -1774,19 +2041,23 @@
           productoId: partida.producto_id,
           partidaId: partida.id,
           personalizado: esPartidaPersonalizada(partida),
+          promocionId: partida.promocion_id || "",
           termino: partida.termino || "",
           nombre: nombrePartida(partida),
           cantidades: new Map(),
+          idsPorPersona: new Map(),
         });
       }
       const columna = columnas[indiceColumnas.get(clave)];
       if (!columna.cantidades.has(partida.comensal)) columna.cantidades.set(partida.comensal, 0);
+      if (!columna.idsPorPersona.has(partida.comensal)) columna.idsPorPersona.set(partida.comensal, []);
       columna.cantidades.set(partida.comensal, columna.cantidades.get(partida.comensal) + Number(partida.cantidad));
+      columna.idsPorPersona.get(partida.comensal).push(partida.id);
     }
     while (columnas.length < 4) columnas.push(null);
     const nombres = ticket.nombres_comensales || {};
     const personasUsadas = new Set(
-      [...principales, ...barbacoa].map(partida => partida.comensal),
+      [...principales, ...barbacoa, ...promocionesNombres].map(partida => partida.comensal),
     );
     Object.keys(nombres).forEach(numero => personasUsadas.add(Number(numero)));
     if (!personasUsadas.size) personasUsadas.add(estado.persona);
@@ -1801,7 +2072,9 @@
         if (columna.personalizado && !valor && !seleccionada) return '<span class="comanda-nombre-celda vacia"></span>';
         const atributoPartida = columna.personalizado
           ? `data-celda-personalizada="${columna.partidaId}"`
-          : `data-celda-producto="${columna.productoId}" data-celda-termino="${columna.termino}"`;
+          : (columna.promocionId
+            ? `data-promocion-componentes="${(columna.idsPorPersona.get(persona) || []).join(",")}"`
+            : `data-celda-producto="${columna.productoId}" data-celda-termino="${escapar(columna.termino)}"`);
         return `<button class="comanda-nombre-celda cantidad-celda ${claseCantidad(seleccionada ? estado.edicion.cantidadPantalla : valor)} ${seleccionada ? "seleccionada" : ""}" ${atributoPartida} data-celda-persona="${persona}" data-celda-clave="${columna.clave}" type="button">${texto}</button>`;
       }).join("");
       return `<button class="comanda-nombre-persona" data-seleccionar-persona="${persona}" type="button"><b>${persona}. ${escapar(nombres[String(persona)] || "SIN NOMBRE")}</b><small>${escapar(preparacion.get(persona) || "")}</small></button>${celdas}`;
@@ -1864,6 +2137,18 @@
           ${columnas.slice(0, 4).map(columna => `<span class="encabezado-producto">${columna ? escapar(columna.nombre) : "PRODUCTO"}</span>`).join("")}
           ${filas}
         </div>
+        ${promocionesNombres.length ? `<div class="comanda-promociones-nombres" aria-label="Promociones del ticket">
+          ${promocionesNombres.map((partida, indice) => `<button type="button" data-promocion-partida="${escapar(partida.id)}">
+            <strong>${escapar(partida.nombre_corto || partida.codigo || partida.nombre)} · ${indice + 1}</strong>
+            <span>Comensal ${partida.comensal} · ${promocionEstaCompleta(partida) ? "Completa" : "Pendiente"}</span>
+          </button>`).join("")}
+        </div>` : ""}
+        ${componentesNombres.length ? `<div class="comanda-promociones-nombres" aria-label="Componentes de promociones">
+          ${componentesNombres.map(partida => `<button type="button" data-promocion-componentes="${escapar(partida.id)}">
+            <strong>${cantidad(partida.cantidad)} × ${escapar(nombrePartida(partida))}</strong>
+            <span>${escapar(etiquetaVinculoPromocion(partida, ticket))}</span>
+          </button>`).join("")}
+        </div>` : ""}
         ${filasBarbacoa ? `
           <section class="comanda-barbacoa-nombres" aria-label="Barbacoa por persona">
             <strong class="comanda-barbacoa-titulo">Barbacoa</strong>
@@ -1929,8 +2214,9 @@
           productoId: partida.producto_id,
           partidaId: partida.id,
           personalizado: esPartidaPersonalizada(partida),
+          promocionId: partida.promocion_id || "",
           termino: partida.termino || "",
-          nombre: nombrePartida(partida),
+          nombre: `${nombrePartida(partida)}${partida.promocion_id ? ` · ${etiquetaVinculoPromocion(partida, ticket)}` : ""}`,
           cantidades: new Map(),
         });
       }
@@ -1940,21 +2226,17 @@
       celda.cantidad += Number(partida.cantidad);
       celda.ids.push(partida.id);
     }
-    const promociones = new Map();
-    for (const partida of promocionesTicket) {
-      if (!promociones.has(partida.producto_id)) {
-        promociones.set(partida.producto_id, { productoId: partida.producto_id, nombre: partida.codigo, cantidades: new Map() });
-      }
-      const cantidades = promociones.get(partida.producto_id).cantidades;
-      if (!cantidades.has(partida.comensal)) cantidades.set(partida.comensal, { cantidad: 0, ids: [] });
-      cantidades.get(partida.comensal).cantidad += Number(partida.cantidad);
-      cantidades.get(partida.comensal).ids.push(partida.id);
-    }
+    // Cada raíz conserva una fila propia: dos PB en el mismo ticket no comparten cupos.
+    const promociones = promocionesTicket;
     const preparacion = new Map(personas.map(persona => [persona, ticket.modificadores.filter(mod => mod.comensal === persona)]));
     const bebidas = new Map();
     for (const partida of ticket.partidas.filter(esBebida)) {
-      if (!bebidas.has(partida.producto_id)) bebidas.set(partida.producto_id, { nombre: partida.nombre_corto, cantidad: 0 });
-      bebidas.get(partida.producto_id).cantidad += Number(partida.cantidad);
+      const clave = `${partida.producto_id}:${partida.promocion_id || ""}`;
+      if (!bebidas.has(clave)) bebidas.set(clave, {
+        nombre: `${partida.nombre_corto}${partida.promocion_id ? ` · ${etiquetaVinculoPromocion(partida, ticket)}` : ""}`,
+        cantidad: 0,
+      });
+      bebidas.get(clave).cantidad += Number(partida.cantidad);
     }
     const filasHtml = [...filas.values()].map(fila => {
       const celdas = personas.map(persona => {
@@ -1963,20 +2245,24 @@
         const valor = seleccionada ? estado.edicion.cantidadPantalla : (celda?.cantidad || 0);
         const texto = valor || seleccionada ? cantidad(valor) : "";
         if (fila.personalizado && !celda && !seleccionada) return '<span class="comanda-celda cantidad-celda vacia"></span>';
+        if (fila.promocionId && !celda) return '<span class="comanda-celda cantidad-celda vacia"></span>';
         const atributoPartida = fila.personalizado
           ? `data-celda-personalizada="${fila.partidaId}"`
-          : `data-celda-producto="${fila.productoId}" data-celda-termino="${fila.termino}"`;
+          : (fila.promocionId
+            ? `data-promocion-componentes="${(celda?.ids || []).join(",")}"`
+            : `data-celda-producto="${fila.productoId}" data-celda-termino="${escapar(fila.termino)}"`);
         return `<button class="comanda-celda cantidad-celda ${claseCantidad(valor)} ${seleccionada ? "seleccionada" : ""}" ${atributoPartida} data-celda-persona="${persona}" data-celda-clave="${fila.clave}" type="button">${texto}</button>`;
       }).join("");
       return `<button class="comanda-etiqueta producto-zona ${fila.personalizado ? "etiqueta-personalizada" : ""}" data-modo-menu="productos" type="button">${escapar(fila.nombre)}</button>${celdas}`;
     }).join("");
-    const promocionesHtml = [...promociones.values()].map(fila => {
+    const promocionesHtml = promociones.map((partida, indice) => {
+      const completa = promocionEstaCompleta(partida);
       const celdas = personas.map(persona => {
-        const celda = fila.cantidades.get(persona);
-        const valor = celda ? `${celda.cantidad > 1 ? `${cantidad(celda.cantidad)} ` : ""}P` : "";
-        return `<button class="comanda-celda promocion-celda" data-promocion-producto="${fila.productoId}" data-promocion-persona="${persona}" type="button">${valor}</button>`;
+        if (Number(partida.comensal) !== persona) return '<span class="comanda-celda promocion-celda vacia"></span>';
+        const valor = `${Number(partida.cantidad) > 1 ? `${cantidad(partida.cantidad)} ` : ""}P`;
+        return `<button class="comanda-celda promocion-celda ${completa ? "completa" : "pendiente"}" data-promocion-partida="${escapar(partida.id)}" type="button" aria-label="${escapar(`Abrir componentes de ${partida.nombre || partida.codigo}, promoción ${indice + 1}, ${completa ? "completa" : "pendiente"}`)}">${valor}</button>`;
       }).join("");
-      return `<span class="comanda-etiqueta promocion-etiqueta">${escapar(fila.nombre)}</span>${celdas}`;
+      return `<span class="comanda-etiqueta promocion-etiqueta" title="${escapar(partida.nombre || partida.codigo)}">${escapar(partida.nombre_corto || partida.codigo || partida.nombre)} · ${indice + 1}</span>${celdas}`;
     }).join("");
     const filasProductos = promocionesHtml + filasHtml || `<button class="comanda-vacio producto-zona" data-modo-menu="productos" type="button">Toca aquí para mostrar productos y comenzar la orden</button>`;
     const bebidasHtml = [...bebidas.values()].map(bebida =>
@@ -2437,6 +2723,7 @@
   function partidasDeEdicion(productoId, persona, termino) {
     return estado.ticket.partidas.filter(partida =>
       partida.producto_id === productoId
+      && !partida.promocion_id
       && partida.comensal === persona
       && (partida.termino || "") === (termino || "")
       && perteneceAComanda(partida, numeroComandaActual())
@@ -2615,8 +2902,34 @@
 
   async function seleccionarProducto(productoId) {
     if (!(await finalizarEdicion())) return;
-    const producto = productos.find(item => item.id === productoId);
-    if (!producto) return;
+    const producto = productos.find(item => String(item.id) === String(productoId));
+    if (!producto || producto.disponible_hoy === false) return;
+    if (producto.es_promocion) {
+      const anteriores = new Set((estado.ticket?.partidas || []).map(partida => String(partida.id)));
+      bloquear(true);
+      try {
+        const datos = await api(`/api/tickets/${estado.ticket.id}/partidas/`, {
+          method: "POST",
+          body: JSON.stringify({ producto_id: producto.id, comensal: estado.persona, cantidad: 1 }),
+        });
+        estado.ticket = datos.ticket;
+        const raiz = [...estado.ticket.partidas].reverse().find(partida =>
+          partida.es_promocion && !partida.promocion_id && !anteriores.has(String(partida.id))
+        );
+        if (!raiz) throw new Error("La promoción se guardó, pero no fue posible identificar su partida. Revisa la comanda antes de continuar.");
+        estado.promocionSeleccionada = String(raiz.id);
+        estado.grupoPromocionSeleccionado = "";
+        estado.promocionComponenteProductoId = "";
+        estado.modoMenu = "promocion";
+        renderComanda();
+      } catch (error) {
+        toast(error.message, true);
+      } finally {
+        bloquear(false);
+        renderMenu();
+      }
+      return;
+    }
     const termino = siguienteTerminoProducto(producto);
     let partidas = partidasDeEdicion(producto.id, estado.persona, termino);
     if (esBebida(producto) && partidas.length) {
@@ -2664,6 +2977,7 @@
       clave: estado.edicion.clave,
       ids: [...estado.edicion.ids],
       personalizado: Boolean(estado.edicion.personalizado),
+      vinculadaPromocion: Boolean(estado.edicion.vinculadaPromocion),
       cantidad: estado.edicion.cantidadPantalla,
       eliminar,
       sincronizarCantidad,
@@ -2681,7 +2995,7 @@
       estado.ticket = datos.ticket;
       estado.errorEdicion = null;
       if (estado.edicion?.clave === captura.clave && estado.edicion?.persona === captura.persona) {
-        const partidasActuales = captura.personalizado
+        const partidasActuales = captura.personalizado || captura.vinculadaPromocion
           ? estado.ticket.partidas.filter(partida => captura.ids.some(id => String(id) === String(partida.id)))
           : partidasDeEdicion(captura.productoId, captura.persona, captura.termino);
         estado.edicion.ids = partidasActuales.map(partida => partida.id);
@@ -2722,8 +3036,9 @@
     if (tecla === "eliminar") {
       await persistirEdicion(true);
       if (estado.errorEdicion) return;
+      const vinculada = Boolean(estado.edicion?.vinculadaPromocion);
       estado.edicion = null;
-      estado.modoMenu = "productos";
+      estado.modoMenu = vinculada && promocionRaizSeleccionada() ? "promocion" : "productos";
       renderMenu();
       renderComanda();
       return;
@@ -2744,8 +3059,9 @@
   }
 
   async function confirmarEdicion() {
+    const vinculada = Boolean(estado.edicion?.vinculadaPromocion);
     if (!(await finalizarEdicion())) return;
-    estado.modoMenu = "productos";
+    estado.modoMenu = vinculada && promocionRaizSeleccionada() ? "promocion" : "productos";
     renderMenu();
     renderComanda();
   }
@@ -2785,20 +3101,6 @@
     renderPersonas();
     recordarTermino(producto.id, persona, termino);
     abrirCalculadora(producto, partidas, termino);
-  }
-
-  async function seleccionarPromocionCelda(productoId, persona) {
-    if (!(await finalizarEdicion())) return;
-    estado.persona = persona;
-    renderPersonas();
-    const producto = productos.find(item => item.id === productoId);
-    if (!producto) return;
-    const partidas = partidasDeEdicion(productoId, persona, "");
-    if (!partidas.length) {
-      await seleccionarProducto(productoId);
-      return;
-    }
-    abrirCalculadora(producto, partidas, "");
   }
 
   async function seleccionarPersona(persona) {
@@ -3362,6 +3664,7 @@
 
   $$(".canal").forEach(boton => boton.addEventListener("click", () => cambiarCanal(boton.dataset.canal)));
   $("#entrar-mesero")?.addEventListener("click", () => entrarComoMesero());
+  $("#aprovisionamiento-revisar")?.addEventListener("click", () => window.location.reload());
   $("#entrar-administrador")?.addEventListener("click", () => abrirAdministrador());
   $("#form-clave-pos")?.addEventListener("submit", evento => {
     evento.preventDefault();
@@ -3427,6 +3730,45 @@
     if (boton) await seleccionarPersona(Number(boton.dataset.persona));
   });
   $("#productos").addEventListener("click", async evento => {
+    const grupoPromocion = evento.target.closest("[data-promocion-grupo]");
+    if (grupoPromocion) {
+      estado.grupoPromocionSeleccionado = grupoPromocion.dataset.promocionGrupo;
+      estado.promocionComponenteProductoId = "";
+      estado.promocionComponenteTermino = "";
+      renderMenu();
+      return;
+    }
+    if (evento.target.closest("[data-promocion-editar-raiz]")) {
+      await editarRaizPromocion();
+      return;
+    }
+    const editarPromocion = evento.target.closest("[data-promocion-editar]");
+    if (editarPromocion) {
+      await editarComponentePromocion(editarPromocion.dataset.promocionEditar);
+      return;
+    }
+    const terminoPromocion = evento.target.closest("[data-promocion-termino]");
+    if (terminoPromocion) {
+      estado.promocionComponenteTermino = terminoPromocion.dataset.promocionTermino;
+      renderMenu();
+      return;
+    }
+    if (evento.target.closest("[data-promocion-confirmar]")) {
+      await agregarComponentePromocion(estado.promocionComponenteProductoId, estado.promocionComponenteTermino);
+      return;
+    }
+    const productoPromocion = evento.target.closest("[data-promocion-producto]");
+    if (productoPromocion) {
+      const producto = productos.find(item => String(item.id) === String(productoPromocion.dataset.promocionProducto));
+      if (producto?.permite_termino) {
+        estado.promocionComponenteProductoId = String(producto.id);
+        estado.promocionComponenteTermino = "";
+        renderMenu();
+      } else {
+        await agregarComponentePromocion(productoPromocion.dataset.promocionProducto);
+      }
+      return;
+    }
     const productoPersonalizado = evento.target.closest("[data-producto-personalizado]");
     if (productoPersonalizado) {
       await abrirProductoPersonalizado();
@@ -3545,12 +3887,14 @@
       await cambiarModoMenu("modificadores");
       return;
     }
-    const promocion = evento.target.closest("[data-promocion-producto]");
+    const promocion = evento.target.closest("[data-promocion-partida]");
     if (promocion) {
-      await seleccionarPromocionCelda(
-        promocion.dataset.promocionProducto,
-        Number(promocion.dataset.promocionPersona),
-      );
+      if (await finalizarEdicion()) abrirGuiaPromocion(promocion.dataset.promocionPartida);
+      return;
+    }
+    const componentePromocion = evento.target.closest("[data-promocion-componentes]");
+    if (componentePromocion) {
+      await editarComponentePromocion(componentePromocion.dataset.promocionComponentes);
       return;
     }
     const celda = evento.target.closest("[data-celda-producto]");
@@ -3702,6 +4046,8 @@
   $("#comanda-siguiente").addEventListener("click", () => cambiarComandaVisible(1));
 
   async function iniciarAplicacion() {
+    renderAprovisionamiento();
+    if (!estado.aprovisionamiento?.listo) return;
     const sesionReanudada = await reanudarSesionOperador();
     if (!sesionReanudada || idProgramadoSolicitado()) {
       await abrirProgramadoDesdeEnlace();

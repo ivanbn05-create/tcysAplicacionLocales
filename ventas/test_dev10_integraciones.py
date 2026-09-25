@@ -29,6 +29,9 @@ from ventas.integracion_sucursales import (
 )
 from ventas.models import (
     ConfiguracionSucursal,
+    DefinicionPromocion,
+    GrupoPromocion,
+    ProductoPermitidoPromocion,
     EstadoSincronizacionPedidos,
     EventoOutbox,
     Mesa,
@@ -921,7 +924,7 @@ class CatalogoCentralAtomicoTests(TestCase):
         promocion = Producto.objects.create(
             sucursal=self.sucursal,
             categoria=categoria,
-            codigo="PB",
+            codigo="PMANUAL",
             nombre="Taco y bebida",
             nombre_corto="PB",
             orden=1,
@@ -948,6 +951,17 @@ class CatalogoCentralAtomicoTests(TestCase):
             importe=Decimal("25.00"),
             vigente_desde=date(2026, 9, 1),
         )
+        # Cualquier código sirve: la regla está en datos y el componente se elige.
+        definicion = DefinicionPromocion.objects.create(
+            sucursal=self.sucursal, producto=promocion, codigo=promocion.codigo,
+            nombre=promocion.nombre, precio=Decimal("95.00"),
+            dias_semana=[0, 1, 2, 3, 4, 5, 6],
+            origen=DefinicionPromocion.Origen.LEGADO,
+        )
+        grupo = GrupoPromocion.objects.create(
+            definicion=definicion, nombre="Taco", orden=0, cantidad=3,
+        )
+        ProductoPermitidoPromocion.objects.create(grupo=grupo, producto=componente)
         mesa = Mesa.objects.create(
             sucursal=self.sucursal,
             canal=Mesa.Canal.COMEDOR,
@@ -963,7 +977,7 @@ class CatalogoCentralAtomicoTests(TestCase):
         )
         with patch("ventas.services.timezone.localdate", return_value=date(2026, 9, 21)):
             raiz = agregar_partida(ticket, promocion)
-            agregar_partida(ticket, componente, cantidad=Decimal("3"))
+            agregar_partida(ticket, componente, cantidad=Decimal("3"), promocion_aplicada=raiz)
 
         linea = ticket.partidas.get(producto=componente)
         self.assertEqual(linea.precio_unitario, Decimal("0.00"))

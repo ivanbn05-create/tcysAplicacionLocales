@@ -1,0 +1,138 @@
+{
+  "version_contrato": 3,
+  "tipo": "snapshot_completo",
+  "release_id": "28282828-2828-4282-8282-282828282828",
+  "publicacion_id": "29292929-2929-4292-8292-292929292929",
+  "publicacion_anterior_id": null,
+  "version_sucursal": 1,
+  "sucursal": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "clave": "LAB01"
+  },
+  "publicada_en": "2026-09-24T12:00:00-06:00",
+  "aplicar_desde": "2026-09-25",
+  "moneda": "MXN",
+  "conteos": {
+    "categorias": 1,
+    "productos": 3,
+    "promociones": 1
+  },
+  "contenido": {
+    "categorias": [
+      {
+        "categoria_central_id": "ffffffff-ffff-4fff-8fff-fffffffffff1",
+        "codigo": "LAB-CAT",
+        "nombre": "Categoría sintética",
+        "orden": 10,
+        "activa": true
+      }
+    ],
+    "productos": [
+      {
+        "producto_central_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2",
+        "categoria_central_id": "ffffffff-ffff-4fff-8fff-fffffffffff1",
+        "codigo": "LAB-PROMO",
+        "nombre": "Promoción sintética",
+        "nombre_corto": "PROMO",
+        "orden": 10,
+        "permite_termino": false,
+        "termino_predeterminado": "",
+        "abreviaturas_termino": {},
+        "destino_impresion": "cocina",
+        "activo": true,
+        "imagen": {
+          "politica": "conservar_local_o_placeholder",
+          "asset": null
+        },
+        "precio": {
+          "importe": "100.00",
+          "origen": "global",
+          "vigente_desde": "2026-09-25",
+          "vigente_hasta": null
+        },
+        "disponible_sucursal": true
+      },
+      {
+        "producto_central_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1",
+        "categoria_central_id": "ffffffff-ffff-4fff-8fff-fffffffffff1",
+        "codigo": "LAB-TACO",
+        "nombre": "Taco sintético",
+        "nombre_corto": "TS",
+        "orden": 11,
+        "permite_termino": false,
+        "termino_predeterminado": "",
+        "abreviaturas_termino": {},
+        "destino_impresion": "cocina",
+        "activo": true,
+        "imagen": {
+          "politica": "conservar_local_o_placeholder",
+          "asset": null
+        },
+        "precio": {
+          "importe": "25.00",
+          "origen": "global",
+          "vigente_desde": "2026-09-25",
+          "vigente_hasta": null
+        },
+        "disponible_sucursal": true
+      },
+      {
+        "producto_central_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee3",
+        "categoria_central_id": "ffffffff-ffff-4fff-8fff-fffffffffff1",
+        "codigo": "LAB-FUERA",
+        "nombre": "Producto no disponible en LAB01",
+        "nombre_corto": "FUERA",
+        "orden": 12,
+        "permite_termino": false,
+        "termino_predeterminado": "",
+        "abreviaturas_termino": {},
+        "destino_impresion": "cocina",
+        "activo": true,
+        "imagen": {
+          "politica": "conservar_local_o_placeholder",
+          "asset": null
+        },
+        "precio": {
+          "importe": "25.00",
+          "origen": "global",
+          "vigente_desde": "2026-09-25",
+          "vigente_hasta": null
+        },
+        "disponible_sucursal": false
+      }
+    ],
+    "promociones": [
+      {
+        "id": "dddddddd-dddd-4ddd-8ddd-ddddddddddd1",
+        "codigo": "LAB-PROMO",
+        "nombre": "Dos tacos sintéticos",
+        "producto_central_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2",
+        "precio": "100.00",
+        "activo": true,
+        "dias_semana": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "fecha_desde": null,
+        "fecha_hasta": null,
+        "grupos": [
+          {
+            "id": "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+            "nombre": "Dos tacos",
+            "orden": 1,
+            "cantidad": 2,
+            "productos_permitidos": [
+              "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "contenido_sha256": "4d165dc63ddd523745538e3efef550d981540ab1e2ea7c79453d547a5bfc893d"
+}

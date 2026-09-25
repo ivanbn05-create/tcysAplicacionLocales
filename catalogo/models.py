@@ -113,6 +113,10 @@ class Producto(models.Model):
     )
     destino_impresion = models.CharField(max_length=10, choices=Destino.choices, default=Destino.COCINA)
     activo = models.BooleanField(default=True)
+    disponible_sucursal = models.BooleanField(
+        default=True,
+        help_text="Disponibilidad local publicada por Central; se conserva el producto histórico.",
+    )
     origen = models.CharField(max_length=30, default="menu_2026")
     creado_en = models.DateTimeField(auto_now_add=True)
     actualizado_en = models.DateTimeField(auto_now=True)
@@ -238,3 +242,26 @@ class PublicacionCatalogoCentral(models.Model):
                 name="catalogo_version_unica_sucursal",
             ),
         ]
+
+
+class EstadoAprovisionamientoCatalogo(models.Model):
+    """Estado durable del alistamiento; la publicación se confirma en la misma transacción."""
+
+    class Estado(models.TextChoices):
+        ENROLADO = "enrolado", "Enrolado"
+        ESPERANDO_CATALOGO_INICIAL = "esperando_catalogo_inicial", "Esperando catálogo inicial"
+        CATALOGO_APLICADO = "catalogo_aplicado", "Catálogo aplicado"
+        LISTO = "listo", "Listo"
+
+    sucursal = models.OneToOneField(
+        Sucursal, primary_key=True, on_delete=models.PROTECT,
+        related_name="estado_aprovisionamiento_catalogo",
+    )
+    estado = models.CharField(
+        max_length=30, choices=Estado.choices, default=Estado.ENROLADO,
+    )
+    publicacion = models.ForeignKey(
+        PublicacionCatalogoCentral, null=True, blank=True,
+        on_delete=models.PROTECT, related_name="estados_aprovisionamiento",
+    )
+    actualizado_en = models.DateTimeField(auto_now=True)

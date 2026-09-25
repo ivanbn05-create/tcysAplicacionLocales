@@ -9,7 +9,8 @@ Este paquete contiene contratos ejecutables y datos exclusivamente sintéticos. 
 | POS → Central, consolidación mensual v1 | **Implementado como candidato privado** en el central. `consolidacion-mensual-v1-receptor-actual.schema.json` reproduce su aceptación observada; `consolidacion-mensual-v1-request.schema.json` es el perfil estricto emitido por el POS. |
 | POS → Central, ventas detalladas v2 | **Propuesto y desactivado**. No existe todavía la ruta central ni el productor durable completo en el POS. |
 | POS → Central, clientes v2 | **Propuesto y desactivado**. La ruta central v1 de borrador permanece apagada y no debe activarse como sustituto. |
-| Central → POS, catálogo y ACK v2 | **Propuesto y desactivado**. El central sólo publica productos dentro de su base; no distribuye ni recibe ACK. |
+| Central → POS, catálogo y ACK v2 | **Propuesto y desactivado**. Se conserva como compatibilidad mientras migra el contrato. |
+| Central → POS, catálogo y promociones v3 | **Candidato Edge, sin ruta final ni despliegue**. Exige disponibilidad por sucursal y promociones dinámicas; Central aún debe importar el catálogo real vigente de Arboledas, publicar el primer snapshot y acordar ruta/ACK. |
 | Pedidos v2 → POS | **Candidato sin merge ni despliegue** `8fad56815f856b4286a2f60f488480960e34cde5`. Contrato ejecutable separado en `contracts/pedidos-v2/`; v1/Supabase legacy se conservan. |
 
 ## Rutas ejecutables por flujo
@@ -21,6 +22,7 @@ Este paquete contiene contratos ejecutables y datos exclusivamente sintéticos. 
 | POS → Central, ventas detalladas v2 | `contracts/edge-central/openapi.json`; `contracts/edge-central/schemas/ventas-lote-v2-request.schema.json`; `contracts/edge-central/schemas/ventas-lote-v2-response.schema.json` | `contracts/edge-central/fixtures/index.json`; `tests/test_contracts_vps.py` |
 | POS → Central, clientes v2 | `contracts/edge-central/openapi.json`; `contracts/edge-central/schemas/cliente-evento-v2-request.schema.json`; `contracts/edge-central/schemas/cliente-evento-v2-response.schema.json` | `contracts/edge-central/fixtures/index.json`; `tests/test_contracts_vps.py` |
 | Central → POS, catálogo y ACK v2 | `contracts/edge-central/openapi.json`; `contracts/edge-central/schemas/catalogo-publicacion-v2.schema.json`; `contracts/edge-central/schemas/catalogo-ack-v2-request.schema.json`; `contracts/edge-central/schemas/catalogo-ack-v2-response.schema.json` | `contracts/edge-central/fixtures/index.json`; `tests/test_contracts_vps.py` |
+| Central → POS, catálogo/promociones v3 | `contracts/edge-central/schemas/catalogo-publicacion-v3.schema.json`; `contracts/edge-central/CATALOGO_V3_EDGE.md` | `contracts/edge-central/fixtures/catalogo-publicacion-v3-lab01-promocion.json` (sintético, sin metadata HTTP hasta cerrar ruta); `tests/test_contracts_vps.py` |
 | Identidad POS ↔ Pedidos ↔ Central | `contracts/edge-central/schemas/matriz-identidades-v1.schema.json`; `contracts/edge-central/MATRIZ_IDENTIDADES.md` | `contracts/edge-central/fixtures/matriz-identidades-v1.json`; `tests/test_contracts_vps.py` |
 
 La implementación central v1 acepta actualmente propiedades adicionales dentro de `sucursal` y `totales`; el perfil normativo de este paquete las rechaza. El emisor POS existente sólo genera las propiedades declaradas. Agente1 debe endurecer el receptor central y conservar compatibilidad con estos fixtures. El fixture `consolidacion-mensual-v1-receptor-actual-compat.json` fija esa diferencia: es válido para el receptor `a931c46` y deliberadamente inválido para el perfil emisor POS.
@@ -46,6 +48,7 @@ La implementación central v1 acepta actualmente propiedades adicionales dentro 
 | Evento de cliente v2 | 64 KiB, 10 teléfonos y 10 domicilios |
 | ACK de catálogo v2 | 16 KiB |
 | Snapshot completo de catálogo v2 | 1 MiB sin imágenes binarias |
+| Snapshot completo de catálogo/promociones v3 candidato | 1 MiB sin imágenes binarias |
 
 ## Índices y matrices
 

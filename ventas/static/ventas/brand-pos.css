@@ -1131,3 +1131,123 @@ dialog::backdrop { background: rgba(36, 38, 41, .76); backdrop-filter: none; }
     animation-iteration-count: 1 !important;
   }
 }
+
+
+/* Aprovisionamiento: el Edge responde, pero Ventas no se habilita sin catálogo inicial. */
+.aviso-aprovisionamiento[hidden] { display: none !important; }
+.aviso-aprovisionamiento {
+  width: 100%;
+  padding: clamp(18px, 3vw, 34px);
+  border-bottom: 2px solid var(--carbon);
+  color: var(--carbon);
+  background: var(--papel);
+}
+.aprovisionamiento-contenido { width: min(100%, 1080px); margin: 0 auto; }
+.aprovisionamiento-cabecera { display: flex; align-items: end; justify-content: space-between; gap: 20px; }
+.aprovisionamiento-cabecera h1 {
+  margin: 0 0 5px;
+  font-family: "Bebas Neue Tocayos", sans-serif;
+  font-size: clamp(2rem, 3vw, 3rem);
+  font-weight: 400;
+  letter-spacing: .01em;
+  line-height: 1;
+}
+.aprovisionamiento-cabecera p { max-width: 68ch; margin: 0; line-height: 1.45; }
+.aprovisionamiento-cabecera button {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 9px 15px;
+  border: 2px solid var(--carbon);
+  color: var(--carbon);
+  background: var(--amarillo);
+  font-weight: 850;
+}
+.aprovisionamiento-cabecera button:hover { background: var(--amarillo-suave); }
+#aprovisionamiento-pasos {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin: 23px 0 14px;
+  padding: 0;
+  list-style: none;
+}
+#aprovisionamiento-pasos li {
+  min-width: 0;
+  padding: 10px 8px;
+  border-top: 2px solid #a6a29b;
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 800;
+}
+#aprovisionamiento-pasos li.completo { border-color: var(--verde-oscuro); color: var(--verde-oscuro); }
+#aprovisionamiento-pasos li.actual { border-color: var(--carbon); color: var(--carbon); background: var(--amarillo-suave); }
+.aprovisionamiento-estado { margin: 0; font-size: .8rem; line-height: 1.4; }
+.aprovisionamiento-pendiente .perfil-acceso.mesero:disabled { opacity: .56; filter: grayscale(1); }
+@media (max-width: 700px) {
+  .aprovisionamiento-cabecera { align-items: stretch; flex-direction: column; }
+  .aprovisionamiento-cabecera button { align-self: start; }
+  #aprovisionamiento-pasos { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+
+/* La promoción elegida conserva su propia partida y guía de grupos. */
+.guia-promocion { grid-column: 1 / -1; min-width: 0; display: grid; align-content: start; gap: 13px; padding: 2px; }
+.guia-promocion-resumen { display: grid; gap: 4px; padding: 11px 12px; border: 2px solid var(--carbon); background: var(--amarillo-suave); }
+.guia-promocion-resumen strong { font-family: "Bebas Neue Tocayos", sans-serif; font-size: 1.55rem; font-weight: 400; line-height: 1; }
+.guia-promocion-resumen span { color: var(--carbon); font-size: .76rem; font-weight: 750; }
+.guia-promocion-resumen button {
+  justify-self: start; min-height: 44px; padding: 7px 10px; border: 1px solid var(--carbon);
+  color: var(--carbon); background: #fff; font-size: .75rem; font-weight: 850;
+}
+.guia-promocion-resumen button:disabled { opacity: .55; }
+.guia-promocion-grupos { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 6px; }
+.guia-promocion-grupos button {
+  min-height: 58px; padding: 7px 9px; display: grid; align-content: center; gap: 2px;
+  border: 1px solid var(--carbon); color: var(--carbon); background: #fff; text-align: left;
+}
+.guia-promocion-grupos button.activo { background: var(--amarillo); border-width: 2px; }
+.guia-promocion-grupos button span { font-size: .69rem; font-weight: 700; }
+.guia-promocion-grupos button strong { font-size: .92rem; font-variant-numeric: tabular-nums; }
+.guia-promocion-instruccion { margin: 0; color: var(--carbon); font-size: .78rem; line-height: 1.45; }
+.guia-promocion-opciones { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.guia-promocion-opciones button {
+  min-width: 0; min-height: 64px; padding: 8px 10px; display: grid; align-content: center; gap: 2px;
+  border: 1px solid #77736f; color: var(--carbon); background: #fff; text-align: left;
+}
+.guia-promocion-opciones button:hover,
+.guia-promocion-opciones button.activo { border-color: var(--carbon); background: var(--amarillo-suave); }
+.guia-promocion-opciones button:disabled { opacity: .55; filter: grayscale(1); }
+.guia-promocion-opciones button small { color: var(--rojo); font-size: .69rem; font-weight: 900; }
+.guia-promocion-opciones button strong { font-size: .78rem; line-height: 1.22; }
+.guia-promocion-opciones button em { color: var(--carbon); font-size: .67rem; font-style: normal; }
+.guia-promocion-confirmar { display: grid; gap: 8px; padding: 11px; border: 1px solid var(--carbon); background: #fff; }
+.guia-promocion-confirmar > strong { font-size: .78rem; }
+.promocion-terminos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.promocion-terminos button {
+  min-height: 44px; border: 1px solid var(--carbon); color: var(--carbon); background: #fff; font-weight: 800;
+}
+.promocion-terminos button.activo { background: var(--amarillo); }
+.guia-promocion-confirmar > button {
+  min-height: 44px; padding: 7px 10px; border: 2px solid var(--carbon); color: var(--carbon); background: var(--amarillo); font-weight: 850;
+}
+.guia-promocion-confirmar > button:disabled { opacity: .5; }
+.guia-promocion-componentes { display: grid; gap: 5px; border-top: 1px solid var(--carbon); padding-top: 10px; }
+.guia-promocion-componentes > strong { font-size: .75rem; }
+.guia-promocion-componentes > p { margin: 0; color: var(--muted); font-size: .75rem; }
+.guia-promocion-componentes button {
+  min-height: 44px; padding: 7px 9px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  border: 1px solid #77736f; color: var(--carbon); background: #fff; text-align: left;
+}
+.guia-promocion-componentes button span { overflow-wrap: anywhere; font-size: .76rem; }
+.guia-promocion-componentes button small { color: var(--rojo); font-weight: 900; }
+.promocion-sin-reglas { grid-column: 1 / -1; padding: 14px; border: 2px solid var(--carbon); background: var(--amarillo-suave); }
+.promocion-sin-reglas p { margin-bottom: 0; font-size: .78rem; line-height: 1.45; }
+.comanda-celda.promocion-celda.pendiente { background: var(--amarillo-suave); }
+.comanda-celda.promocion-celda.completa { background: var(--verde-claro); }
+.comanda-promociones-nombres { display: grid; gap: 4px; margin: 7px 0; }
+.comanda-promociones-nombres button { min-height: 44px; padding: 6px 8px; display: flex; justify-content: space-between; align-items: center; gap: 8px; border: 1px solid #333; background: #fff; text-align: left; }
+.comanda-promociones-nombres button span { font-size: .7rem; }
+@media (max-width: 700px) {
+  .guia-promocion-opciones { grid-template-columns: 1fr; }
+  .guia-promocion-opciones button { min-height: 52px; }
+}

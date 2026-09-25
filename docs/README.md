@@ -1,6 +1,6 @@
 # Documentación de Los Tocayos POS
 
-Este índice separa la documentación vigente de los antecedentes. El repositorio y la candidata 0.4.0-dev.10 son exclusivamente de laboratorio: no existe una sucursal en producción y estos documentos no autorizan un corte, despliegue ni cambio sobre una instalación real.
+Este índice separa la documentación vigente de los antecedentes. La rama actual contiene la candidata 1.0.0-dev.2 exclusivamente de laboratorio; 0.4.0-dev.10 queda como antecedente congelado. No existe una sucursal en producción y estos documentos no autorizan un corte ni despliegue.
 
 ## Vigente
 
@@ -12,6 +12,9 @@ Este índice separa la documentación vigente de los antecedentes. El repositori
 - [Integración, operación y validación 0.4.0-dev.10](candidatas/INTEGRACION_OPERACION_Y_VALIDACION_0.4.0-dev.10.md): mapa técnico actual, dependencias, consumidores legacy y runbook de laboratorio.
 - [Evidencia preliminar 0.4.0-dev.10](candidatas/EVIDENCIA_PREPARACION_RELEASE_0.4.0-dev.10.md): plantilla honesta que el integrador debe completar tras ejecutar las pruebas.
 - [Contratos Edge–Central](../contracts/edge-central/README.md): OpenAPI, esquemas, fixtures y handoff para agente1.
+- [Especificación Production 1.0](autoridad/ESPECIFICACION_PRODUCTION_1_0_LOS_TOCAYOS.md): autoridad funcional y gates de producto.
+- [Candidata 1.0.0-dev.2](PRODUCTION_1_0_CANDIDATA_DEV2.md): promociones dinámicas, catálogo inicial y alistamiento Edge; E2E Central pendiente.
+- [Contrato de catálogo v3](../contracts/edge-central/CATALOGO_V3_EDGE.md): snapshot, fixture y decisiones por conciliar con Central.
 
 ## Histórico
 

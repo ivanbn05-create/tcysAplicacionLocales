@@ -1,5 +1,17 @@
 # Handoff Production 1.0 al responsable de Backend Central
 
+> Actualización candidata 1.0.0-dev.2: los apartados de catálogo v2 más abajo son antecedentes de dev.1. Para la integración nueva prevalecen la decisión del dueño sobre catálogo maestro Arboledas y el contrato v3 de `contracts/edge-central/CATALOGO_V3_EDGE.md`. La rama POS vigente es `codex/production-1.0-catalogo-promociones-dev.2`; no hay corte ni despliegue.
+
+## Trabajo nuevo requerido a Central para dev.2
+
+1. Importar con acta el catálogo **real vigente de Arboledas** al maestro Central, con UUID estables de categoría, producto, promoción y grupo. Reconciliar producto local↔Central por identidad aprobada; no inferir por nombre ni usar la semilla sintética LAB01 como fuente real. Central pasa a ser autoridad de ediciones después del import.
+2. Modelar PB, PL, P4 y PK como datos dinámicos; permitir promociones nuevas sin Python, elección manual POS, grupos `cantidad + productos_permitidos`, solapamiento de productos entre promociones, días de semana y fechas opcionales sin horarios. `promocion.codigo` y `promocion.precio` deben coincidir con el producto principal. No incluir Quesaking.
+3. Publicar snapshot **completo v3 por sucursal**, con `disponible_sucursal` para cada producto y promociones referidas por UUID maestro. Los extras locales son productos maestros con availability de esa branch. Una promoción históricamente conocida que se retire debe retirar también su producto principal de venta. Ver schema y fixture sintético en `contracts/edge-central/`; 1 MiB y máximo 10 000 referencias producto→grupo.
+4. Congelar con Edge ruta GET, ruta ACK, scopes `catalog:read/ack` versionados, códigos HTTP y semántica de reintento. El cliente actual usa rutas v2 candidatas y el ACK v2; no presumir que v3 comparte endpoint. Mantener banderas de distribución apagadas hasta E2E.
+5. E2E privado: dos branches con catálogos/availability separados; Edge recién enrolado queda `esperando_catalogo_inicial`; primera v3 pasa a `catalogo_aplicado` atómicamente con ACK outbox; alistamiento operativo explícito pasa a `listo`. Probar checksum roto, parcial, offline, reinicio, precio/promoción cambiados durante ticket abierto y ticket cerrado, impresión histórica y rollback a última válida.
+
+Las pruebas locales del Edge y el fixture ejecutable demuestran el lado POS, pero no el import real, PostgreSQL ni la ruta Central. Ninguna publicación productiva se autoriza por este documento.
+
 Fecha: 2026-09-25. Destino: agente1 y el integrador Central/Pedidos. **Candidata de laboratorio**: ninguna sucursal está en producción, esta nota no autoriza despliegue, corte, publicación pública de DNS/TLS, activación de clientes/catálogo ni uso de tokens reales. La rama POS es `codex/candidata-production-1.0-dev.1`, derivada de `e046f2bf74096d76eea50762aa07253f9b073a3d` (0.4.0-dev.10). El primer commit de integración POS es `f0ba9f21b11beb6479ec1ca401e4c7eeccc5e257`; confirmar el HEAD de la rama al consumir este handoff, ya que la documentación y las pruebas pueden tener commits posteriores.
 
 ## Contratos ejecutables que debe reconciliar Central

@@ -5,6 +5,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from personas.models import Sucursal
+from ventas.aprovisionamiento import marcar_esperando_catalogo
 from ventas.catalogo_central import (
     ErrorCatalogoCentral,
     aplicar_publicacion_catalogo,
@@ -40,6 +41,9 @@ class Command(BaseCommand):
             or sucursal.clave != settings.CENTRAL_BRANCH_CODE
         ):
             raise CommandError("La identidad local no coincide con CENTRAL_BRANCH_ID/CODE.")
+        # 204, 304 y fallos de red no equivalen a un catálogo inicial aplicado.
+        # Una instalación nueva conserva esta espera en SQLite tras reiniciar.
+        marcar_esperando_catalogo(sucursal)
         cliente = ClienteCentral(
             base_url=settings.CENTRAL_API_BASE_URL,
             token=settings.CENTRAL_CATALOG_TOKEN,

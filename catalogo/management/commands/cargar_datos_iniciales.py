@@ -271,6 +271,19 @@ class Command(BaseCommand):
                 nombre_producto=f"{partida.producto.nombre} {termino}",
             )
 
+        # Compatibilidad exclusiva de la semilla histórica de laboratorio. El
+        # instalador Production 1.0 no ejecuta este comando: espera una publicación
+        # Central. Reutilizar el backfill evita duplicar reglas en el motor POS.
+        from importlib import import_module
+        from types import SimpleNamespace
+
+        from django.apps import apps as django_apps
+        from django.db import connection
+
+        import_module("ventas.migrations.0026_backfill_promociones_legado").migrar_legado(
+            django_apps, SimpleNamespace(connection=connection)
+        )
+
         activos = Producto.objects.filter(sucursal=sucursal, activo=True).count()
         posiciones = Mesa.objects.filter(sucursal=sucursal, activa=True).count()
         self.stdout.write(

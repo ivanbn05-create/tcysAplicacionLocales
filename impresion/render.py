@@ -11,7 +11,6 @@ from django.utils import timezone
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from ventas.orden import PRODUCTOS_SIEMPRE_AL_FINAL, ordenar_partidas
-from ventas.promociones import configuracion_promocion
 
 
 ANCHO = 576
@@ -145,9 +144,9 @@ def _es_personalizada(partida):
 
 
 def _es_promocion(partida):
-    return not _es_personalizada(partida) and bool(
-        configuracion_promocion(partida.producto)
-    )
+    # Reimprimir depende de la clasificación capturada en la línea, nunca de
+    # lo que una publicación posterior hizo con ese Producto.
+    return not _es_personalizada(partida) and bool(partida.promocion_definicion_id)
 
 
 def _es_bebida(partida):

@@ -25,9 +25,7 @@ from ventas.models import EventoOutbox
 
 CHECKSUM_RE = re.compile(r"^[0-9a-f]{64}$")
 DECIMAL_RE = re.compile(r"^[0-9]{1,12}\.[0-9]{2}$")
-PROMOCIONES_CODIGO_FIJO = {"PB", "PL", "P4", "PK"}
-COMPONENTES_CODIGO_FIJO = {"TB", "TBI", "LB", "LOBQ"}
-CODIGOS_FIJOS = PROMOCIONES_CODIGO_FIJO | COMPONENTES_CODIGO_FIJO
+CODIGOS_FIJOS_LEGACY_V2 = {"PB", "PL", "P4", "PK", "TB", "TBI", "LB", "LOBQ"}
 MAX_CATEGORIAS = 500
 MAX_PRODUCTOS = 5000
 MAX_SNAPSHOT_BYTES = 1024 * 1024
@@ -181,8 +179,9 @@ def validar_publicacion_catalogo(datos, sucursal):
         },
         "publicacion",
     )
-    if raiz["version_contrato"] != 2 or raiz["tipo"] != "snapshot_completo":
-        _error("schema_no_soportado", "Solo se admite snapshot_completo v2.")
+    if type(raiz["version_contrato"]) is not int or raiz["version_contrato"] not in {2, 3} or raiz["tipo"] != "snapshot_completo":
+        _error("schema_no_soportado", "Solo se admiten snapshot_completo v2/v3.")
+    contrato_v3 = raiz["version_contrato"] == 3
     release_id = _uuid(raiz["release_id"], "release_id")
     publicacion_id = _uuid(raiz["publicacion_id"], "publicacion_id")
     anterior_id = _uuid(
@@ -210,19 +209,29 @@ def validar_publicacion_catalogo(datos, sucursal):
     if raiz["moneda"] != "MXN":
         _error("schema_no_soportado", "La moneda del catalogo debe ser MXN.")
 
-    contenido = _objeto(raiz["contenido"], {"categorias", "productos"}, "contenido")
+    contenido = _objeto(
+        raiz["contenido"],
+        {"categorias", "productos", "promociones"} if contrato_v3 else {"categorias", "productos"},
+        "contenido",
+    )
     categorias = contenido["categorias"]
     productos = contenido["productos"]
+    promociones = contenido["promociones"] if contrato_v3 else []
     if type(categorias) is not list or not 1 <= len(categorias) <= MAX_CATEGORIAS:
         _error("schema_no_soportado", "Cantidad de categorias invalida.")
     if type(productos) is not list or not 1 <= len(productos) <= MAX_PRODUCTOS:
         _error("schema_no_soportado", "Cantidad de productos invalida.")
-    conteos = _objeto(raiz["conteos"], {"categorias", "productos"}, "conteos")
+    conteos = _objeto(
+        raiz["conteos"],
+        {"categorias", "productos", "promociones"} if contrato_v3 else {"categorias", "productos"},
+        "conteos",
+    )
     if (
         _entero(conteos["categorias"], "conteos.categorias", 1, MAX_CATEGORIAS)
         != len(categorias)
         or _entero(conteos["productos"], "conteos.productos", 1, MAX_PRODUCTOS)
         != len(productos)
+        or (contrato_v3 and _entero(conteos["promociones"], "conteos.promociones", 0, 500) != len(promociones))
     ):
         _error("schema_no_soportado", "Los conteos no coinciden con el snapshot.")
 
@@ -231,6 +240,7 @@ def validar_publicacion_catalogo(datos, sucursal):
         _error("checksum_invalido", "El checksum de la publicacion no coincide.")
 
     categorias_ids = set()
+    categorias_por_central = {}
     for indice, categoria in enumerate(categorias):
         categoria = _objeto(
             categoria,
@@ -244,17 +254,18 @@ def validar_publicacion_catalogo(datos, sucursal):
         if central_id in categorias_ids:
             _error("schema_no_soportado", "Categoria central duplicada.")
         categorias_ids.add(central_id)
+        categorias_por_central[central_id] = categoria
         _texto(categoria["codigo"], f"contenido.categorias[{indice}].codigo", 30)
         _texto(categoria["nombre"], f"contenido.categorias[{indice}].nombre", 100)
         _entero(categoria["orden"], f"contenido.categorias[{indice}].orden")
         _booleano(categoria["activa"], f"contenido.categorias[{indice}].activa")
 
     productos_ids = set()
+    productos_por_central = {}
+    productos_vendibles = 0
     codigos = set()
     for indice, producto in enumerate(productos):
-        producto = _objeto(
-            producto,
-            {
+        campos_producto = {
                 "producto_central_id",
                 "categoria_central_id",
                 "codigo",
@@ -268,9 +279,10 @@ def validar_publicacion_catalogo(datos, sucursal):
                 "activo",
                 "imagen",
                 "precio",
-            },
-            f"contenido.productos[{indice}]",
-        )
+            }
+        if contrato_v3:
+            campos_producto.add("disponible_sucursal")
+        producto = _objeto(producto, campos_producto, f"contenido.productos[{indice}]")
         central_id = _uuid(
             producto["producto_central_id"],
             f"contenido.productos[{indice}].producto_central_id",
@@ -278,6 +290,7 @@ def validar_publicacion_catalogo(datos, sucursal):
         if central_id in productos_ids:
             _error("schema_no_soportado", "Producto central duplicado.")
         productos_ids.add(central_id)
+        productos_por_central[central_id] = producto
         categoria_id = _uuid(
             producto["categoria_central_id"],
             f"contenido.productos[{indice}].categoria_central_id",
@@ -320,7 +333,15 @@ def validar_publicacion_catalogo(datos, sucursal):
             _error("schema_no_soportado", "Producto sin termino contiene opciones.")
         if producto["destino_impresion"] not in Producto.Destino.values:
             _error("schema_no_soportado", "Destino de impresion invalido.")
-        _booleano(producto["activo"], f"contenido.productos[{indice}].activo")
+        activo = _booleano(producto["activo"], f"contenido.productos[{indice}].activo")
+        if contrato_v3:
+            disponible = _booleano(
+                producto["disponible_sucursal"],
+                f"contenido.productos[{indice}].disponible_sucursal",
+            )
+            productos_vendibles += bool(activo and disponible)
+            if activo and disponible and not categorias_por_central[categoria_id]["activa"]:
+                _error("schema_no_soportado", "Un producto vendible pertenece a una categoría inactiva.")
         imagen = _objeto(
             producto["imagen"], {"politica", "asset"}, f"contenido.productos[{indice}].imagen"
         )
@@ -345,6 +366,15 @@ def validar_publicacion_catalogo(datos, sucursal):
             or (hasta is not None and hasta < aplicar_desde)
         ):
             _error("schema_no_soportado", "Vigencia de precio invalida al aplicar.")
+    if contrato_v3:
+        if productos_vendibles == 0:
+            _error("schema_no_soportado", "La publicación no contiene productos vendibles para esta sucursal.")
+        from .promociones import validar_promociones_publicadas
+
+        try:
+            validar_promociones_publicadas(promociones, productos_por_central)
+        except ValueError as exc:
+            raise ErrorCatalogoCentral(str(exc), codigo="schema_no_soportado") from exc
     return raiz, release_id, publicacion_id, anterior_id, version, checksum
 
 
@@ -373,16 +403,17 @@ def _categoria_local(sucursal, datos, existentes):
     return categoria
 
 
-def _producto_local(sucursal, datos, categoria, existentes):
+def _producto_local(sucursal, datos, categoria, existentes, *, compatibilidad_legacy_v2):
     central_id = uuid.UUID(datos["producto_central_id"])
     mapeo = existentes.get(central_id)
     if mapeo:
         producto = mapeo.producto
         if (
-            producto.codigo != datos["codigo"]
+            compatibilidad_legacy_v2
+            and producto.codigo != datos["codigo"]
             and (
-                producto.codigo in CODIGOS_FIJOS
-                or datos["codigo"] in CODIGOS_FIJOS
+                producto.codigo in CODIGOS_FIJOS_LEGACY_V2
+                or datos["codigo"] in CODIGOS_FIJOS_LEGACY_V2
             )
         ):
             _error(
@@ -544,6 +575,44 @@ def encolar_ack_catalogo_rechazado(sucursal, datos, error):
     )
 
 
+def _validar_raices_promocionales_historicas(sucursal, raiz):
+    """Una raíz retirada no vuelve a venderse como artículo simple por omisión."""
+
+    if raiz["version_contrato"] < 3:
+        return
+    from ventas.models import DefinicionPromocion
+
+    productos_historicos = set(
+        DefinicionPromocion.objects.filter(sucursal=sucursal).values_list(
+            "producto_id", flat=True
+        )
+    )
+    if not productos_historicos:
+        return
+    principales_historicos = set(
+        IdentidadProductoCentral.objects.filter(
+            sucursal=sucursal,
+            producto_id__in=productos_historicos,
+        ).values_list("central_id", flat=True)
+    )
+    principales_actuales = {
+        uuid.UUID(item["producto_central_id"])
+        for item in raiz["contenido"]["promociones"]
+    }
+    for producto in raiz["contenido"]["productos"]:
+        central_id = uuid.UUID(producto["producto_central_id"])
+        if (
+            central_id in principales_historicos
+            and central_id not in principales_actuales
+            and producto["activo"]
+            and producto["disponible_sucursal"]
+        ):
+            _error(
+                "schema_no_soportado",
+                "Una raíz promocional retirada debe quedar no disponible en esta sucursal.",
+            )
+
+
 @transaction.atomic
 def aplicar_publicacion_catalogo(sucursal, datos):
     (
@@ -562,6 +631,9 @@ def aplicar_publicacion_catalogo(sucursal, datos):
         .order_by("-version")
         .first()
     )
+    if ultima is not None and ultima.version_contrato >= 3 and raiz["version_contrato"] < 3:
+        _error("schema_no_soportado", "No se admite bajar el contrato de catálogo v3 a v2.")
+    _validar_raices_promocionales_historicas(sucursal, raiz)
     existente = PublicacionCatalogoCentral.objects.filter(
         sucursal=sucursal,
         publicacion_id=publicacion_id,
@@ -649,7 +721,9 @@ def aplicar_publicacion_catalogo(sucursal, datos):
             datos_producto,
             categorias_por_central[categoria_id],
             productos_existentes,
+            compatibilidad_legacy_v2=raiz["version_contrato"] == 2,
         )
+        vendible = datos_producto["activo"] and datos_producto.get("disponible_sucursal", True)
         producto.categoria = categorias_por_central[categoria_id]
         producto.codigo = datos_producto["codigo"]
         producto.nombre = datos_producto["nombre"]
@@ -659,7 +733,8 @@ def aplicar_publicacion_catalogo(sucursal, datos):
         producto.termino_predeterminado = datos_producto["termino_predeterminado"]
         producto.abreviaturas_termino = datos_producto["abreviaturas_termino"]
         producto.destino_impresion = datos_producto["destino_impresion"]
-        producto.activo = datos_producto["activo"]
+        producto.activo = vendible
+        producto.disponible_sucursal = datos_producto.get("disponible_sucursal", True)
         producto.origen = "central_v2"
         producto.save(
             update_fields=[
@@ -673,6 +748,7 @@ def aplicar_publicacion_catalogo(sucursal, datos):
                 "abreviaturas_termino",
                 "destino_impresion",
                 "activo",
+                "disponible_sucursal",
                 "origen",
                 "actualizado_en",
             ]
@@ -697,7 +773,7 @@ def aplicar_publicacion_catalogo(sucursal, datos):
                     if precio_datos["vigente_hasta"]
                     else None
                 ),
-                "activo": datos_producto["activo"],
+                "activo": vendible,
                 "origen": "central_v2",
                 "publicacion_central_id": publicacion_id,
             },
@@ -721,11 +797,26 @@ def aplicar_publicacion_catalogo(sucursal, datos):
         publicacion_id=publicacion_id,
         publicacion_anterior_id=anterior_id,
         version=version,
-        version_contrato=2,
+        version_contrato=raiz["version_contrato"],
         checksum=checksum,
         estado=PublicacionCatalogoCentral.Estado.APLICADA,
         snapshot=raiz,
         aplicado_en=timezone.now(),
     )
+    if raiz["version_contrato"] >= 3:
+        from .promociones import aplicar_promociones_publicadas
+
+        try:
+            aplicar_promociones_publicadas(
+                sucursal,
+                publicacion,
+                contenido["promociones"],
+                productos_existentes,
+            )
+        except ValueError as exc:
+            raise ErrorCatalogoCentral(str(exc), codigo="conflicto_local") from exc
+    from .aprovisionamiento import registrar_catalogo_aplicado
+
+    registrar_catalogo_aplicado(sucursal, publicacion)
     _crear_ack(sucursal, publicacion)
     return publicacion, True

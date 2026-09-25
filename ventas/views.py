@@ -92,9 +92,15 @@ from .models import (
     TelefonoCliente,
     Ticket,
 )
+from .aprovisionamiento import estado_aprovisionamiento, ids_productos_vendibles
 from .normalizacion import normalizar_telefono
 from .orden import ordenar_partidas
-from .promociones import configuracion_promocion, promocion_disponible, promociones_pendientes
+from .promociones import (
+    configuracion_promocion,
+    etiqueta_dias_promocion,
+    promocion_disponible,
+    promociones_pendientes,
+)
 from .services import (
     ErrorVenta,
     TicketBloqueado,
@@ -658,6 +664,35 @@ def _catalogo_sucursal_payload(ticket):
     return resultado
 
 
+def _grupos_promocion_payload(definicion, raiz=None):
+    if definicion is None:
+        return []
+    seleccionadas = {}
+    if raiz is not None:
+        for componente in raiz.componentes_promocion.all():
+            clave = componente.promocion_grupo_id
+            seleccionadas[clave] = seleccionadas.get(clave, Decimal("0")) + componente.cantidad
+    grupos = []
+    for grupo in definicion.grupos.prefetch_related("permitidos__producto").order_by("orden", "id"):
+        grupos.append(
+            {
+                "id": str(grupo.id),
+                "nombre": grupo.nombre,
+                "cantidad": grupo.cantidad * int(raiz.cantidad) if raiz is not None else grupo.cantidad,
+                "seleccionada": int(seleccionadas.get(grupo.id, 0)),
+                "productos_permitidos": [
+                    {
+                        "id": str(permitido.producto_id),
+                        "nombre": permitido.producto.nombre,
+                        "corto": permitido.producto.nombre_corto,
+                    }
+                    for permitido in grupo.permitidos.all()
+                ],
+            }
+        )
+    return grupos
+
+
 def _ticket_payload(ticket, device_id=""):
     comanda_en_edicion = (
         ticket.comanda_en_edicion or ticket.estado == Ticket.Estado.ABIERTO
@@ -697,6 +732,10 @@ def _ticket_payload(ticket, device_id=""):
                     "comanda_numero": partida.comanda_numero,
                     "cantidad": str(partida.cantidad),
                     "precio": str(partida.precio_unitario),
+                    "precio_lista_capturado": (
+                        str(partida.precio_lista_capturado)
+                        if partida.precio_lista_capturado is not None else ""
+                    ),
                     "importe": str(partida.importe),
                     "cantidad_por_precio": str(partida.cantidad_por_precio),
                     "unidad": partida.unidad,
@@ -719,9 +758,9 @@ def _ticket_payload(ticket, device_id=""):
             personalizada = bool(partida.personalizada)
             producto = partida.producto
             promocion = (
-                None
-                if personalizada
-                else configuracion_promocion(producto)
+                partida.promocion_definicion
+                if partida.promocion_definicion_id
+                else None
             )
             partidas.append(
                 {
@@ -742,6 +781,10 @@ def _ticket_payload(ticket, device_id=""):
                     "comanda_numero": partida.comanda_numero,
                     "cantidad": str(partida.cantidad),
                     "precio": str(partida.precio_unitario),
+                    "precio_lista_capturado": (
+                        str(partida.precio_lista_capturado)
+                        if partida.precio_lista_capturado is not None else ""
+                    ),
                     "importe": str(partida.importe),
                     "cantidad_por_precio": str(partida.cantidad_por_precio),
                     "unidad": partida.unidad,
@@ -758,10 +801,16 @@ def _ticket_payload(ticket, device_id=""):
                     "termino": partida.termino,
                     "orden": 99999 if personalizada else producto.orden,
                     "es_promocion": bool(promocion),
+                    "promocion_definicion_id": str(promocion.id) if promocion else "",
+                    "promocion_version": promocion.version_publicacion if promocion else None,
+                    "grupos": _grupos_promocion_payload(promocion, partida),
                     "promocion_id": (
                         str(partida.promocion_aplicada_id)
                         if partida.promocion_aplicada_id
                         else ""
+                    ),
+                    "promocion_grupo_id": (
+                        str(partida.promocion_grupo_id) if partida.promocion_grupo_id else ""
                     ),
                 }
             )
@@ -867,8 +916,12 @@ def _inicio(request, modo_tableta=False):
         "cancelar": tiene_capacidad(request, Capacidad.CANCELAR),
         "sincronizar": tiene_capacidad(request, Capacidad.SINCRONIZAR_PEDIDOS),
     }
+    aprovisionamiento = estado_aprovisionamiento(sucursal)
+    ids_vendibles = ids_productos_vendibles(sucursal)
     productos = []
-    for producto in Producto.objects.select_related("categoria").filter(sucursal=sucursal, activo=True):
+    for producto in Producto.objects.select_related("categoria").filter(
+        sucursal=sucursal, activo=True, id__in=ids_vendibles
+    ):
         precio = producto.precio_actual()
         if precio:
             promocion = configuracion_promocion(producto)
@@ -887,8 +940,9 @@ def _inicio(request, modo_tableta=False):
                     "imagen_url": imagen_producto_url(producto),
                     "orden": producto.orden,
                     "es_promocion": bool(promocion),
-                    "promocion_dias": promocion["dias_texto"] if promocion else "",
+                    "promocion_dias": etiqueta_dias_promocion(promocion) if promocion else "",
                     "disponible_hoy": promocion_disponible(producto, timezone.localdate()) if promocion else True,
+                    "grupos": _grupos_promocion_payload(promocion),
                 }
             )
     canales_habilitados = {Mesa.Canal.COMEDOR, Mesa.Canal.RECOGER, Mesa.Canal.LLEVAR}
@@ -917,6 +971,7 @@ def _inicio(request, modo_tableta=False):
         {
             "sucursal": sucursal,
             "productos": productos,
+            "aprovisionamiento": aprovisionamiento,
             "posiciones": posiciones,
             "modo_tableta": modo_tableta,
             "asset_version": ASSET_VERSION,
@@ -1022,7 +1077,7 @@ def api_estado(request):
         .order_by("fecha_programada", "hora_programada", "creado_en")
     ] if modulos["programados"] else []
     return JsonResponse(
-        {"tickets": tickets, "programados": programados, "integracion_sucursales": integracion}
+        {"tickets": tickets, "programados": programados, "integracion_sucursales": integracion, "aprovisionamiento": estado_aprovisionamiento(sucursal)}
     )
 
 
@@ -1590,6 +1645,7 @@ def api_agregar_partida(request, ticket_id):
                     cantidad,
                     datos.get("termino"),
                     promocion_aplicada=promocion_aplicada,
+                    promocion_grupo_id=datos.get("promocion_grupo_id"),
                 )
             ticket.refresh_from_db()
         return JsonResponse(

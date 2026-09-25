@@ -4,7 +4,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Max, Q
+from django.db.models import Max, Q, Sum
 from django.utils import timezone
 
 from catalogo.models import Producto
@@ -21,14 +21,14 @@ from .models import (
     SolicitudRepeticionTicket,
     Ticket,
 )
+from .aprovisionamiento import exigir_catalogo_operativo, producto_vendible
 from .normalizacion import normalizar_telefono
 from .orden import PRODUCTOS_SIEMPRE_AL_FINAL
 from .promociones import (
-    PROMOCIONES,
-    capacidad_componentes,
+    cantidades_componentes,
     configuracion_promocion,
+    grupos_promocion,
     promocion_disponible,
-    tipo_componente,
     validar_cupo_componente,
     validar_promociones,
 )
@@ -354,7 +354,7 @@ def validar_limite_productos_por_nombre(ticket):
         for partida in partidas
         if partida.personalizada
         or (
-            not configuracion_promocion(partida.producto)
+            not partida.promocion_definicion_id
             and partida.producto.codigo.upper() not in PRODUCTOS_SIEMPRE_AL_FINAL
             and partida.producto.categoria.nombre.lower() != "bebidas"
         )
@@ -381,7 +381,7 @@ def validar_captura_por_nombres(ticket):
     comensales = {
         partida.comensal
         for partida in partidas
-        if not configuracion_promocion(partida.producto)
+        if not partida.promocion_definicion_id
         and not _es_complemento_global(partida)
     }
     faltantes = [numero for numero in sorted(comensales) if not str(nombres.get(str(numero), "")).strip()]
@@ -497,105 +497,50 @@ def _datos_termino(producto, termino=None):
     return termino, f"{producto.nombre} {etiqueta}", abreviatura
 
 
-def _reasignar_componentes_promocion(ticket):
-    """Distribuye automáticamente los productos capturados entre las promociones activas."""
-    raices = list(
-        Partida.objects.select_for_update()
-        .select_related("producto")
-        .filter(
-            ticket=ticket,
-            comanda_numero=ticket.comanda_actual,
-            promocion_aplicada__isnull=True,
-            producto__codigo__in=PROMOCIONES,
-        )
-        .order_by("creada_en")
+def _validar_acumulacion_normal(ticket, producto, comensal, termino, cantidad, excluir_id=None):
+    # El límite de la captura normal permanece aunque sus líneas no se
+    # consoliden ni se asignen automáticamente a una promoción.
+    consulta = Partida.objects.filter(
+        ticket=ticket,
+        comanda_numero=ticket.comanda_actual,
+        producto=producto,
+        comensal=comensal,
+        termino=termino,
+        promocion_aplicada__isnull=True,
+        promocion_definicion__isnull=True,
     )
-    regulares = list(
-        Partida.objects.select_for_update()
-        .select_related("producto__categoria")
-        .filter(ticket=ticket, comanda_numero=ticket.comanda_actual, producto__isnull=False)
-        .exclude(producto__codigo__in=PROMOCIONES)
-        .order_by("creada_en")
-    )
+    if excluir_id:
+        consulta = consulta.exclude(pk=excluir_id)
+    acumulada = consulta.aggregate(total=Sum("cantidad"))["total"] or Decimal("0")
+    if acumulada + cantidad > CANTIDAD_MAXIMA_POS:
+        raise ErrorVenta("La cantidad acumulada no puede superar 9999.")
 
-    # Primero normaliza los fragmentos creados por asignaciones anteriores. Así,
-    # bajar o eliminar una promoción conserva los productos y sólo recalcula su cobro.
-    consolidadas = {}
-    for partida in regulares:
-        clave = (partida.producto_id, partida.comensal, partida.termino)
-        precio_lista = partida.precio_lista_capturado
+
+def _restaurar_componentes_promocion(raiz):
+    """Al quitar una promoción, sus partidas quedan vendidas a precio capturado."""
+    for componente in Partida.objects.select_for_update().select_related("producto").filter(
+        promocion_aplicada=raiz
+    ):
+        precio_lista = componente.precio_lista_capturado
         if precio_lista is None:
-            # Backfill seguro para líneas anteriores a dev.10: conserva el importe
-            # capturado si no era un componente bonificado; en otro caso toma una
-            # sola vez el precio vigente y lo deja congelado desde este momento.
-            if partida.promocion_aplicada_id is None and partida.precio_unitario > 0:
-                precio_lista = partida.precio_unitario
-            else:
-                precio = partida.producto.precio_actual()
-                if not precio:
-                    raise ErrorVenta(
-                        f"{partida.producto.nombre} ya no tiene un precio activo."
-                    )
-                precio_lista = precio.importe
-            partida.precio_lista_capturado = precio_lista
-        if clave not in consolidadas:
-            partida.promocion_aplicada = None
-            partida.precio_unitario = precio_lista
-            partida.save(
-                update_fields=[
-                    "promocion_aplicada",
-                    "precio_unitario",
-                    "precio_lista_capturado",
-                ]
-            )
-            consolidadas[clave] = partida
-            continue
-        principal = consolidadas[clave]
-        cantidad_acumulada = principal.cantidad + partida.cantidad
-        if cantidad_acumulada > CANTIDAD_MAXIMA_POS:
-            raise ErrorVenta("La cantidad acumulada no puede superar 9999.")
-        principal.cantidad = cantidad_acumulada
-        principal.save(update_fields=["cantidad"])
-        partida.delete()
-
-    disponibles = list(consolidadas.values())
-    for raiz in raices:
-        for tipo, requerida in capacidad_componentes(raiz).items():
-            faltante = requerida
-            for partida in disponibles:
-                if faltante <= 0:
-                    break
-                if partida.promocion_aplicada_id or tipo_componente(partida.producto) != tipo:
-                    continue
-                if partida.cantidad <= faltante:
-                    partida.promocion_aplicada = raiz
-                    partida.precio_unitario = Decimal("0.00")
-                    partida.save(update_fields=["promocion_aplicada", "precio_unitario"])
-                    faltante -= partida.cantidad
-                    continue
-
-                # Una misma captura puede contener unidades promocionales y normales.
-                # Se divide internamente sin mostrar un modo de captura diferente.
-                promocional = Partida.objects.create(
-                    sucursal=partida.sucursal,
-                    ticket=partida.ticket,
-                    producto=partida.producto,
-                    comanda_numero=ticket.comanda_actual,
-                    promocion_aplicada=raiz,
-                    comensal=partida.comensal,
-                    cantidad=faltante,
-                    precio_unitario=Decimal("0.00"),
-                    precio_lista_capturado=partida.precio_lista_capturado,
-                    nombre_producto=partida.nombre_producto,
-                    nombre_corto=partida.nombre_corto,
-                    termino=partida.termino,
-                    comentario=partida.comentario,
-                    procesada=partida.procesada,
+            precio = componente.producto.precio_actual()
+            if not precio:
+                raise ErrorVenta(
+                    "No es posible quitar la promoción: un componente no conserva su precio de lista."
                 )
-                partida.cantidad -= faltante
-                partida.save(update_fields=["cantidad"])
-                disponibles.append(promocional)
-                faltante = Decimal("0")
+            precio_lista = precio.importe
+            componente.precio_lista_capturado = precio_lista
+        componente.promocion_aplicada = None
+        componente.promocion_grupo = None
+        componente.precio_unitario = precio_lista
+        componente.save(
+            update_fields=[
+                "promocion_aplicada",
+                "promocion_grupo",
+                "precio_unitario",
+                "precio_lista_capturado",
+            ]
+        )
 
 
 @transaction.atomic
@@ -610,6 +555,10 @@ def abrir_ticket(mesa, atendio=_ATENDIO_AUTOMATICO):
     ).first()
     if activo:
         return activo, False
+    try:
+        exigir_catalogo_operativo(sucursal)
+    except ValueError as exc:
+        raise ErrorVenta(str(exc)) from exc
 
     consecutivo = _consecutivo_folio_bloqueado(sucursal)
     consecutivo.ultimo += 1
@@ -738,59 +687,82 @@ def agregar_partida(
     cantidad=Decimal("1.000"),
     termino=None,
     promocion_aplicada=None,
+    promocion_grupo_id=None,
 ):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     validar_comanda_editable(ticket)
+    try:
+        exigir_catalogo_operativo(ticket.sucursal)
+    except ValueError as exc:
+        raise ErrorVenta(str(exc)) from exc
+    if producto.sucursal_id != ticket.sucursal_id or not producto_vendible(ticket.sucursal, producto):
+        raise ErrorVenta("El producto no está disponible para venta en esta sucursal.")
     cantidad = Decimal(str(cantidad))
     if cantidad != cantidad.to_integral_value() or not 1 <= cantidad <= CANTIDAD_MAXIMA_POS:
         raise ErrorVenta("La cantidad debe ser un entero entre 1 y 9999.")
     precio = producto.precio_actual()
-    if not producto.activo or not precio:
+    if not precio:
         raise ErrorVenta("El producto no tiene un precio activo.")
     configuracion = configuracion_promocion(producto)
     if configuracion and promocion_aplicada:
         raise ErrorVenta("Una promoción no puede ser componente de otra promoción.")
     if configuracion and not promocion_disponible(producto, timezone.localdate()):
-        raise ErrorVenta(f"La promoción {producto.codigo} no está disponible el día de hoy.")
-    if promocion_aplicada and (
-        promocion_aplicada.ticket_id != ticket.id or not configuracion_promocion(promocion_aplicada.producto)
-    ):
-        raise ErrorVenta("La promoción seleccionada no pertenece a esta orden.")
+        raise ErrorVenta(f"La promoción {configuracion.codigo} no está disponible el día de hoy.")
+    grupo = None
     if promocion_aplicada:
+        promocion_aplicada = (
+            Partida.objects.select_for_update()
+            .select_related("producto", "promocion_definicion")
+            .get(pk=promocion_aplicada.pk, ticket=ticket)
+        )
+        if (
+            promocion_aplicada.promocion_aplicada_id
+            or promocion_aplicada.comanda_numero != ticket.comanda_actual
+            or not configuracion_promocion(promocion_aplicada.producto, partida=promocion_aplicada)
+        ):
+            raise ErrorVenta("La promoción seleccionada no pertenece a esta comanda.")
         try:
-            validar_cupo_componente(promocion_aplicada, producto, cantidad)
+            grupo = validar_cupo_componente(
+                promocion_aplicada, producto, cantidad, grupo_id=promocion_grupo_id
+            )
         except ValueError as exc:
             raise ErrorVenta(str(exc)) from exc
+    elif promocion_grupo_id:
+        raise ErrorVenta("Selecciona primero la promoción principal.")
+
     termino, nombre_producto, nombre_corto = _datos_termino(producto, termino)
+    if not configuracion and not promocion_aplicada:
+        _validar_acumulacion_normal(ticket, producto, comensal, termino, cantidad)
     partida = Partida.objects.create(
         sucursal=ticket.sucursal,
         ticket=ticket,
         producto=producto,
         comanda_numero=ticket.comanda_actual,
-        promocion_aplicada=None,
+        promocion_aplicada=promocion_aplicada,
+        promocion_definicion=configuracion if configuracion else None,
+        promocion_grupo=grupo,
         comensal=comensal,
         cantidad=cantidad,
-        precio_unitario=precio.importe,
-        precio_lista_capturado=precio.importe,
+        precio_unitario=(
+            Decimal("0.00")
+            if promocion_aplicada
+            else configuracion.precio
+            if configuracion
+            else precio.importe
+        ),
+        precio_lista_capturado=configuracion.precio if configuracion else precio.importe,
         nombre_producto=nombre_producto,
         nombre_corto=nombre_corto,
         termino=termino,
     )
-    _reasignar_componentes_promocion(ticket)
     if ticket.captura_por_nombres:
         validar_limite_productos_por_nombre(ticket)
-    partida = (
-        Partida.objects.filter(pk=partida.pk).first()
-        or Partida.objects.filter(
-            ticket=ticket,
-            comanda_numero=ticket.comanda_actual,
-            producto=producto,
-            comensal=comensal,
-            termino=termino,
-        ).order_by("creada_en").first()
-    )
     guardar_ticket(ticket, [])
-    _evento(ticket, "ticket.partida_agregada", {"partida_id": str(partida.id), "producto_id": str(producto.id)})
+    _evento(
+        ticket,
+        "ticket.partida_agregada",
+        {"partida_id": str(partida.id), "producto_id": str(producto.id)},
+    )
     return partida
 
 
@@ -802,6 +774,10 @@ def agregar_partida_sucursal(ticket, producto, cantidad=Decimal("1.000")):
         raise ErrorVenta("La orden no pertenece al módulo de sucursales.")
     if ticket.estado != Ticket.Estado.ABIERTO:
         raise ErrorVenta("La orden ya fue procesada; no admite nuevas partidas.")
+    try:
+        exigir_catalogo_operativo(ticket.sucursal)
+    except ValueError as exc:
+        raise ErrorVenta(str(exc)) from exc
     if not producto.activo or producto.sucursal_id != ticket.sucursal_id:
         raise ErrorVenta("El producto de sucursal no está disponible.")
     existente = Partida.objects.filter(ticket=ticket, producto_sucursal=producto).first()
@@ -845,6 +821,10 @@ def agregar_partida_personalizada(
 ):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     validar_comanda_editable(ticket)
+    try:
+        exigir_catalogo_operativo(ticket.sucursal)
+    except ValueError as exc:
+        raise ErrorVenta(str(exc)) from exc
     nombre = " ".join(str(nombre or "").split())[:180]
     if not nombre:
         raise ErrorVenta("Escribe el nombre del producto personalizado.")
@@ -877,7 +857,6 @@ def agregar_partida_personalizada(
         nombre_producto=nombre,
         nombre_corto=nombre[:24],
     )
-    _reasignar_componentes_promocion(ticket)
     if ticket.captura_por_nombres:
         validar_limite_productos_por_nombre(ticket)
     guardar_ticket(ticket, [])
@@ -929,22 +908,48 @@ def actualizar_partida(partida, cantidad, termino=None, validar_componente=True)
         raise ErrorVenta("Las comandas anteriores son de sólo lectura.")
     cantidad = Decimal(str(cantidad))
     if cantidad <= 0:
-        ticket = partida.ticket
         partida_id = str(partida.id)
+        if partida.promocion_definicion_id:
+            _restaurar_componentes_promocion(partida)
         partida.delete()
-        _reasignar_componentes_promocion(ticket)
         guardar_ticket(ticket, [])
         _evento(ticket, "ticket.partida_eliminada", {"partida_id": partida_id})
         return None
     if cantidad != cantidad.to_integral_value() or cantidad > CANTIDAD_MAXIMA_POS:
         raise ErrorVenta("La cantidad debe ser un entero entre 1 y 9999.")
+    if partida.promocion_aplicada_id:
+        try:
+            validar_cupo_componente(
+                partida.promocion_aplicada,
+                partida.producto,
+                cantidad,
+                grupo_id=partida.promocion_grupo_id,
+                excluir_ids=(partida.id,),
+            )
+        except ValueError as exc:
+            raise ErrorVenta(str(exc)) from exc
+    if partida.promocion_definicion_id:
+        usadas = cantidades_componentes(partida)
+        for grupo in grupos_promocion(partida):
+            if usadas[grupo.id] > Decimal(str(grupo.cantidad)) * cantidad:
+                raise ErrorVenta(
+                    f"Reduce primero los componentes de {grupo.nombre or partida.nombre_producto}."
+                )
+    if not partida.personalizada and not partida.promocion_aplicada_id and not partida.promocion_definicion_id:
+        termino_efectivo = (
+            _datos_termino(partida.producto, termino)[0]
+            if termino is not None else partida.termino
+        )
+        _validar_acumulacion_normal(
+            ticket, partida.producto, partida.comensal,
+            termino_efectivo, cantidad, excluir_id=partida.id,
+        )
     partida.cantidad = cantidad
     campos = ["cantidad"]
     if termino is not None and not partida.personalizada:
         partida.termino, partida.nombre_producto, partida.nombre_corto = _datos_termino(partida.producto, termino)
         campos.extend(["termino", "nombre_producto", "nombre_corto"])
     partida.save(update_fields=campos)
-    _reasignar_componentes_promocion(partida.ticket)
     if partida.ticket.captura_por_nombres:
         validar_limite_productos_por_nombre(partida.ticket)
     _evento(
@@ -985,14 +990,22 @@ def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar
         raise ErrorVenta("La selección contiene partidas distintas.")
     if eliminar:
         ids = [str(partida.id) for partida in partidas]
+        for partida in partidas:
+            if partida.promocion_definicion_id:
+                _restaurar_componentes_promocion(partida)
         Partida.objects.filter(id__in=[partida.id for partida in partidas]).delete()
-        _reasignar_componentes_promocion(ticket)
         guardar_ticket(ticket, [])
         _evento(ticket, "ticket.partidas_eliminadas", {"partida_ids": ids})
         return None
     cantidad = Decimal(str(cantidad))
     if cantidad != cantidad.to_integral_value() or not 1 <= cantidad <= CANTIDAD_MAXIMA_POS:
         raise ErrorVenta("La cantidad debe ser un entero entre 1 y 9999.")
+    if principal.promocion_aplicada_id or principal.promocion_definicion_id:
+        if len(partidas) != 1:
+            raise ErrorVenta("Edita cada promoción y componente de forma independiente.")
+        return actualizar_partida(principal, cantidad, termino)
+    if any(partida.promocion_aplicada_id or partida.promocion_definicion_id for partida in partidas):
+        raise ErrorVenta("No es posible agrupar partidas de promociones distintas.")
     duplicadas_destino = []
     if termino is not None and termino != principal.termino and not principal.personalizada:
         termino_destino, _, _ = _datos_termino(principal.producto, termino)
@@ -1004,6 +1017,8 @@ def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar
                 producto=principal.producto,
                 comensal=principal.comensal,
                 termino=termino_destino,
+                promocion_aplicada__isnull=True,
+                promocion_definicion__isnull=True,
             )
             .exclude(id__in=[partida.id for partida in partidas])
         )
@@ -1011,22 +1026,6 @@ def ajustar_grupo_partidas(ticket, partida_ids, cantidad, termino=None, eliminar
         if cantidad > CANTIDAD_MAXIMA_POS:
             raise ErrorVenta("La cantidad acumulada no puede superar 9999.")
     duplicadas = partidas[1:] + duplicadas_destino
-    if principal.promocion_aplicada_id:
-        precio_lista = principal.precio_lista_capturado
-        campos = ["promocion_aplicada", "precio_unitario"]
-        if precio_lista is None:
-            # Compatibilidad acotada con partidas creadas antes de que existiera
-            # precio_lista_capturado. La consulta se hace una sola vez y su
-            # resultado queda congelado para las ediciones siguientes.
-            precio = principal.producto.precio_actual()
-            if not precio:
-                raise ErrorVenta("El producto no tiene un precio activo.")
-            precio_lista = precio.importe
-            principal.precio_lista_capturado = precio_lista
-            campos.append("precio_lista_capturado")
-        principal.promocion_aplicada = None
-        principal.precio_unitario = precio_lista
-        principal.save(update_fields=campos)
     if duplicadas:
         Partida.objects.filter(id__in=[partida.id for partida in duplicadas]).delete()
     principal = actualizar_partida(principal, cantidad, termino, validar_componente=False)

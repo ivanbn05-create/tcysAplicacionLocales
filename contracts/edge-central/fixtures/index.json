@@ -168,6 +168,13 @@
       }
     },
     {
+      "name": "catalogo_v3_lab01_promocion_y_disponibilidad",
+      "schema": "schemas/catalogo-publicacion-v3.schema.json",
+      "fixture": "fixtures/catalogo-publicacion-v3-lab01-promocion.json",
+      "expected_valid": true,
+      "semantic": "catalog-publication"
+    },
+    {
       "name": "catalogo_v2_ack_aplicado",
       "schema": "schemas/catalogo-ack-v2-request.schema.json",
       "fixture": "fixtures/catalogo-ack-v2-request-aplicado.json",

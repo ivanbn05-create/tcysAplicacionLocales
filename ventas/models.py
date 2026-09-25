@@ -476,6 +476,23 @@ class Partida(models.Model):
         on_delete=models.SET_NULL,
         related_name="componentes_promocion",
     )
+    # La raíz conserva la definición exacta con que se capturó, aun tras otra publicación.
+    promocion_definicion = models.ForeignKey(
+        "DefinicionPromocion",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="partidas_raiz",
+    )
+    # Cada componente señala el grupo explícito; evita ambigüedad si un producto
+    # está permitido en varios grupos o promociones.
+    promocion_grupo = models.ForeignKey(
+        "GrupoPromocion",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="partidas_componente",
+    )
     comensal = models.PositiveSmallIntegerField(validators=[MinValueValidator(1), MaxValueValidator(24)])
     comanda_numero = models.PositiveIntegerField(default=1)
     cantidad = models.DecimalField(max_digits=8, decimal_places=3, default=Decimal("1.000"))
@@ -827,3 +844,107 @@ class CorteSucursal(models.Model):
 
     class Meta:
         ordering = ["-creado_en"]
+
+
+class DefinicionPromocion(models.Model):
+    """Regla inmutable por publicación; una nueva versión crea otra fila."""
+
+    class Origen(models.TextChoices):
+        LEGADO = "legado", "Migración local"
+        CENTRAL = "central", "Publicación Central"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sucursal = models.ForeignKey(Sucursal, on_delete=models.PROTECT, related_name="definiciones_promocion")
+    central_id = models.UUIDField(null=True, blank=True)
+    producto = models.ForeignKey(Producto, on_delete=models.PROTECT, related_name="definiciones_promocion")
+    producto_identidad = models.ForeignKey(
+        "catalogo.IdentidadProductoCentral",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="definiciones_promocion",
+    )
+    publicacion = models.ForeignKey(
+        "catalogo.PublicacionCatalogoCentral",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="definiciones_promocion",
+    )
+    version_publicacion = models.PositiveIntegerField(default=0)
+    codigo = models.CharField(max_length=30)
+    nombre = models.CharField(max_length=180)
+    precio = models.DecimalField(max_digits=10, decimal_places=2)
+    dias_semana = models.JSONField(default=list)
+    fecha_desde = models.DateField(null=True, blank=True)
+    fecha_hasta = models.DateField(null=True, blank=True)
+    activo = models.BooleanField(default=True)
+    origen = models.CharField(max_length=8, choices=Origen.choices, default=Origen.CENTRAL)
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sucursal", "central_id", "version_publicacion"],
+                condition=Q(origen="central"),
+                name="promo_central_version_unica",
+            ),
+            models.UniqueConstraint(
+                fields=["sucursal", "producto", "version_publicacion"],
+                name="promo_producto_version_unica",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.codigo} · publicación {self.version_publicacion}"
+
+
+class GrupoPromocion(models.Model):
+    """Cantidad exacta que debe elegirse entre productos explícitamente permitidos."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    definicion = models.ForeignKey(
+        DefinicionPromocion,
+        on_delete=models.PROTECT,
+        related_name="grupos",
+    )
+    central_id = models.UUIDField(null=True, blank=True)
+    nombre = models.CharField(max_length=100)
+    orden = models.PositiveSmallIntegerField()
+    cantidad = models.PositiveSmallIntegerField(validators=[MinValueValidator(1)])
+
+    class Meta:
+        ordering = ["orden", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["definicion", "orden"], name="promo_grupo_orden_unico"),
+            models.UniqueConstraint(
+                fields=["definicion", "central_id"],
+                condition=Q(central_id__isnull=False),
+                name="promo_grupo_central_unico",
+            ),
+        ]
+
+
+class ProductoPermitidoPromocion(models.Model):
+    """Referencia por UUID local + mapping Central; el nombre nunca define membresía."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    grupo = models.ForeignKey(GrupoPromocion, on_delete=models.PROTECT, related_name="permitidos")
+    producto = models.ForeignKey(Producto, on_delete=models.PROTECT, related_name="permisos_promocion")
+    identidad = models.ForeignKey(
+        "catalogo.IdentidadProductoCentral",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="permisos_promocion",
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["grupo", "producto"], name="promo_grupo_producto_unico"),
+            models.UniqueConstraint(
+                fields=["grupo", "identidad"],
+                condition=Q(identidad__isnull=False),
+                name="promo_grupo_identidad_unica",
+            ),
+        ]

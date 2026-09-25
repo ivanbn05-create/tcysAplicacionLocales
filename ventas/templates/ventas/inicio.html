@@ -35,6 +35,24 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
       <strong id="operador-actual-nombre" aria-live="polite"></strong>
     </div>
   </header>
+  <section id="aviso-aprovisionamiento" class="aviso-aprovisionamiento" aria-labelledby="aprovisionamiento-titulo" hidden>
+    <div class="aprovisionamiento-contenido">
+      <div class="aprovisionamiento-cabecera">
+        <div>
+          <h1 id="aprovisionamiento-titulo">Sucursal en preparación</h1>
+          <p id="aprovisionamiento-mensaje">El catálogo inicial de esta sucursal aún no está aplicado.</p>
+        </div>
+        <button id="aprovisionamiento-revisar" type="button">Comprobar de nuevo</button>
+      </div>
+      <ol id="aprovisionamiento-pasos" aria-label="Estado del aprovisionamiento">
+        <li>Enrolado</li>
+        <li>Esperando catálogo</li>
+        <li>Catálogo aplicado</li>
+        <li>Listo</li>
+      </ol>
+      <p class="aprovisionamiento-estado">Estado actual: <strong id="aprovisionamiento-estado">Esperando catálogo inicial</strong>. El panel de administración permanece disponible para soporte.</p>
+    </div>
+  </section>
   {% if not modo_tableta %}
     <section id="pantalla-acceso" class="pantalla-acceso">
       <div class="acceso-contenido">
@@ -347,6 +365,7 @@ FINISH: Un resultado sin revisión ni documentación está incompleto; este camb
     <button id="toast-cerrar" class="toast-cerrar" type="button" aria-label="Cerrar aviso">×</button>
   </div>
   {{ productos|json_script:"datos-productos" }}
+  {{ aprovisionamiento|json_script:"datos-aprovisionamiento" }}
   {{ posiciones|json_script:"datos-posiciones" }}
   {{ permisos|json_script:"datos-permisos" }}
   <script src="{% static 'ventas/app.js' %}?v={{ asset_version }}" defer></script>
