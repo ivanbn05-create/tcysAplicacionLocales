@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Edge registers a local terminal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "branch_id", "edge_id", "terminal_id", "kind", "label"],
+  "properties": {
+    "version": {"const": "1.0"},
+    "branch_id": {"type": "string", "format": "uuid"},
+    "edge_id": {"type": "string", "format": "uuid"},
+    "terminal_id": {"type": "string", "format": "uuid"},
+    "kind": {"type": "string", "enum": ["pc", "android", "other"]},
+    "label": {"type": "string", "minLength": 1, "maxLength": 100}
+  }
+}

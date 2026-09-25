@@ -34,7 +34,7 @@ class ContratosDespliegueTests(unittest.TestCase):
         bootstrap = (RAIZ / "desktop" / "InstallerBootstrap.cs").read_text(
             encoding="utf-8"
         )
-        self.assertIn("private static int Main()", bootstrap)
+        self.assertIn("private static int Main(string[] args)", bootstrap)
         self.assertIn("installer.WaitForExit();", bootstrap)
         self.assertIn("if (installer.ExitCode != 0)", bootstrap)
         self.assertIn("return installer.ExitCode;", bootstrap)
@@ -47,8 +47,16 @@ class ContratosDespliegueTests(unittest.TestCase):
         )
         cliente = (RAIZ / "desktop" / "TocayosPOS.cs").read_text(encoding="utf-8")
         patron_version = re.compile(r'AssemblyVersion\("([^"]+)"\)')
-        self.assertEqual(patron_version.findall(bootstrap), ["0.3.0.0"])
-        self.assertEqual(patron_version.findall(cliente), ["0.3.0.0"])
+        self.assertEqual(patron_version.findall(bootstrap), [])
+        self.assertEqual(patron_version.findall(cliente), [])
+        build = (RAIZ / "desktop" / "build.ps1").read_text(encoding="utf-8")
+        paquete = (RAIZ / "desktop" / "build-package.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('Join-Path $desktop "../VERSION"', build)
+        self.assertIn('AssemblyVersion(', build)
+        self.assertIn('AssemblyInformationalVersion(', build)
+        self.assertIn('Version.generated.cs', paquete)
 
         instalador = (
             RAIZ / "desktop" / "package" / "Instalar-LosTocayosPOS.ps1"

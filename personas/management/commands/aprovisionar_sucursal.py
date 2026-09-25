@@ -51,6 +51,10 @@ class Command(BaseCommand):
             "--sucursal-id",
             help="UUID central opcional. Si se omite, se genera una identidad local estable.",
         )
+        parser.add_argument(
+            "--edge-id",
+            help="UUID Edge autorizado por Central; debe coincidir con CENTRAL_POS_INSTANCE_ID.",
+        )
 
     @transaction.atomic
     def handle(self, *args, **options):
@@ -68,6 +72,20 @@ class Command(BaseCommand):
                 raise CommandError("SucursalId debe ser un UUID válido.") from exc
             if sucursal_id.int == 0:
                 raise CommandError("SucursalId no puede ser el UUID vacío.")
+
+        edge_configurado = str(getattr(settings, "CENTRAL_POS_INSTANCE_ID", "") or "").strip()
+        edge_solicitado = str(options.get("edge_id") or "").strip()
+        if edge_configurado and edge_solicitado and edge_configurado != edge_solicitado:
+            raise CommandError("EdgeId no coincide con CENTRAL_POS_INSTANCE_ID.")
+        edge_texto = edge_solicitado or edge_configurado
+        edge_id = None
+        if edge_texto:
+            try:
+                edge_id = uuid.UUID(edge_texto)
+            except (ValueError, AttributeError) as exc:
+                raise CommandError("EdgeId debe ser un UUID válido.") from exc
+            if edge_id.int == 0 or (sucursal_id is not None and edge_id == sucursal_id):
+                raise CommandError("EdgeId no puede ser vacío ni igual al UUID de sucursal.")
 
         if clave != settings.SUCURSAL_CLAVE:
             raise CommandError(
@@ -96,10 +114,13 @@ class Command(BaseCommand):
             defaults=defaults,
         )
         if creada:
-            ConfiguracionSucursal.objects.create(
-                sucursal=sucursal,
-                clave_administrador=make_password("0000"),
-            )
+            valores_configuracion = {
+                "sucursal": sucursal,
+                "clave_administrador": make_password("0000"),
+            }
+            if edge_id is not None:
+                valores_configuracion["instalacion_id"] = edge_id
+            ConfiguracionSucursal.objects.create(**valores_configuracion)
             self.stdout.write(
                 self.style.SUCCESS(f"Sucursal aprovisionada: {nombre} ({clave}).")
             )
@@ -120,6 +141,15 @@ class Command(BaseCommand):
                 f"La sucursal {clave} ya existe, pero está inactiva. "
                 "Reactívala mediante un procedimiento administrativo explícito."
             )
+        if edge_id is not None:
+            configuracion = ConfiguracionSucursal.objects.select_for_update().filter(
+                sucursal=sucursal
+            ).first()
+            if configuracion is None or configuracion.instalacion_id != edge_id:
+                raise CommandError(
+                    "El Edge solicitado no coincide con la identidad durable local. "
+                    "No se reemplaza una instalación mediante aprovisionamiento."
+                )
 
         self.stdout.write(
             self.style.SUCCESS(

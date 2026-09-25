@@ -205,6 +205,18 @@
 
   function obtenerDeviceId() {
     try {
+      const url = new URL(window.location.href);
+      const externo = url.searchParams.get("terminal_id");
+      if (externo && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(externo)) {
+        localStorage.setItem(DEVICE_ID_KEY, externo);
+        url.searchParams.delete("terminal_id");
+        try {
+          window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+        } catch {
+          // La identidad ya quedó persistida.
+        }
+        return externo;
+      }
       const guardado = localStorage.getItem(DEVICE_ID_KEY);
       if (guardado) return guardado;
       const nuevo = crearDeviceId();

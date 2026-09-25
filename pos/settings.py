@@ -147,6 +147,7 @@ INSTALLED_APPS = [
     "catalogo",
     "ventas",
     "impresion",
+    "soporte",
 ]
 
 MIDDLEWARE = [

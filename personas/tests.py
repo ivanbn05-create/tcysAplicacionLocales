@@ -1,4 +1,6 @@
 from io import StringIO
+from importlib import import_module
+from types import SimpleNamespace
 from pathlib import Path
 import tempfile
 import uuid
@@ -10,11 +12,13 @@ from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.hashers import make_password
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.apps import apps
+from django.db import connection
 from django.test import SimpleTestCase, TestCase, override_settings
 
 from personas.identidad import normalizar_clave_sucursal, normalizar_nombre_sucursal
 from personas.models import ModuloSucursal, Rol, Sucursal, UsuarioPOS
-from personas.modulos import MODULOS_NUCLEO, configurar_modulos
+from personas.modulos import MODULOS_NUCLEO, MODULOS_NUCLEO_CONTRATO, configurar_modulos, modulos_efectivos, modulo_habilitado
 from pos.version import APP_VERSION
 from ventas.models import (
     ConfiguracionSucursal,
@@ -50,6 +54,7 @@ class AprovisionarSucursalTests(TestCase):
             clave=opciones.get("clave", "norte_2"),
             nombre=opciones.get("nombre", "Sucursal Norte"),
             sucursal_id=opciones.get("sucursal_id"),
+            edge_id=opciones.get("edge_id"),
             stdout=salida,
         )
         return salida.getvalue()
@@ -87,6 +92,25 @@ class AprovisionarSucursalTests(TestCase):
             self.ejecutar(sucursal_id=str(uuid.uuid4()))
 
         self.assertEqual(Sucursal.objects.get().id, sucursal_id)
+
+    def test_edge_id_central_se_conserva_y_rechaza_reemplazo(self):
+        branch_id, edge_id = uuid.uuid4(), uuid.uuid4()
+        with override_settings(CENTRAL_POS_INSTANCE_ID=str(edge_id)):
+            self.ejecutar(sucursal_id=str(branch_id), edge_id=str(edge_id))
+            config = ConfiguracionSucursal.objects.get()
+            self.assertEqual(config.instalacion_id, edge_id)
+            self.assertEqual(config.sucursal_id, branch_id)
+            self.ejecutar(sucursal_id=str(branch_id), edge_id=str(edge_id))
+            with self.assertRaisesMessage(CommandError, "no coincide con CENTRAL_POS_INSTANCE_ID"):
+                self.ejecutar(sucursal_id=str(branch_id), edge_id=str(uuid.uuid4()))
+        self.assertEqual(ConfiguracionSucursal.objects.get().instalacion_id, edge_id)
+
+    def test_edge_id_distinto_al_durable_no_se_reemplaza(self):
+        branch_id, edge_id = uuid.uuid4(), uuid.uuid4()
+        self.ejecutar(sucursal_id=str(branch_id), edge_id=str(edge_id))
+        with self.assertRaisesMessage(CommandError, "no coincide con la identidad durable local"):
+            self.ejecutar(sucursal_id=str(branch_id), edge_id=str(uuid.uuid4()))
+        self.assertEqual(ConfiguracionSucursal.objects.get().instalacion_id, edge_id)
 
     def test_rechaza_uuid_invalido_sin_cambiar_la_base(self):
         with self.assertRaisesMessage(CommandError, "UUID válido"):
@@ -278,7 +302,7 @@ class ModulosSucursalTests(TestCase):
         salida = StringIO()
         call_command(
             "configurar_modulos_sucursal",
-            modulos="programados",
+            modulos="pedidos_sucursales",
             stdout=salida,
         )
         estados = dict(
@@ -289,8 +313,8 @@ class ModulosSucursalTests(TestCase):
         self.assertTrue(all(estados[clave] for clave in MODULOS_NUCLEO))
         self.assertTrue(estados["programados"])
         self.assertTrue(estados["domicilios"])
-        self.assertFalse(estados["reparto"])
-        self.assertFalse(estados["pedidos_sucursales"])
+        self.assertTrue(estados["reparto"])
+        self.assertTrue(estados["pedidos_sucursales"])
         nucleo = ModuloSucursal.objects.get(
             sucursal=self.sucursal, modulo__clave="pos"
         )
@@ -299,7 +323,7 @@ class ModulosSucursalTests(TestCase):
         nucleo.save(update_fields=["habilitado", "actualizado_en"])
         from personas.modulos import modulo_habilitado
         self.assertTrue(modulo_habilitado(self.sucursal, "pos"))
-        self.assertIn("programados", salida.getvalue())
+        self.assertIn("pedidos_sucursales", salida.getvalue())
 
     def test_rechaza_modulo_desconocido_sin_estado_parcial(self):
         with self.assertRaisesMessage(CommandError, "desconocidos"):
@@ -307,9 +331,9 @@ class ModulosSucursalTests(TestCase):
         self.assertFalse(ModuloSucursal.objects.filter(sucursal=self.sucursal).exists())
 
     def test_desactivar_conserva_configuracion_y_datos(self):
-        configurar_modulos(self.sucursal, ["domicilios"])
+        configurar_modulos(self.sucursal, ["pedidos_sucursales"])
         asignacion = ModuloSucursal.objects.get(
-            sucursal=self.sucursal, modulo__clave="domicilios"
+            sucursal=self.sucursal, modulo__clave="pedidos_sucursales"
         )
         asignacion.configuracion = {"zona": "norte"}
         asignacion.save(update_fields=["configuracion", "actualizado_en"])
@@ -319,6 +343,64 @@ class ModulosSucursalTests(TestCase):
         asignacion.refresh_from_db()
         self.assertFalse(asignacion.habilitado)
         self.assertEqual(asignacion.configuracion, {"zona": "norte"})
+
+    def test_iniciales_y_fallback_distinguen_arboledas_de_otras_sucursales(self):
+        self.assertEqual(set(MODULOS_NUCLEO), {
+            "pos", "catalogo", "impresion", "respaldos",
+            "domicilios", "programados", "reparto",
+        })
+        self.assertIn("pedidos_programados", MODULOS_NUCLEO_CONTRATO)
+        self.assertTrue(modulo_habilitado(self.sucursal, "pedidos_programados"))
+        self.assertTrue(modulos_efectivos(self.sucursal)["pedidos_programados"])
+        self.assertFalse(modulos_efectivos(self.sucursal)["pedidos_sucursales"])
+        arboledas = Sucursal.objects.create(clave="ARBOLEDAS", nombre="Arboledas")
+        self.assertTrue(modulos_efectivos(arboledas)["pedidos_sucursales"])
+
+        call_command("configurar_modulos_sucursal", iniciales=True, verbosity=0)
+        self.assertFalse(modulos_efectivos(self.sucursal)["pedidos_sucursales"])
+
+        with override_settings(SUCURSAL_CLAVE="ARBOLEDAS"):
+            call_command("configurar_modulos_sucursal", iniciales=True, verbosity=0)
+        self.assertTrue(modulos_efectivos(arboledas)["pedidos_sucursales"])
+
+    def test_nucleo_no_se_puede_solicitar_como_opcional(self):
+        with self.assertRaisesMessage(CommandError, "desconocidos"):
+            call_command("configurar_modulos_sucursal", modulos="programados")
+        self.assertFalse(ModuloSucursal.objects.filter(sucursal=self.sucursal).exists())
+
+    def test_migracion_production_corrige_roles_y_modulos_existentes(self):
+        arboledas = Sucursal.objects.create(clave="ARBOLEDAS", nombre="Arboledas")
+        configurar_modulos(self.sucursal, ["pedidos_sucursales"])
+        configurar_modulos(arboledas, [])
+        rol = Rol.objects.create(
+            sucursal=self.sucursal, nombre="Encargado legado",
+            tipo=Rol.Tipo.ENCARGADO, puede_cancelar=True,
+        )
+        Rol.objects.filter(pk=rol.pk).update(capacidades=[])
+        mesero_legado = Rol.objects.create(
+            sucursal=self.sucursal, nombre="Mesero con cobro legado",
+            tipo=Rol.Tipo.MESERO, puede_cobrar=True,
+        )
+        Rol.objects.filter(pk=mesero_legado.pk).update(capacidades=[])
+        ModuloSucursal.objects.filter(
+            sucursal=self.sucursal, modulo__clave="domicilios"
+        ).update(habilitado=False)
+        migracion = import_module(
+            "personas.migrations.0007_production_capacidades_modulos"
+        )
+        migracion.actualizar_capacidades_y_modulos(
+            apps, SimpleNamespace(connection=connection)
+        )
+        rol.refresh_from_db()
+        self.assertNotIn("administrar_negocio", rol.capacidades)
+        self.assertIn("cancelar", rol.capacidades)
+        self.assertNotIn("gestionar_usuarios", rol.capacidades)
+        self.assertNotIn("reiniciar_folios", rol.capacidades)
+        mesero_legado.refresh_from_db()
+        self.assertNotIn("cobrar", mesero_legado.capacidades)
+        self.assertTrue(modulo_habilitado(self.sucursal, "domicilios"))
+        self.assertFalse(modulo_habilitado(self.sucursal, "pedidos_sucursales"))
+        self.assertTrue(modulo_habilitado(arboledas, "pedidos_sucursales"))
 
     def test_api_y_ui_rechazan_modulos_deshabilitados(self):
         call_command("configurar_modulos_sucursal", sin_opcionales=True, verbosity=0)
@@ -333,7 +415,7 @@ class ModulosSucursalTests(TestCase):
 
         interfaz = self.client.get("/")
         self.assertEqual(interfaz.status_code, 200)
-        self.assertNotContains(interfaz, 'data-canal="domicilio"')
+        self.assertContains(interfaz, 'data-canal="domicilio"')
         self.assertNotContains(interfaz, 'data-canal="sucursales"')
 
 
@@ -359,11 +441,40 @@ class CrearOperadorInicialTests(TestCase):
 
         perfil = UsuarioPOS.objects.select_related("cuenta", "rol").get()
         self.assertEqual(perfil.nombre, "Caja principal")
-        self.assertEqual(perfil.rol.tipo, Rol.Tipo.ENCARGADO)
+        self.assertEqual(perfil.rol.tipo, Rol.Tipo.DUENO)
         self.assertTrue(perfil.check_clave("4321"))
         self.assertFalse(perfil.cuenta.is_staff)
         self.assertIsNotNone(authenticate(username="operador", password="ClaveOperativa!2026"))
         self.assertIn("vinculada", salida.getvalue())
+
+    @patch(
+        "personas.management.commands.crear_operador_pos.getpass",
+        side_effect=["ClaveOperativa!2026", "ClaveOperativa!2026"],
+    )
+    def test_crea_dueno_explicito_aunque_haya_encargado_legado_libre(self, _getpass):
+        rol_legado = Rol.objects.create(
+            sucursal=self.sucursal, nombre="Encargado legado",
+            tipo=Rol.Tipo.ENCARGADO, puede_cobrar=True,
+        )
+        legado = UsuarioPOS(sucursal=self.sucursal, rol=rol_legado, nombre="Caja anterior")
+        legado.set_clave("1111")
+        legado.save()
+
+        call_command(
+            "crear_operador_pos",
+            username="dueno",
+            nombre="Dueña Arboledas",
+            pin="4321",
+            crear_perfil_inicial=True,
+            verbosity=0,
+        )
+
+        legado.refresh_from_db()
+        self.assertIsNone(legado.cuenta_id)
+        self.assertNotIn("gestionar_usuarios", legado.rol.capacidades)
+        dueno = UsuarioPOS.objects.get(cuenta__username="dueno")
+        self.assertEqual(dueno.rol.tipo, Rol.Tipo.DUENO)
+        self.assertIn("gestionar_usuarios", dueno.rol.capacidades)
 
     def test_sin_autorizacion_de_alta_conserva_el_contrato_anterior(self):
         with self.assertRaisesMessage(CommandError, "No hay un perfil POS libre"):

@@ -7,6 +7,7 @@ from django.http import HttpResponseForbidden, JsonResponse
 from django.urls import reverse
 from django.utils.cache import patch_cache_control, patch_vary_headers
 
+from personas.capacidades import Capacidad, perfil_tiene_capacidad, tiene_capacidad
 from personas.models import UsuarioPOS
 
 
@@ -30,7 +31,7 @@ class POSSessionAuthenticationMiddleware:
 
     @staticmethod
     def _is_api(path):
-        return path == "/api" or path.startswith("/api/")
+        return path == "/api" or path.startswith("/api/") or path.startswith("/soporte/api/")
 
     @staticmethod
     def _secure_response(response, incluir_csp=True):
@@ -64,9 +65,10 @@ class POSSessionAuthenticationMiddleware:
         }
 
         require_auth = getattr(settings, "POS_REQUIRE_AUTH", True)
+        is_support = path == "/soporte" or path.startswith("/soporte/")
         is_admin = path == "/admin" or path.startswith("/admin/")
         is_public = path in public_paths or path.startswith(self._static_prefix()) or is_admin
-        if require_auth and not is_public:
+        if (require_auth or is_support) and not is_public:
             if not hasattr(request, "user"):
                 raise ImproperlyConfigured(
                     "POSSessionAuthenticationMiddleware debe ir después de "
@@ -82,13 +84,15 @@ class POSSessionAuthenticationMiddleware:
                 patch_vary_headers(response, ["Cookie"])
                 return self._secure_response(response)
 
-            perfil = None
-            if request.user.is_superuser:
-                perfil = (
-                    UsuarioPOS.objects.select_related("rol", "sucursal")
-                    .filter(cuenta=request.user, activo=True, sucursal__activa=True)
-                    .first()
-                )
+            if is_support:
+                if not tiene_capacidad(request, Capacidad.SOPORTE_TECNICO):
+                    response = HttpResponseForbidden(
+                        "La cuenta no tiene acceso al soporte técnico local."
+                    )
+                    patch_cache_control(response, no_store=True, private=True)
+                    patch_vary_headers(response, ["Cookie"])
+                    return self._secure_response(response)
+                request.pos_user = None
             else:
                 perfil = (
                     UsuarioPOS.objects.select_related("rol", "sucursal")
@@ -110,10 +114,23 @@ class POSSessionAuthenticationMiddleware:
                         response = HttpResponseForbidden(
                             "La cuenta no tiene un perfil POS activo en esta sucursal."
                         )
+                elif not perfil_tiene_capacidad(perfil, Capacidad.VENTAS):
+                    if self._is_api(path):
+                        response = JsonResponse(
+                            {"error": "La cuenta no tiene acceso a Ventas."},
+                            status=403,
+                        )
+                    else:
+                        response = HttpResponseForbidden(
+                            "La cuenta no tiene acceso a Ventas."
+                        )
+                else:
+                    request.pos_user = perfil
+                    response = None
+                if response is not None:
                     patch_cache_control(response, no_store=True, private=True)
                     patch_vary_headers(response, ["Cookie"])
                     return self._secure_response(response)
-            request.pos_user = perfil
 
         response = self.get_response(request)
         if self._is_api(path) or path in {

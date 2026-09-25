@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Registered terminal identity",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "branch_id", "edge_id", "terminal_id", "state"],
+  "properties": {
+    "version": {"const": "1.0"},
+    "branch_id": {"type": "string", "format": "uuid"},
+    "edge_id": {"type": "string", "format": "uuid"},
+    "terminal_id": {"type": "string", "format": "uuid"},
+    "state": {"const": "active"}
+  }
+}

@@ -68,7 +68,8 @@ class ModuloSucursal(models.Model):
 
 class Rol(models.Model):
     class Tipo(models.TextChoices):
-        ENCARGADO = "encargado", "Encargado"
+        DUENO = "dueno", "Dueño de sucursal"
+        ENCARGADO = "encargado", "Encargado legado"
         ELEVADO = "elevado", "Elevado"
         MESERO = "mesero", "Mesero"
         REPARTIDOR = "repartidor", "Repartidor"
@@ -81,12 +82,26 @@ class Rol(models.Model):
     puede_reimprimir = models.BooleanField(default=False)
     puede_cancelar = models.BooleanField(default=False)
     puede_sincronizar = models.BooleanField(default=False)
+    capacidades = models.JSONField(default=list, blank=True)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["sucursal", "nombre"], name="rol_unico_sucursal")]
 
     def __str__(self):
         return self.nombre
+
+    def save(self, *args, **kwargs):
+        if self._state.adding and not self.capacidades:
+            from .capacidades import capacidades_iniciales
+
+            self.capacidades = capacidades_iniciales(
+                self.tipo,
+                puede_cobrar=self.puede_cobrar,
+                puede_reimprimir=self.puede_reimprimir,
+                puede_cancelar=self.puede_cancelar,
+                puede_sincronizar=self.puede_sincronizar,
+            )
+        super().save(*args, **kwargs)
 
 
 class UsuarioPOS(models.Model):

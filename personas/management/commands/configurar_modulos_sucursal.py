@@ -2,7 +2,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from personas.models import Sucursal
-from personas.modulos import MODULOS_OPCIONALES, configurar_modulos
+from personas.modulos import MODULOS_OPCIONALES, configurar_modulos, modulos_iniciales
 
 
 class Command(BaseCommand):
@@ -12,6 +12,7 @@ class Command(BaseCommand):
         grupo = parser.add_mutually_exclusive_group(required=True)
         grupo.add_argument("--modulos", help="Claves opcionales separadas por comas.")
         grupo.add_argument("--sin-opcionales", action="store_true")
+        grupo.add_argument("--iniciales", action="store_true", help="Opcionales iniciales de esta sucursal.")
 
     def handle(self, *args, **options):
         try:
@@ -22,7 +23,9 @@ class Command(BaseCommand):
             raise CommandError("La sucursal configurada no está aprovisionada.") from exc
 
         seleccion = []
-        if not options["sin_opcionales"]:
+        if options["iniciales"]:
+            seleccion = modulos_iniciales(sucursal.clave)
+        elif not options["sin_opcionales"]:
             seleccion = [
                 item.strip() for item in (options["modulos"] or "").split(",")
             ]

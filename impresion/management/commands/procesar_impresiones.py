@@ -2,9 +2,11 @@ import time
 
 from django.core.management.base import BaseCommand
 from django.db import OperationalError, connection
+from django.utils import timezone
 
 from impresion.models import TrabajoImpresion
 from impresion.services import procesar_trabajo, reclamar_siguiente
+from soporte.models import LatidoServicio
 
 
 class Command(BaseCommand):
@@ -15,8 +17,15 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         self.stdout.write("Servicio de impresión listo.")
+        ultimo_latido = 0.0
         while True:
             try:
+                ahora = time.monotonic()
+                if ahora - ultimo_latido >= 10:
+                    LatidoServicio.objects.update_or_create(
+                        nombre="impresion", defaults={"ultimo_en": timezone.now()}
+                    )
+                    ultimo_latido = ahora
                 trabajo = reclamar_siguiente()
                 if trabajo:
                     procesar_trabajo(trabajo)

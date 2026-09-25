@@ -1,0 +1,21 @@
+{
+  "version": "1.0",
+  "request_id": "9feb638f-7aaf-4552-93e6-95c7a10414b8",
+  "branch": {"id": "e1d9a253-7b96-4c32-8376-00fb8f6d8bdb", "code": "ARBOLEDAS", "name": "Arboledas/Matriz"},
+  "edge": {"id": "98b921e5-7c88-4546-b8c9-1e7167c2a0cb", "label": "EDGE-ARB-01"},
+  "modules": ["catalogo", "domicilios", "impresion", "pedidos_programados", "pedidos_sucursales", "pos", "reparto", "respaldos"],
+  "credentials": {
+    "ingest": {
+      "token": "tcys_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "credential_id": "31ecdf51-4681-46d2-80ed-2eb941df5f91",
+      "scopes": ["sales:v2:write", "customers:v2:write", "terminals:v1:write"],
+      "expires_at": "2027-03-24T00:00:00Z"
+    },
+    "catalog": {
+      "token": "tcys_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "credential_id": "5a8a92ae-aa62-4e4e-aee8-eabcc0b4d125",
+      "scopes": ["catalog:v2:read", "catalog:v2:ack"],
+      "expires_at": "2027-03-24T00:00:00Z"
+    }
+  }
+}

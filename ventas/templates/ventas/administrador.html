@@ -72,9 +72,6 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
       <button class="rail-item" data-panel="sucursales" type="button"{% if not modulos.pedidos_sucursales %} disabled title="Módulo no habilitado"{% endif %}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h18v12H3zM2 5h20l-2 4H4zM6 21v-7h5v7M15 13h3v4h-3M4 9c1.3 2 2.7 2 4 0 1.3 2 2.7 2 4 0 1.3 2 2.7 2 4 0 1.3 2 2.7 2 4 0"/></svg><span>Sucursales</span>
       </button>
-      <button class="rail-item" data-panel="configuracion-tecnica" data-permiso-admin="gestionar_configuracion_tecnica" type="button" hidden>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></svg><span>Técnica</span>
-      </button>
     </nav>
 
     <main class="admin-main" id="administrador-app" aria-busy="false">
@@ -160,7 +157,7 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
             <form id="form-usuario" class="formulario-admin">
               <input id="usuario-id" type="hidden">
               <label>Nombre<input id="usuario-nombre" maxlength="100" autocomplete="off" required></label>
-              <label>Función<select id="usuario-tipo" required><option value="mesero">Mesero</option><option value="repartidor">Repartidor</option><option value="elevado">Elevado</option><option id="usuario-tipo-encargado" value="encargado" hidden disabled>Operador principal</option></select></label>
+              <label>Función<select id="usuario-tipo" required><option value="mesero">Mesero</option><option value="repartidor">Repartidor</option><option value="elevado">Elevado</option><option id="usuario-tipo-protegido" value="dueno" hidden disabled>Dueño de sucursal</option></select></label>
               <p class="ayuda-campo">Elevado permite operar el Administrador; la gestión de personal, la clave maestra y los folios siguen reservados al administrador maestro.</p>
               <label>Código de 4 dígitos<input id="usuario-clave" class="pin-enmascarado" type="text" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" autocapitalize="off" spellcheck="false" required></label>
               <label class="casilla"><input id="usuario-activo" type="checkbox" checked><span>Usuario activo</span></label>
@@ -346,82 +343,6 @@ FINISH: reviewed in Chrome at 1440×900 and 1024×768 on 2026-09-03; no horizont
         </section>
       </section>
 
-      <section class="admin-panel panel-configuracion-tecnica" data-admin-panel="configuracion-tecnica" data-permiso-admin="gestionar_configuracion_tecnica" hidden>
-        <header class="panel-titulo">
-          <div>
-            <h1>Configuración técnica</h1>
-            <p>Asigna las impresoras de caja, cocina y barra a cada terminal. Esta sección sólo está disponible con la clave maestra.</p>
-          </div>
-          <button class="boton secundario" id="actualizar-configuraciones-impresion" type="button">Actualizar rutas</button>
-        </header>
-
-        <div class="configuracion-tecnica-layout">
-          <section class="hoja hoja-rutas-impresion" aria-labelledby="rutas-impresion-titulo">
-            <header class="hoja-titulo">
-              <div>
-                <h2 id="rutas-impresion-titulo">Rutas por terminal</h2>
-                <p>Una terminal inactiva o sin IP para un destino usa la ruta general instalada.</p>
-              </div>
-              <button class="boton mini" id="nueva-configuracion-impresion" type="button">Nueva terminal</button>
-            </header>
-            <p id="estado-configuraciones-impresion" class="estado-configuraciones" role="status" aria-live="polite">Abre esta sección para consultar las rutas.</p>
-            <div id="lista-configuraciones-impresion" class="lista-configuraciones-impresion" aria-live="polite"></div>
-          </section>
-
-          <section class="hoja hoja-formulario-ruta" aria-labelledby="titulo-form-configuracion-impresion">
-            <header class="hoja-titulo">
-              <div>
-                <h2 id="titulo-form-configuracion-impresion">Nueva terminal</h2>
-                <p>Los cambios afectan trabajos nuevos; cada impresión ya encolada conserva su destino original.</p>
-              </div>
-            </header>
-            <div class="device-actual" aria-label="Identificador de esta terminal">
-              <span>Esta terminal</span>
-              <code id="device-id-actual"></code>
-              <button class="boton mini" id="usar-device-id-actual" type="button">Usar este ID</button>
-            </div>
-            <form id="form-configuracion-impresion" class="formulario-admin formulario-configuracion-impresion">
-              <input id="configuracion-impresion-id" type="hidden">
-              <div class="configuracion-identidad-grid">
-                <label for="configuracion-impresion-nombre">Nombre de la terminal
-                  <input id="configuracion-impresion-nombre" type="text" maxlength="100" autocomplete="off" required>
-                </label>
-                <label for="configuracion-impresion-device-id">Device ID
-                  <input id="configuracion-impresion-device-id" type="text" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]{0,127}" aria-describedby="ayuda-device-id" autocomplete="off" autocapitalize="off" spellcheck="false" required>
-                </label>
-              </div>
-              <p id="ayuda-device-id" class="ayuda-campo">Debe coincidir exactamente con el ID guardado en el dispositivo que envía los trabajos.</p>
-              <fieldset class="configuracion-destinos">
-                <legend>Direcciones IP de impresión</legend>
-                <label for="configuracion-impresion-host-caja">Caja
-                  <input id="configuracion-impresion-host-caja" type="text" maxlength="45" inputmode="text" placeholder="192.168.1.20" autocomplete="off" autocapitalize="off" spellcheck="false">
-                </label>
-                <label for="configuracion-impresion-host-cocina">Cocina
-                  <input id="configuracion-impresion-host-cocina" type="text" maxlength="45" inputmode="text" placeholder="192.168.1.21" autocomplete="off" autocapitalize="off" spellcheck="false">
-                </label>
-                <label for="configuracion-impresion-host-barra">Barra
-                  <input id="configuracion-impresion-host-barra" type="text" maxlength="45" inputmode="text" placeholder="192.168.1.22" autocomplete="off" autocapitalize="off" spellcheck="false">
-                </label>
-              </fieldset>
-              <div class="configuracion-puerto-grid">
-                <label for="configuracion-impresion-puerto">Puerto
-                  <input id="configuracion-impresion-puerto" type="number" min="1" max="65535" step="1" inputmode="numeric" value="9100" required>
-                </label>
-                <label class="casilla" for="configuracion-impresion-activa">
-                  <input id="configuracion-impresion-activa" type="checkbox" checked>
-                  <span>Ruta activa</span>
-                </label>
-              </div>
-              <p class="ayuda-campo">Deja una IP vacía para conservar la ruta general de ese destino. No escribas protocolos, rutas ni puertos dentro de la IP.</p>
-              <div class="configuracion-acciones">
-                <button class="boton primario" id="guardar-configuracion-impresion" type="submit">Guardar ruta</button>
-                <button class="boton secundario" id="cancelar-configuracion-impresion" type="button" hidden>Cancelar edición</button>
-                <button class="boton peligro" id="desactivar-configuracion-impresion" type="button" hidden>Desactivar ruta</button>
-              </div>
-            </form>
-          </section>
-        </div>
-      </section>
     </main>
   </div>
 

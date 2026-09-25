@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Production 1.0 enrollment claim",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "expected_branch_id", "expected_edge_id", "request_id"],
+  "properties": {
+    "code": {"type": "string", "pattern": "^tcys-enroll-v1_[A-Za-z0-9_-]{43}$", "minLength": 58, "maxLength": 58},
+    "expected_branch_id": {"type": "string", "format": "uuid"},
+    "expected_edge_id": {"type": "string", "format": "uuid"},
+    "request_id": {"type": "string", "format": "uuid"}
+  }
+}

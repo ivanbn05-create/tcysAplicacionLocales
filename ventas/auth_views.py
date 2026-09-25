@@ -12,6 +12,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_http_methods, require_POST
 
+from personas.capacidades import Capacidad, perfil_tiene_capacidad, usuario_es_soporte_tecnico
 from personas.models import UsuarioPOS
 
 
@@ -107,13 +108,20 @@ def login_view(request):
             response["Retry-After"] = str(lockout_seconds)
         return response
 
-    if not user.is_superuser and not UsuarioPOS.objects.filter(
-        cuenta=user,
-        activo=True,
-        sucursal__activa=True,
-        sucursal__clave=settings.SUCURSAL_CLAVE,
-    ).exists():
-        context["error"] = "La cuenta no tiene un perfil POS activo en esta sucursal."
+    perfil = (
+        UsuarioPOS.objects.select_related("rol")
+        .filter(
+            cuenta=user,
+            activo=True,
+            sucursal__activa=True,
+            sucursal__clave=settings.SUCURSAL_CLAVE,
+        )
+        .first()
+    )
+    tiene_perfil = perfil_tiene_capacidad(perfil, Capacidad.VENTAS)
+    es_soporte = usuario_es_soporte_tecnico(user)
+    if not tiene_perfil and not es_soporte:
+        context["error"] = "La cuenta no tiene acceso a Ventas en esta sucursal."
         return render(request, "ventas/login.html", context, status=403)
 
     # Una autenticación válida rehabilita esa cuenta/dispositivo, pero no borra
@@ -121,6 +129,8 @@ def login_view(request):
     # reiniciar un ataque de pulverización de usuarios).
     cache.delete(user_key)
     auth_login(request, user)
+    if es_soporte and not tiene_perfil and next_url == reverse("ventas:inicio"):
+        return redirect("/soporte/")
     return redirect(next_url)
 
 

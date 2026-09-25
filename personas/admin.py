@@ -11,14 +11,8 @@ class SucursalAdmin(admin.ModelAdmin):
 
 @admin.register(Rol)
 class RolAdmin(admin.ModelAdmin):
-    list_display = (
-        "nombre",
-        "sucursal",
-        "puede_cobrar",
-        "puede_reimprimir",
-        "puede_cancelar",
-        "puede_sincronizar",
-    )
+    list_display = ("nombre", "sucursal", "tipo", "capacidades")
+    fields = ("sucursal", "nombre", "tipo", "capacidades")
 
 
 @admin.register(UsuarioPOS)

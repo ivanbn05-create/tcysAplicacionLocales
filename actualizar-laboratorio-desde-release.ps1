@@ -21,6 +21,10 @@ param(
     [string]$WorkspaceRoot,
     [string]$VerifierScript = (Join-Path $PSScriptRoot 'herramientas\release_servidor.py'),
     [string]$VerifierPython,
+    [string]$SignaturePath,
+    [string]$TrustStorePath = 'C:\ProgramData\LosTocayosPOS\release-trust.json',
+    [string]$SignatureVerifierPath,
+    [string]$TrustedVerifierSha256,
     [switch]$PrepareOnly
 )
 
@@ -94,13 +98,53 @@ function Assert-NoReparseTree {
     }
 }
 
+function Assert-PrivilegedParent {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $acl = Get-Acl -LiteralPath $Path
+    foreach ($rule in @($acl.Access)) {
+        if (($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
+        try { $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+            catch { $sid = [string]$rule.IdentityReference.Value }
+        $dangerous = [Security.AccessControl.FileSystemRights]::Delete -bor
+            [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+            [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+            [Security.AccessControl.FileSystemRights]::TakeOwnership
+        if ($Path.TrimEnd('\') -ne [IO.Path]::GetPathRoot($Path).TrimEnd('\')) {
+            $dangerous = $dangerous -bor [Security.AccessControl.FileSystemRights]::WriteData -bor
+                [Security.AccessControl.FileSystemRights]::AppendData
+        }
+        if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+            $sid -notin @('S-1-5-18', 'S-1-5-32-544', 'S-1-3-0') -and
+            -not $sid.StartsWith('S-1-5-80-') -and
+            (($rule.FileSystemRights -band $dangerous) -ne 0)) {
+            throw 'El padre de actualización permite escritura a otra identidad.'
+        }
+    }
+}
+function Assert-PrivateWorkspace {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $acl = Get-Acl -LiteralPath $Path
+    if (-not $acl.AreAccessRulesProtected -or
+        $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin @('S-1-5-18', 'S-1-5-32-544')) {
+        throw 'Workspace de actualización no protegido; usa una carpeta nueva privada.'
+    }
+    foreach ($rule in @($acl.Access)) {
+        if (($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
+        try { $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+            catch { $sid = [string]$rule.IdentityReference.Value }
+        if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+            $sid -notin @('S-1-5-18', 'S-1-5-32-544')) {
+            throw 'Workspace de actualización permite acceso ajeno.'
+        }
+    }
+}
+
 function New-PrivateDirectory {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     if (Test-Path -LiteralPath $Path) {
         throw "La carpeta privada ya existe: $Path"
     }
-    New-Item -ItemType Directory -Path $Path | Out-Null
     $acl = New-Object Security.AccessControl.DirectorySecurity
     $acl.SetAccessRuleProtection($true, $false)
     $adminSid = New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
@@ -116,7 +160,7 @@ function New-PrivateDirectory {
         )
         [void]$acl.AddAccessRule($rule)
     }
-    Set-Acl -LiteralPath $Path -AclObject $acl
+    [void][IO.Directory]::CreateDirectory($Path, $acl)
 
     $verified = Get-Acl -LiteralPath $Path
     if (-not $verified.AreAccessRulesProtected) {
@@ -496,6 +540,39 @@ $archive = Resolve-AbsoluteLiteralPath -Path $ArchivePath -ExpectedType Leaf
 $manifest = Resolve-AbsoluteLiteralPath -Path $ManifestPath -ExpectedType Leaf
 $checksum = Resolve-AbsoluteLiteralPath -Path $ChecksumPath -ExpectedType Leaf
 $verifier = Resolve-AbsoluteLiteralPath -Path $VerifierScript -ExpectedType Leaf
+$installedVersionPath = Join-Path $installation 'VERSION'
+if (-not (Test-Path -LiteralPath $installedVersionPath -PathType Leaf)) {
+    throw 'La instalación anterior no declara VERSION.'
+}
+$installedVersion = (Get-Content -LiteralPath $installedVersionPath -Raw).Trim()
+$signatureRequired = (
+    $ExpectedVersion -match '^[1-9][0-9]*[.]' -or
+    $installedVersion -match '^[1-9][0-9]*[.]'
+)
+if ($signatureRequired) {
+    if ([string]::IsNullOrWhiteSpace($SignaturePath)) {
+        throw 'Production 1.0 exige archivo de firma antes de actualizar.'
+    }
+    $signature = Resolve-AbsoluteLiteralPath -Path $SignaturePath -ExpectedType Leaf
+    $trustStore = Resolve-AbsoluteLiteralPath -Path $TrustStorePath -ExpectedType Leaf
+    if ($installedVersion -match '^[1-9][0-9]*[.]') {
+        if ($SignatureVerifierPath -or $TrustedVerifierSha256) {
+            throw 'Una instalación 1.x usa exclusivamente su verificador ya instalado.'
+        }
+        $signatureVerifier = Resolve-AbsoluteLiteralPath -Path (
+            Join-Path $installation 'herramientas\release_firma.ps1'
+        ) -ExpectedType Leaf
+    }
+    else {
+        if (-not $SignatureVerifierPath -or $TrustedVerifierSha256 -notmatch '^[a-fA-F0-9]{64}$') {
+            throw 'Transición 0.x a 1.x requiere verificador externo confiable y SHA-256 fijado.'
+        }
+        $signatureVerifier = Resolve-AbsoluteLiteralPath -Path $SignatureVerifierPath -ExpectedType Leaf
+        if ((Get-FileSha256Hex -Path $signatureVerifier) -cne $TrustedVerifierSha256.ToLowerInvariant()) {
+            throw 'El verificador externo de transición no coincide con su SHA-256 autorizado.'
+        }
+    }
+}
 if ([string]::IsNullOrWhiteSpace($VerifierPython)) {
     $VerifierPython = Join-Path $installation '.venv\Scripts\python.exe'
 }
@@ -517,7 +594,20 @@ if (-not ([IO.Path]::GetPathRoot($workspace)).Equals(
 )) {
     throw 'WorkspaceRoot debe estar en la misma unidad que InstallationRoot.'
 }
-foreach ($externalPath in @($archive, $manifest, $checksum, $verifier)) {
+$externalPaths = @($archive, $manifest, $checksum, $verifier)
+if ($signatureRequired) {
+    $externalPaths += @($signature, $trustStore)
+    Assert-SafePath -Path $signatureVerifier -Description 'Verificador de firma instalado'
+    if ($installedVersion -match '^[1-9][0-9]*[.]' -and
+        -not (Test-PathWithin -Candidate $signatureVerifier -Parent $installation)) {
+        throw 'El verificador de firma debe proceder de la instalación confiable.'
+    }
+    if ($installedVersion -match '^0[.]' -and
+        (Test-PathWithin -Candidate $signatureVerifier -Parent $installation)) {
+        throw 'El verificador externo de transición debe estar fuera de la instalación 0.x.'
+    }
+}
+foreach ($externalPath in $externalPaths) {
     Assert-SafePath -Path $externalPath -Description 'La ruta de verificación'
     if (Test-PathWithin -Candidate $externalPath -Parent $installation) {
         throw 'Los artefactos y el verificador deben residir fuera de la instalación reemplazada.'
@@ -539,7 +629,12 @@ $artifactSources = [ordered]@{
     checksum = $checksum
     verifier = $verifier
 }
+if ($signatureRequired) { $artifactSources.signature = $signature }
 $artifactHashes = @{}
+if ($signatureRequired) {
+    $trustedVerifierHash = Get-FileSha256Hex -Path $signatureVerifier
+    $trustStoreHash = Get-FileSha256Hex -Path $trustStore
+}
 foreach ($entry in $artifactSources.GetEnumerator()) {
     $artifactHashes[$entry.Key] = Get-FileSha256Hex -Path $entry.Value
 }
@@ -552,13 +647,25 @@ catch { throw 'El verificador no devolvió un resultado JSON válido.' }
 if ($verification.status -ne 'ok' -or [string]$verification.version -cne $ExpectedVersion) {
     throw 'La release verificada no coincide con ExpectedVersion.'
 }
+if ($signatureRequired) {
+    $windowsPowerShell = Resolve-AbsoluteLiteralPath -Path (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ExpectedType Leaf
+    & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File $signatureVerifier -Mode Verify -ArchivePath $archive -ManifestPath $manifest -ChecksumPath $checksum -SignaturePath $signature -TrustStorePath $trustStore -ExpectedVersion $ExpectedVersion
+    if ($LASTEXITCODE -ne 0) { throw 'La firma de publicador de la release no es valida.' }
+}
 foreach ($entry in $artifactSources.GetEnumerator()) {
     if ((Get-FileSha256Hex -Path $entry.Value) -cne $artifactHashes[$entry.Key]) {
         throw 'Un artefacto o el verificador cambió durante la verificación inicial.'
     }
 }
 
-New-Item -ItemType Directory -Path $workspace -Force | Out-Null
+Assert-PrivilegedParent -Path (Split-Path -Parent $installation)
+$workspaceParent = Split-Path -Parent $workspace
+if (-not (Test-Path -LiteralPath $workspaceParent -PathType Container)) {
+    throw 'El padre del workspace debe existir y estar protegido.'
+}
+Assert-PrivilegedParent -Path $workspaceParent
+if (-not (Test-Path -LiteralPath $workspace)) { New-PrivateDirectory -Path $workspace }
+Assert-PrivateWorkspace -Path $workspace
 $stamp = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
 $sealed = Join-Path $workspace ("sellada-$ExpectedVersion-$stamp")
 $staging = Join-Path $workspace ("stage-$ExpectedVersion-$stamp")
@@ -578,16 +685,23 @@ $sealedArchive = Join-Path $sealed (Split-Path -Leaf $archive)
 $sealedManifest = Join-Path $sealed (Split-Path -Leaf $manifest)
 $sealedChecksum = Join-Path $sealed (Split-Path -Leaf $checksum)
 $sealedVerifier = Join-Path $sealed (Split-Path -Leaf $verifier)
+if ($signatureRequired) {
+    $sealedSignature = Join-Path $sealed (Split-Path -Leaf $signature)
+}
 Copy-Item -LiteralPath $archive -Destination $sealedArchive
 Copy-Item -LiteralPath $manifest -Destination $sealedManifest
 Copy-Item -LiteralPath $checksum -Destination $sealedChecksum
 Copy-Item -LiteralPath $verifier -Destination $sealedVerifier
+if ($signatureRequired) {
+    Copy-Item -LiteralPath $signature -Destination $sealedSignature
+}
 $sealedArtifacts = [ordered]@{
     archive = $sealedArchive
     manifest = $sealedManifest
     checksum = $sealedChecksum
     verifier = $sealedVerifier
 }
+if ($signatureRequired) { $sealedArtifacts.signature = $sealedSignature }
 foreach ($entry in $sealedArtifacts.GetEnumerator()) {
     if ((Get-FileSha256Hex -Path $entry.Value) -cne $artifactHashes[$entry.Key]) {
         throw 'La copia privada no coincide con los artefactos verificados.'
@@ -598,6 +712,14 @@ $sealedVerificationOutput = @(
     & $verifierPythonPath $sealedVerifier verify --archive $sealedArchive --manifest $sealedManifest --checksum $sealedChecksum
 )
 if ($LASTEXITCODE -ne 0) { throw 'La copia privada de la release no superó la verificación.' }
+if ($signatureRequired) {
+    if ((Get-FileSha256Hex -Path $signatureVerifier) -cne $trustedVerifierHash -or
+        (Get-FileSha256Hex -Path $trustStore) -cne $trustStoreHash) {
+        throw 'El verificador instalado o el trust store cambiaron durante el staging.'
+    }
+    & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File $signatureVerifier -Mode Verify -ArchivePath $sealedArchive -ManifestPath $sealedManifest -ChecksumPath $sealedChecksum -SignaturePath $sealedSignature -TrustStorePath $trustStore -ExpectedVersion $ExpectedVersion
+    if ($LASTEXITCODE -ne 0) { throw 'La copia privada no conserva una firma valida.' }
+}
 try {
     $sealedVerification = ($sealedVerificationOutput -join [Environment]::NewLine) | ConvertFrom-Json
 }
@@ -667,9 +789,9 @@ try {
     $serviceStopped = $true
 
     # El respaldo completo mantiene código y estado previos. No se elimina al concluir.
-    Move-Item -LiteralPath $installation -Destination $backup
+    [IO.Directory]::Move($installation, $backup)
     $oldRootMoved = $true
-    Move-Item -LiteralPath $staging -Destination $installation
+    [IO.Directory]::Move($staging, $installation)
     $candidatePromoted = $true
     Copy-OperationalState `
         -SourceRoot $backup `
@@ -703,10 +825,10 @@ catch {
         Set-Location -LiteralPath $workspace
         if ($serviceStopped) { Stop-LabService }
         if ($candidatePromoted -and (Test-Path -LiteralPath $installation -PathType Container)) {
-            Move-Item -LiteralPath $installation -Destination $failed
+            [IO.Directory]::Move($installation, $failed)
         }
         if ($oldRootMoved -and (Test-Path -LiteralPath $backup -PathType Container)) {
-            Move-Item -LiteralPath $backup -Destination $installation
+            [IO.Directory]::Move($backup, $installation)
             Assert-ServiceTargetsInstallation -Root $installation
             $rootRestored = $true
         }

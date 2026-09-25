@@ -57,25 +57,29 @@ ENCABEZADOS_CATALOGO_HISTORICO = (
 RUTAS_REQUERIDAS = (
     ".env.example", "VERSION", "requirements.txt", "requirements-lock.txt",
     "manage.py", "servicio_windows.py", "instalar-servicio-lan.ps1",
-    "instalar-servidor.ps1", "actualizar-servidor.ps1",
+    "instalar-servidor.ps1", "instalar-universal.ps1",
+    "instalar-universal-desde-release.ps1", "actualizar-servidor.ps1",
     "actualizar-laboratorio-desde-release.ps1",
     "aprovisionar-sucursal.ps1", "reparar-permisos-servidor.ps1",
     "iniciar-servicio-lan.ps1", "verificar-servicio-lan.ps1",
     "respaldar-db-sqlite.ps1", "certs/prod-ca-2021.crt",
     RUTA_CATALOGO_HISTORICO,
-    "catalogo", "contracts", "herramientas", "impresion",
+    "catalogo", "contracts", "herramientas", "impresion", "soporte",
     "personas", "pos", "tests", "ventas",
 )
 ARCHIVOS_CONTRATO_REQUERIDOS = (
     ".env.example", "VERSION", "requirements.txt", "requirements-lock.txt",
     "manage.py", "servicio_windows.py", "instalar-servicio-lan.ps1",
-    "instalar-servidor.ps1", "actualizar-servidor.ps1",
+    "instalar-servidor.ps1", "instalar-universal.ps1",
+    "instalar-universal-desde-release.ps1", "actualizar-servidor.ps1",
     "actualizar-laboratorio-desde-release.ps1",
     "aprovisionar-sucursal.ps1", "reparar-permisos-servidor.ps1",
     "iniciar-servicio-lan.ps1", "verificar-servicio-lan.ps1",
     "respaldar-db-sqlite.ps1", "certs/prod-ca-2021.crt",
     RUTA_CATALOGO_HISTORICO,
-    "herramientas/validar_despliegue.py", "pos/settings.py",
+    "herramientas/validar_despliegue.py",
+    "herramientas/enrolamiento_edge.py", "herramientas/release_firma.ps1",
+    "pos/settings.py",
     "personas/identidad.py",
     "personas/management/commands/aprovisionar_sucursal.py",
     "personas/management/commands/inicializar_operacion_sucursal.py",
@@ -83,7 +87,7 @@ ARCHIVOS_CONTRATO_REQUERIDOS = (
 )
 PREFIJOS_CONTRATO_REQUERIDOS = (
     "catalogo/", "contracts/", "herramientas/", "impresion/", "personas/", "pos/",
-    "tests/", "ventas/",
+    "tests/", "ventas/", "soporte/",
 )
 RUTAS_OPCIONALES = (
     "README.md", "DESPLIEGUE_WINDOWS.md", "iniciar-local.ps1",
@@ -98,7 +102,7 @@ DIRECTORIOS_EXCLUIDOS = {
 }
 ARCHIVOS_SECRETOS = {
     ".coverage", ".env", "credentials.json", "id_dsa", "id_ecdsa",
-    "id_ed25519", "id_rsa", "secrets.json",
+    "id_ed25519", "id_rsa", "secrets.json", "publisher-private.xml",
 }
 SUFIJOS_EXCLUIDOS = (
     ".bak", ".cred", ".credentials", ".db", ".jks", ".key", ".log",
@@ -150,6 +154,20 @@ def _es_archivo_excluido(nombre: str) -> bool:
         or nombre.startswith(".env.")
         or nombre.endswith(SUFIJOS_EXCLUIDOS)
     )
+
+
+def _rechazar_claves_privadas_xml(origen: Path) -> None:
+    """No empaquetar ni tolerar una privada RSA XML copiada accidentalmente."""
+    for raiz, directorios, archivos in os.walk(origen, followlinks=False):
+        directorios[:] = [
+            nombre for nombre in directorios if not _es_directorio_excluido(nombre)
+        ]
+        for nombre in archivos:
+            if nombre.casefold() == "publisher-private.xml" or nombre.casefold().endswith("-private.xml"):
+                raise ErrorRelease(
+                    "Se detectó una clave privada XML dentro del árbol de release. "
+                    "Retírala y custódiala fuera del repositorio."
+                )
 
 
 def _validar_ruta_relativa(valor: str) -> str:
@@ -1216,6 +1234,7 @@ def crear_release(
     commit_resuelto, sucio = _resolver_git(origen, commit, rutas, permitir_sucio)
     epoch = _resolver_epoch(origen, commit_resuelto, source_date_epoch)
     _validar_lock_exacto(origen / "requirements-lock.txt")
+    _rechazar_claves_privadas_xml(origen)
     payload_fuente = _recopilar_payload(origen, rutas)
     _rechazar_payload_ignorado_git(origen, payload_fuente)
     payload = _agregar_wheelhouse(

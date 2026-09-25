@@ -1,0 +1,45 @@
+{
+  "version": "1.0",
+  "branches": [
+    {
+      "id": "e1d9a253-7b96-4c32-8376-00fb8f6d8bdb",
+      "code": "ARBOLEDAS",
+      "name": "Arboledas/Matriz",
+      "modules": ["pos", "catalogo", "impresion", "respaldos", "domicilios", "pedidos_programados", "reparto", "pedidos_sucursales"],
+      "pilot": true,
+      "pedidos_sucursal_id": null
+    },
+    {
+      "id": "c5eb4066-a82b-4d9e-abaa-968c8bde06ae",
+      "code": "AGUILAS",
+      "name": "Águilas",
+      "modules": ["pos", "catalogo", "impresion", "respaldos", "domicilios", "pedidos_programados", "reparto"],
+      "pilot": false,
+      "pedidos_sucursal_id": null
+    },
+    {
+      "id": "4a76b526-8081-4c68-8101-796a3b246451",
+      "code": "ESTANCIA",
+      "name": "Estancia",
+      "modules": ["pos", "catalogo", "impresion", "respaldos", "domicilios", "pedidos_programados", "reparto"],
+      "pilot": false,
+      "pedidos_sucursal_id": null
+    },
+    {
+      "id": "e3228ca5-77b3-4643-9d8b-1e81e89bea98",
+      "code": "PLAZA_DEL_SOL",
+      "name": "Plaza del Sol",
+      "modules": ["pos", "catalogo", "impresion", "respaldos", "domicilios", "pedidos_programados", "reparto"],
+      "pilot": false,
+      "pedidos_sucursal_id": null
+    },
+    {
+      "id": "22c91fd6-21dc-402d-ac68-3fcf6c6d9a47",
+      "code": "SANTA_ANITA",
+      "name": "Santa Anita",
+      "modules": ["pos", "catalogo", "impresion", "respaldos", "domicilios", "pedidos_programados", "reparto"],
+      "pilot": true,
+      "pedidos_sucursal_id": null
+    }
+  ]
+}

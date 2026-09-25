@@ -4,12 +4,16 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$configuracion = Join-Path $PSScriptRoot "servidor.txt"
+$configuracion = Join-Path $env:LOCALAPPDATA "LosTocayosPOS/servidor.txt"
+$configuracionAnterior = Join-Path $PSScriptRoot "servidor.txt"
 $actual = if (Test-Path -LiteralPath $configuracion) {
     (Get-Content -LiteralPath $configuracion -Raw).Trim()
 }
+elseif (Test-Path -LiteralPath $configuracionAnterior) {
+    (Get-Content -LiteralPath $configuracionAnterior -Raw).Trim()
+}
 else {
-    "http://192.168.0.30:8000"
+    ""
 }
 
 if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
@@ -64,6 +68,7 @@ else {
     }
 }
 
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $configuracion) | Out-Null
 Set-Content -LiteralPath $configuracion -Value $ServerUrl -Encoding ASCII
 Write-Host "Configuración guardada: $ServerUrl" -ForegroundColor Green
 Read-Host "Presiona Enter para cerrar"

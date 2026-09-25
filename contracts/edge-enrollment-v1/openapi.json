@@ -1,0 +1,46 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Los Tocayos · Enrolamiento Production 1.0",
+    "version": "1.0.0-candidate",
+    "description": "Servidor Central implementado tras feature flag; no habilitado en producción. Los ejemplos de tokens son sintéticos."
+  },
+  "servers": [{"url": "https://api-central.lostocayos-lostcys.com.mx", "description": "Subdominio propuesto; DNS/TLS sin activar"}],
+  "paths": {
+    "/api/v1/enrollment/claim/": {
+      "post": {
+        "operationId": "claimEnrollmentV1",
+        "summary": "Consumir código de enrolamiento una vez y recibir identidad y credenciales Central",
+        "x-contract-status": "implemented-private-gated",
+        "security": [],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "./schemas/claim-request.schema.json"}}}},
+        "responses": {
+          "201": {"description": "Código consumido; secretos entregados una sola vez", "headers": {"Cache-Control": {"schema": {"type": "string"}}}, "content": {"application/json": {"schema": {"$ref": "./schemas/claim-response.schema.json"}}}},
+          "401": {"description": "Código inválido", "content": {"application/json": {"schema": {"$ref": "./schemas/error.schema.json"}}}},
+          "409": {"description": "Código usado o identidad/Edge incompatible", "content": {"application/json": {"schema": {"$ref": "./schemas/error.schema.json"}}}},
+          "410": {"description": "Código expirado", "content": {"application/json": {"schema": {"$ref": "./schemas/error.schema.json"}}}},
+          "426": {"description": "HTTPS requerido", "content": {"application/json": {"schema": {"$ref": "./schemas/error.schema.json"}}}},
+          "429": {"description": "Intentos limitados", "content": {"application/json": {"schema": {"$ref": "./schemas/error.schema.json"}}}}
+        }
+      }
+    },
+    "/api/v1/edge/terminals/": {
+      "post": {
+        "operationId": "registerTerminalV1",
+        "summary": "Registrar terminal local bajo el Edge activo; la terminal nunca es otro Edge",
+        "x-contract-status": "implemented-private-gated",
+        "security": [{"CentralIngestBearer": []}],
+        "x-required-scope": "terminals:v1:write",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "./schemas/terminal-request.schema.json"}}}},
+        "responses": {
+          "201": {"description": "Terminal registrada", "content": {"application/json": {"schema": {"$ref": "./schemas/terminal-response.schema.json"}}}},
+          "200": {"description": "Registro idempotente de la misma terminal", "content": {"application/json": {"schema": {"$ref": "./schemas/terminal-response.schema.json"}}}},
+          "401": {"description": "Bearer inválido", "content": {"application/json": {"schema": {"$ref": "./schemas/error.schema.json"}}}},
+          "403": {"description": "Scope o identidad equivocados", "content": {"application/json": {"schema": {"$ref": "./schemas/error.schema.json"}}}},
+          "409": {"description": "UUID de terminal ya ligado a otro Edge", "content": {"application/json": {"schema": {"$ref": "./schemas/error.schema.json"}}}}
+        }
+      }
+    }
+  },
+  "components": {"securitySchemes": {"CentralIngestBearer": {"type": "http", "scheme": "bearer"}}}
+}

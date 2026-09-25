@@ -1,0 +1,146 @@
+{% load static %}
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Soporte local · Los Tocayos</title>
+  <link rel="stylesheet" href="{% static 'soporte/panel.css' %}?v={{ version }}">
+  <script src="{% static 'soporte/panel.js' %}?v={{ version }}" defer></script>
+</head>
+<body>
+  <header class="cabecera">
+    <div class="firma" aria-label="Los Tocayos"><span>LOS</span> <strong>TOCAYOS</strong><sup>®</sup></div>
+    <div class="cabecera-contexto">
+      <h1>Soporte local</h1>
+      <p>{{ sucursal.nombre }} · Edge {{ version }}</p>
+    </div>
+    <form method="post" action="{% url 'ventas:logout' %}" class="salir">
+      {% csrf_token %}
+      <span>{{ request.user.get_username }}</span>
+      <button type="submit">Cerrar sesión</button>
+    </form>
+  </header>
+
+  <nav class="navegacion" aria-label="Áreas de soporte">
+    <a href="#estado">Estado</a>
+    <a href="#impresoras">Impresoras</a>
+    <a href="#terminales">Terminales y rutas</a>
+    <a href="#cola">Cola</a>
+  </nav>
+
+  <main>
+    <div id="aviso" class="aviso" role="status" aria-live="polite" hidden></div>
+
+    <section id="estado" class="seccion" aria-labelledby="titulo-estado">
+      <header class="seccion-titulo">
+        <div><h2 id="titulo-estado">Estado del Edge</h2><p>Información local para decidir qué revisar primero.</p></div>
+        <button type="button" id="actualizar-estado" class="boton secundario">Actualizar estado</button>
+      </header>
+      <div class="estado-grid">
+        <dl id="resumen-edge" class="hoja datos">
+          <div><dt>Versión</dt><dd>Consultando…</dd></div>
+        </dl>
+        <dl id="resumen-servicios" class="hoja datos">
+          <div><dt>Servicios</dt><dd>Consultando…</dd></div>
+        </dl>
+        <dl id="resumen-sync" class="hoja datos">
+          <div><dt>Sincronización</dt><dd>Consultando…</dd></div>
+        </dl>
+      </div>
+      <div class="hoja validacion-fisica" aria-labelledby="titulo-validacion">
+        <div>
+          <h3 id="titulo-validacion">Prueba física de impresión</h3>
+          <strong id="validacion-estado" class="estado pendiente">Pendiente de validar</strong>
+          <p id="validacion-mensaje">La salud del Edge no confirma que el papel haya salido.</p>
+        </div>
+        <form id="form-validacion" class="formulario">
+          <label>Referencia de la prueba observada
+            <input id="validacion-nota" maxlength="240" minlength="8" placeholder="Ej. comanda de prueba en ambas impresoras" required>
+          </label>
+          <label class="casilla"><input id="validacion-confirmada" type="checkbox" required> Confirmo que observé papel físico correcto en los recursos asignados.</label>
+          <button type="submit" class="boton">Registrar prueba física</button>
+        </form>
+      </div>
+      <div class="hoja configuracion-edge">
+        <div>
+          <h3>Dirección anunciada a las terminales</h3>
+          <p>Esta URL se copia a los clientes. Para cambiar la IP de Windows, el puerto de escucha, TLS o los hosts admitidos se usa el instalador.</p>
+        </div>
+        <form id="form-edge" class="campos-en-linea">
+          <label>Hostname o IP LAN<input id="edge-host" name="host" autocomplete="off" maxlength="253" required></label>
+          <label>Puerto<input id="edge-puerto" name="puerto" inputmode="numeric" type="number" min="1" max="65535" required></label>
+          <label class="casilla"><input id="edge-https" name="usar_https" type="checkbox"> HTTPS</label>
+          <button type="submit" class="boton">Guardar dirección</button>
+        </form>
+        <p id="edge-url" class="dato-url">Sin dirección anunciada.</p>
+      </div>
+    </section>
+
+    <section id="impresoras" class="seccion" aria-labelledby="titulo-impresoras">
+      <header class="seccion-titulo">
+        <div><h2 id="titulo-impresoras">Impresoras</h2><p>Cada impresora es un recurso de red; su trabajo se decide en las rutas de las terminales.</p></div>
+        <button type="button" id="nueva-impresora" class="boton secundario">Nueva impresora</button>
+      </header>
+      <div class="maestro-detalle">
+        <div id="lista-impresoras" class="hoja lista" aria-live="polite"><p>Consultando impresoras…</p></div>
+        <form id="form-impresora" class="hoja formulario">
+          <h3 id="titulo-form-impresora">Registrar impresora</h3>
+          <input id="impresora-id" type="hidden">
+          <label>Nombre<input id="impresora-nombre" maxlength="100" required></label>
+          <label>IP LAN o hostname<input id="impresora-host" maxlength="253" autocomplete="off" required></label>
+          <label>Puerto TCP<input id="impresora-puerto" type="number" min="1" max="65535" value="9100" required></label>
+          <label>Descripción opcional<input id="impresora-descripcion" maxlength="240"></label>
+          <label class="casilla"><input id="impresora-activa" type="checkbox" checked> Activa</label>
+          <p class="ayuda">La prueba abre una conexión TCP y la cierra sin enviar datos ni imprimir.</p>
+          <div class="acciones"><button type="submit" class="boton">Guardar impresora</button><button type="button" id="cancelar-impresora" class="boton secundario">Limpiar</button></div>
+        </form>
+      </div>
+    </section>
+
+    <section id="terminales" class="seccion" aria-labelledby="titulo-terminales">
+      <header class="seccion-titulo">
+        <div><h2 id="titulo-terminales">Terminales y rutas</h2><p>Una impresora general atiende todos los trabajos; las excepciones por destino son opcionales.</p></div>
+        <button type="button" id="nueva-terminal" class="boton secundario">Nueva terminal</button>
+      </header>
+      <div class="maestro-detalle">
+        <div id="lista-terminales" class="hoja lista" aria-live="polite"><p>Consultando terminales…</p></div>
+        <div class="pila">
+          <form id="form-terminal" class="hoja formulario">
+            <h3 id="titulo-form-terminal">Registrar terminal</h3>
+            <input id="terminal-id" type="hidden">
+            <label>Nombre visible<input id="terminal-nombre" maxlength="100" required></label>
+            <label>ID del dispositivo<input id="terminal-device-id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]{0,127}" required></label>
+            <label class="casilla"><input id="terminal-activa" type="checkbox" checked> Activa</label>
+            <p class="ayuda">El ID debe coincidir con el cliente Windows o Android. Cambiarlo aquí no cambia la identidad guardada en ese dispositivo.</p>
+            <div class="acciones"><button type="submit" class="boton">Guardar terminal</button><button type="button" id="cancelar-terminal" class="boton secundario">Limpiar</button></div>
+          </form>
+          <form id="form-rutas" class="hoja formulario" hidden>
+            <h3>Rutas de <span id="rutas-terminal-nombre"></span></h3>
+            <p class="ayuda">Los trabajos ya encolados conservan su dirección original. Una impresora desactivada detiene los nuevos trabajos asignados a ella.</p>
+            <label>Impresora general<select id="ruta-todos"></select></label>
+            <div class="rutas-especiales">
+              <label>Cuenta y reportes<select id="ruta-caja"></select></label>
+              <label>Comanda cocina<select id="ruta-cocina"></select></label>
+              <label>Comanda barra<select id="ruta-barra"></select></label>
+            </div>
+            <button type="submit" class="boton">Guardar rutas</button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <section id="cola" class="seccion" aria-labelledby="titulo-cola">
+      <header class="seccion-titulo">
+        <div><h2 id="titulo-cola">Cola de impresión</h2><p>Revisa el papel físico antes de reintentar: un corte de red puede haber entregado el trabajo.</p></div>
+        <button type="button" id="actualizar-cola" class="boton secundario">Actualizar cola</button>
+      </header>
+      <div class="hoja tabla-scroll"><table>
+        <thead><tr><th>Creado</th><th>Trabajo</th><th>Terminal</th><th>Impresora</th><th>Estado</th><th>Acción</th></tr></thead>
+        <tbody id="lista-cola"><tr><td colspan="6">Consultando cola…</td></tr></tbody>
+      </table></div>
+    </section>
+  </main>
+</body>
+</html>

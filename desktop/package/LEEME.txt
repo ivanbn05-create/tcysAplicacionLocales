@@ -3,11 +3,10 @@ LOS TOCAYOS POS - CLIENTE PARA WINDOWS
 
 1. La computadora principal debe estar encendida y ejecutar el servidor de Los Tocayos.
 2. Esta computadora debe estar conectada a la misma red LAN.
-3. Ejecuta Instalar-LosTocayosPOS.cmd y confirma la dirección del servidor.
+3. Ejecuta el instalador verificador EXE de la release y confirma la dirección del servidor.
 4. Abre "Los Tocayos POS" desde el escritorio.
 
-Dirección inicial de este paquete:
-http://192.168.0.30:8000
+Este paquete es universal; la dirección del Edge se indica al instalarlo.
 
 La dirección puede cambiarse después desde:
 Menú Inicio > Los Tocayos POS > Configurar servidor
@@ -16,6 +15,7 @@ La dirección debe ser sólo el origen HTTP(S), sin usuario, contraseña, ruta, 
 ni fragmento. HTTPS es el perfil recomendado. Para guardar HTTP, el instalador pedirá
 escribir exactamente "HTTP LAN": HTTP no cifra sesiones, credenciales ni pedidos.
 
+La identidad de terminal permanece en %LOCALAPPDATA%\LosTocayosPOS\terminal-id.txt durante actualizaciones.
 El cliente no contiene la base de datos ni imprime directamente. Las ventas y las
 impresiones se procesan en la computadora principal de la sucursal.
 
@@ -26,3 +26,6 @@ REQUISITOS
 - Conexión LAN con el servidor.
 
 Windows puede mostrar una advertencia porque esta versión aún no tiene firma digital.
+
+El instalador verificador exige un trust store de publicador preprovisionado fuera del paquete.
+No ejecutes el script de instalación extraído directamente del ZIP.

@@ -24,6 +24,9 @@ param(
     [string]$SucursalClave,
     [string]$SucursalNombre,
     [string]$SucursalId,
+    [string]$EnrollmentReceiptPath,
+    [string]$CentralApiBaseUrl,
+    [string]$CentralApiCaBundle,
     [switch]$InicializarDatosArboledas,
     [string[]]$ModulosOpcionales,
     [string]$AllowedHosts = "localhost,127.0.0.1,192.168.0.30",
@@ -681,7 +684,32 @@ function Test-MachinePythonPath {
         if ($userRoot -and $fullPath.StartsWith(
             $userRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { return $false }
     }
-    return Test-Path -LiteralPath $fullPath -PathType Leaf
+    if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) { return $false }
+    $cursor = $fullPath
+    while ($cursor) {
+        $acl = Get-Acl -LiteralPath $cursor
+        foreach ($rule in @($acl.Access)) {
+        if (($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
+            try { $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
+            catch { $sid = [string]$rule.IdentityReference.Value }
+            $write = [Security.AccessControl.FileSystemRights]::Delete -bor
+                [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+                [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+                [Security.AccessControl.FileSystemRights]::TakeOwnership
+            if ($cursor.TrimEnd('\') -ne [IO.Path]::GetPathRoot($cursor).TrimEnd('\')) {
+                $write = $write -bor [Security.AccessControl.FileSystemRights]::WriteData -bor
+                    [Security.AccessControl.FileSystemRights]::AppendData
+            }
+            if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+                $sid -notin @('S-1-5-18', 'S-1-5-32-544', 'S-1-3-0') -and
+                -not $sid.StartsWith('S-1-5-80-') -and
+                (($rule.FileSystemRights -band $write) -ne 0)) { return $false }
+        }
+        $parent = Split-Path -Parent $cursor
+        if (-not $parent -or $parent -eq $cursor) { break }
+        $cursor = $parent
+    }
+    return $true
 }
 
 function Get-VirtualEnvironmentBasePython {
@@ -702,13 +730,8 @@ function Get-VirtualEnvironmentBasePython {
 }
 
 function Get-MachinePython {
-    $candidates = @()
-    if (Get-Command py -ErrorAction SilentlyContinue) {
-        $candidates += @(& py -0p 2>$null | ForEach-Object {
-            if ($_ -match '([A-Za-z]:\\.+?python(?:3)?\.exe)\s*$') { $Matches[1] }
-        })
-    }
-    $candidates += @(Get-ChildItem 'HKLM:\SOFTWARE\Python\PythonCore\*\InstallPath' -ErrorAction SilentlyContinue |
+    # Nunca ejecutar un launcher resuelto por PATH dentro del instalador elevado.
+    $candidates = @(Get-ChildItem 'HKLM:\SOFTWARE\Python\PythonCore\*\InstallPath' -ErrorAction SilentlyContinue |
         ForEach-Object { $_.GetValue('ExecutablePath') })
     foreach ($candidate in ($candidates | Select-Object -Unique)) {
         if (-not (Test-MachinePythonPath -Path $candidate)) { continue }
@@ -719,7 +742,7 @@ function Get-MachinePython {
             }
         } catch { continue }
     }
-    throw "No hay un Python 3.13 de 64 bits de maquina ejecutable. Instala Python 3.13 de 64 bits para todos los usuarios y comprueba py -0p. No se han cambiado ACL ni detenido el servicio."
+    throw "No hay un Python 3.13 de 64 bits de maquina ejecutable. Instala Python 3.13 de 64 bits para todos los usuarios y verifica el registro HKLM. No se han cambiado ACL ni detenido el servicio."
 }
 
 function Restore-AdministrativeAccess {
@@ -1512,6 +1535,106 @@ if (-not $dependenciasFijadasPresentes -and
 $existente = Get-Service -Name $nombreServicio -ErrorAction SilentlyContinue
 $envHashOriginal = $null
 $dbEnginePreflight = $null
+$enrollmentReceipt = $null
+$releaseVersion = (Get-Content -LiteralPath (Join-Path $raiz "VERSION") -Raw).Trim()
+if ($Modo -eq "Instalar" -and $releaseVersion -match '^1[.]' -and
+    [string]::IsNullOrWhiteSpace($EnrollmentReceiptPath) -and
+    -not $AllowUnverifiedDevelopmentTree) {
+    throw "Production 1.0 requiere el instalador universal y un recibo Central."
+}
+if ($Modo -eq "Instalar" -and -not [string]::IsNullOrWhiteSpace($EnrollmentReceiptPath)) {
+    if ($PSBoundParameters.ContainsKey("SucursalClave") -or
+        $PSBoundParameters.ContainsKey("SucursalNombre") -or
+        $PSBoundParameters.ContainsKey("SucursalId") -or
+        $PSBoundParameters.ContainsKey("ModulosOpcionales") -or
+        $InicializarDatosArboledas) {
+        throw "El enrolamiento asigna identidad y modulos; no se aceptan selecciones manuales."
+    }
+    if (-not [IO.Path]::IsPathRooted($EnrollmentReceiptPath) -or
+        -not (Test-Path -LiteralPath $EnrollmentReceiptPath -PathType Leaf)) {
+        throw "El recibo de enrolamiento debe ser un archivo absoluto y existente."
+    }
+    $receiptItem = Get-Item -LiteralPath $EnrollmentReceiptPath -Force
+    if (($receiptItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $receiptItem.Length -gt 65536) {
+        throw "El recibo de enrolamiento no es un archivo ordinario acotado."
+    }
+    $receiptDirAcl = Get-Acl -LiteralPath (Split-Path -Parent $receiptItem.FullName)
+    if (-not $receiptDirAcl.AreAccessRulesProtected) {
+        throw "El recibo debe ubicarse en una carpeta privada sin herencia ACL."
+    }
+    foreach ($rule in @($receiptDirAcl.Access)) {
+        $sid = $rule.IdentityReference.Translate(
+            [Security.Principal.SecurityIdentifier]
+        ).Value
+        if ($sid -notin @('S-1-5-18', 'S-1-5-32-544')) {
+            throw "La carpeta del recibo permite acceso ajeno a SYSTEM/Administradores."
+        }
+    }
+    try {
+        $enrollmentReceipt = Get-Content -LiteralPath $receiptItem.FullName -Raw -Encoding UTF8 |
+            ConvertFrom-Json
+    }
+    catch {
+        throw "El recibo de enrolamiento no es JSON valido."
+    }
+    if ($enrollmentReceipt.schema_version -ne 1 -or
+        @($enrollmentReceipt.PSObject.Properties.Name | Sort-Object) -join ',' -cne
+        'branch,credentials,edge,modules,request_id,schema_version') {
+        throw "El recibo no cumple el contrato de enrolamiento v1."
+    }
+    $branchGuid = [Guid]::Empty
+    $edgeGuid = [Guid]::Empty
+    $requestGuid = [Guid]::Empty
+    if (-not [Guid]::TryParse([string]$enrollmentReceipt.branch.id, [ref]$branchGuid) -or
+        -not [Guid]::TryParse([string]$enrollmentReceipt.edge.id, [ref]$edgeGuid) -or
+        -not [Guid]::TryParse([string]$enrollmentReceipt.request_id, [ref]$requestGuid) -or
+        $branchGuid -eq [Guid]::Empty -or $edgeGuid -eq [Guid]::Empty -or
+        $requestGuid -eq [Guid]::Empty -or $branchGuid -eq $edgeGuid) {
+        throw "El recibo contiene UUID invalidos o reutilizados."
+    }
+    $SucursalClave = ConvertTo-SucursalClave -Value $enrollmentReceipt.branch.code
+    if ($SucursalClave -notin @('ARBOLEDAS', 'AGUILAS', 'ESTANCIA', 'PLAZA_DEL_SOL', 'SANTA_ANITA')) {
+        throw "La sucursal enrolada no esta en Production 1.0."
+    }
+    $SucursalNombre = ConvertTo-SucursalNombre -Value $enrollmentReceipt.branch.name
+    $SucursalId = $branchGuid.ToString()
+    $mandatoryModules = @('pos', 'catalogo', 'impresion', 'respaldos',
+        'domicilios', 'pedidos_programados', 'reparto')
+    $enrolledModules = @($enrollmentReceipt.modules | ForEach-Object { [string]$_ })
+    $unknownModules = @($enrolledModules | Where-Object {
+        $_ -notin ($mandatoryModules + @('pedidos_sucursales'))
+    })
+    foreach ($mandatoryModule in $mandatoryModules) {
+        if ($mandatoryModule -notin $enrolledModules) {
+            throw "El recibo omite un modulo obligatorio."
+        }
+    }
+    if ($unknownModules.Count -gt 0 -or
+        @($enrolledModules | Select-Object -Unique).Count -ne $enrolledModules.Count -or
+        ('pedidos_sucursales' -in $enrolledModules -and $SucursalClave -ne 'ARBOLEDAS')) {
+        throw "El recibo contiene modulos no autorizados."
+    }
+    $ingestToken = [string]$enrollmentReceipt.credentials.central_ingest_token
+    $catalogToken = [string]$enrollmentReceipt.credentials.central_catalog_token
+    if ($ingestToken -cnotmatch '^[\x21-\x7e]{32,512}$' -or
+        $catalogToken -cnotmatch '^[\x21-\x7e]{32,512}$' -or
+        $ingestToken -ceq $catalogToken) {
+        throw "El recibo no contiene credenciales independientes validas."
+    }
+    $centralUri = $null
+    if (-not [Uri]::TryCreate($CentralApiBaseUrl, [UriKind]::Absolute, [ref]$centralUri) -or
+        $centralUri.Scheme -ne 'https' -or
+        [string]::IsNullOrWhiteSpace($centralUri.Host) -or
+        $centralUri.UserInfo -or $centralUri.Query -or $centralUri.Fragment -or
+        $centralUri.AbsolutePath -ne '/') {
+        throw "El enrolamiento requiere un origen Central HTTPS concreto."
+    }
+    if ($CentralApiCaBundle -and
+        -not (Test-Path -LiteralPath $CentralApiCaBundle -PathType Leaf)) {
+        throw "La CA configurada para Central no existe."
+    }
+}
 if ($Modo -eq "Instalar") {
     $dbEnginePreflight = ConvertFrom-DotEnvDatabaseEngine (
         Get-DotEnvValue -Path $entorno -Name "DB_ENGINE"
@@ -1570,7 +1693,8 @@ else {
     }
     Assert-ServiceBelongsToProject -ServiceName $nombreServicio
     foreach ($parametroProhibido in @(
-        "SucursalClave", "SucursalNombre", "SucursalId", "InicializarDatosArboledas", "SecretKey",
+        "SucursalClave", "SucursalNombre", "SucursalId", "EnrollmentReceiptPath",
+        "CentralApiBaseUrl", "CentralApiCaBundle", "InicializarDatosArboledas", "SecretKey",
         "AllowedHosts", "Port", "Threads", "ListenAddress", "TrustedProxy", "Https",
         "AllowInsecureHttpLan", "PrintBackend", "PrinterCajaHost", "PrinterCocinaHost",
         "PrinterBarraHost", "PrinterPort", "VpsConsolidacionUrl", "VpsConsolidacionToken",
@@ -1797,6 +1921,24 @@ if ($Modo -eq "Instalar") {
     Set-DotEnvValue -Path $entorno -Name "WAITRESS_TRUSTED_PROXY" -Value $TrustedProxy
     Set-DotEnvValue -Path $entorno -Name "DB_ENGINE" -Value $dbEnginePreflight
     Set-DotEnvValue -Path $entorno -Name "SUCURSAL_CLAVE" -Value $SucursalClave
+    if ($enrollmentReceipt) {
+        Set-DotEnvValue -Path $entorno -Name "SUCURSAL_ID" -Value $SucursalId
+        Set-DotEnvValue -Path $entorno -Name "SUCURSAL_NOMBRE" -Value $SucursalNombre
+        Set-DotEnvValue -Path $entorno -Name "CENTRAL_API_BASE_URL" -Value $CentralApiBaseUrl
+        Set-DotEnvValue -Path $entorno -Name "CENTRAL_API_CA_BUNDLE" -Value $CentralApiCaBundle
+        Set-DotEnvValue -Path $entorno -Name "CENTRAL_BRANCH_ID" -Value $SucursalId
+        Set-DotEnvValue -Path $entorno -Name "CENTRAL_BRANCH_CODE" -Value $SucursalClave
+        Set-DotEnvValue -Path $entorno -Name "CENTRAL_POS_INSTANCE_ID" -Value $edgeGuid.ToString()
+        Set-DotEnvValue -Path $entorno -Name "CENTRAL_ENROLLMENT_REQUEST_ID" -Value $requestGuid.ToString()
+        Set-DotEnvValue -Path $entorno -Name "CENTRAL_EDGE_LABEL" -Value $enrollmentReceipt.edge.label
+        Set-DotEnvValue -Path $entorno -Name "CENTRAL_INGEST_CREDENTIAL_ID" -Value $enrollmentReceipt.credentials.ingest_credential_id
+        Set-DotEnvValue -Path $entorno -Name "CENTRAL_CATALOG_CREDENTIAL_ID" -Value $enrollmentReceipt.credentials.catalog_credential_id
+        Set-DotEnvValue -Path $entorno -Name "CENTRAL_INGEST_TOKEN" -Value $ingestToken
+        Set-DotEnvValue -Path $entorno -Name "CENTRAL_CATALOG_TOKEN" -Value $catalogToken
+        Set-DotEnvValue -Path $entorno -Name "CENTRAL_ENABLE_SALES_V2" -Value "false"
+        Set-DotEnvValue -Path $entorno -Name "CENTRAL_ENABLE_CUSTOMERS_V2" -Value "false"
+        Set-DotEnvValue -Path $entorno -Name "CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2" -Value "false"
+    }
     Set-DotEnvValue -Path $entorno -Name "PRINT_BACKEND" -Value $PrintBackend
     Set-DotEnvValue -Path $entorno -Name "PRINT_SYNC" -Value "false"
     Set-DotEnvValue -Path $entorno -Name "PRINTER_CAJA_HOST" -Value $PrinterCajaHost
@@ -1885,6 +2027,9 @@ if ($Modo -eq "Instalar") {
     if (-not [string]::IsNullOrWhiteSpace($SucursalId)) {
         $argumentosAprovisionamiento += @("--sucursal-id", $SucursalId)
     }
+    if ($enrollmentReceipt) {
+        $argumentosAprovisionamiento += @("--edge-id", $edgeGuid.ToString())
+    }
     & $python @argumentosAprovisionamiento
     if ($LASTEXITCODE -ne 0) { throw "Falló el aprovisionamiento explícito de la sucursal." }
     & $python manage.py inicializar_operacion_sucursal
@@ -1895,41 +2040,41 @@ if ($Modo -eq "Instalar") {
         if ($LASTEXITCODE -ne 0) { throw "Falló la carga explícita de datos iniciales de Arboledas." }
     }
 
-    $modulosDisponibles = @(
-        "domicilios",
-        "programados",
-        "reparto",
-        "pedidos_sucursales"
-    )
-    if ($PSBoundParameters.ContainsKey("ModulosOpcionales")) {
-        $modulosSeleccionados = @($ModulosOpcionales | ForEach-Object {
-            @(([string]$_) -split ',')
-        } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
-    }
-    else {
-        Write-Host "Módulos opcionales disponibles:" -ForegroundColor Yellow
-        Write-Host "  domicilios, programados, reparto, pedidos_sucursales"
-        $respuestaModulos = Read-Host "Escribe las claves separadas por coma [Enter = ninguno]"
-        if ([string]::IsNullOrWhiteSpace($respuestaModulos)) {
-            $modulosSeleccionados = @()
+    if ($enrollmentReceipt) {
+        if ('pedidos_sucursales' -in $enrolledModules) {
+            & $python manage.py configurar_modulos_sucursal --modulos pedidos_sucursales
         }
         else {
-            $modulosSeleccionados = @($respuestaModulos -split ',' | ForEach-Object {
-                $_.Trim().ToLowerInvariant()
-            } | Where-Object { $_ })
+            & $python manage.py configurar_modulos_sucursal --sin-opcionales
         }
     }
-    $modulosDesconocidos = @($modulosSeleccionados | Where-Object {
-        $_ -notin $modulosDisponibles
-    })
-    if ($modulosDesconocidos.Count) {
-        throw "Módulos opcionales desconocidos: $($modulosDesconocidos -join ', ')."
-    }
-    if ($modulosSeleccionados.Count) {
-        & $python manage.py configurar_modulos_sucursal --modulos ($modulosSeleccionados -join ',')
-    }
     else {
-        & $python manage.py configurar_modulos_sucursal --sin-opcionales
+        # Camino manual conservado exclusivamente para laboratorios legados.
+        $modulosDisponibles = @('pedidos_sucursales')
+        if ($PSBoundParameters.ContainsKey("ModulosOpcionales")) {
+            $modulosSeleccionados = @($ModulosOpcionales | ForEach-Object {
+                @(([string]$_) -split ',')
+            } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+        }
+        else {
+            & $python manage.py configurar_modulos_sucursal --iniciales
+            if ($LASTEXITCODE -ne 0) { throw "Falló la configuración inicial de módulos." }
+            $modulosSeleccionados = $null
+        }
+        if ($null -ne $modulosSeleccionados) {
+            $modulosDesconocidos = @($modulosSeleccionados | Where-Object {
+                $_ -notin $modulosDisponibles
+            })
+            if ($modulosDesconocidos.Count) {
+                throw "Módulos opcionales desconocidos: $($modulosDesconocidos -join ', ')."
+            }
+            if ($modulosSeleccionados.Count) {
+                & $python manage.py configurar_modulos_sucursal --modulos ($modulosSeleccionados -join ',')
+            }
+            else {
+                & $python manage.py configurar_modulos_sucursal --sin-opcionales
+            }
+        }
     }
     if ($LASTEXITCODE -ne 0) { throw "Falló la configuración inicial de módulos." }
 }
@@ -1946,13 +2091,14 @@ if ($Modo -eq "Instalar") {
         }
     }
 
-    & $python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','pos.settings'); import django; django.setup(); from django.contrib.auth import get_user_model; U=get_user_model(); raise SystemExit(0 if U.objects.filter(is_active=True, is_superuser=False, perfil_pos__activo=True, perfil_pos__sucursal__clave=os.environ['SUCURSAL_CLAVE']).exists() else 1)"
+}
+# Dueño explícito: no se eleva automáticamente a un encargado legado durante update.
+& $python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE','pos.settings'); import django; django.setup(); from django.contrib.auth import get_user_model; U=get_user_model(); raise SystemExit(0 if U.objects.filter(is_active=True, is_superuser=False, perfil_pos__activo=True, perfil_pos__es_sistema=False, perfil_pos__rol__tipo='dueno', perfil_pos__sucursal__clave=os.environ['SUCURSAL_CLAVE']).exists() else 1)"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Crea la cuenta del dueño de sucursal explícito. Un encargado legado no se promociona." -ForegroundColor Yellow
+    & $python manage.py crear_operador_pos --crear-perfil-inicial
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Crea una cuenta operativa separada de la cuenta administrativa." -ForegroundColor Yellow
-        & $python manage.py crear_operador_pos --crear-perfil-inicial
-        if ($LASTEXITCODE -ne 0) {
-            throw "Debe existir al menos una cuenta operativa vinculada a un perfil POS."
-        }
+        throw "Debe existir un dueño de sucursal humano antes de iniciar el servicio."
     }
 }
 

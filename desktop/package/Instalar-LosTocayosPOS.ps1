@@ -14,8 +14,8 @@ else {
     [IO.Path]::GetFullPath($InstallRoot)
 }
 $ejecutableOrigen = Join-Path $PSScriptRoot "TocayosPOS.exe"
-$configuracionOrigen = Join-Path $PSScriptRoot "servidor.txt"
-$configuracionDestino = Join-Path $instalacion "servidor.txt"
+$configuracionDestino = Join-Path $env:LOCALAPPDATA "LosTocayosPOS/servidor.txt"
+$configuracionAnterior = Join-Path $instalacion "servidor.txt"
 
 function Test-ServerUrl {
     param([string]$Value)
@@ -49,19 +49,19 @@ if (-not (Test-Path -LiteralPath $ejecutableOrigen)) {
     throw "El paquete está incompleto: no se encontró TocayosPOS.exe."
 }
 
-$predeterminado = "http://192.168.0.30:8000"
+$predeterminado = ""
 if (Test-Path -LiteralPath $configuracionDestino) {
     $predeterminado = (Get-Content -LiteralPath $configuracionDestino -Raw).Trim()
 }
-elseif (Test-Path -LiteralPath $configuracionOrigen) {
-    $predeterminado = (Get-Content -LiteralPath $configuracionOrigen -Raw).Trim()
+elseif (Test-Path -LiteralPath $configuracionAnterior) {
+    $predeterminado = (Get-Content -LiteralPath $configuracionAnterior -Raw).Trim()
 }
 
 if ([string]::IsNullOrWhiteSpace($ServerUrl)) {
     Write-Host ""
     Write-Host "Instalación de $nombre" -ForegroundColor Yellow
     Write-Host "La dirección debe apuntar a la computadora principal del local."
-    $respuesta = Read-Host "Dirección del servidor [$predeterminado]"
+    $respuesta = Read-Host "Dirección HTTPS del Edge [$predeterminado]"
     $ServerUrl = if ([string]::IsNullOrWhiteSpace($respuesta)) {
         $predeterminado
     }
@@ -115,6 +115,7 @@ foreach ($archivo in $archivos) {
         Copy-Item -LiteralPath $origen -Destination (Join-Path $instalacion $archivo) -Force
     }
 }
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $configuracionDestino) | Out-Null
 Set-Content -LiteralPath $configuracionDestino -Value $ServerUrl -Encoding ASCII
 
 if ($SkipIntegration) {

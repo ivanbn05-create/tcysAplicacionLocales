@@ -10,7 +10,7 @@ from uuid import UUID
 from django.conf import settings
 from django.core.exceptions import RequestDataTooBig, ValidationError
 from django.db import IntegrityError, transaction
-from django.http import FileResponse, Http404, HttpResponse, JsonResponse
+from django.http import FileResponse, Http404, HttpResponse, HttpResponseForbidden, JsonResponse
 from django.shortcuts import render
 from django.templatetags.static import static
 from django.urls import reverse
@@ -21,6 +21,7 @@ from django.views.decorators.http import require_GET, require_http_methods, requ
 from catalogo.models import Producto
 from impresion.models import ConfiguracionImpresionTerminal, TrabajoImpresion
 from impresion.services import encolar_impresiones, encolar_reporte, estado_impresora
+from personas.capacidades import Capacidad, perfil_tiene_capacidad, tiene_capacidad
 from personas.models import Rol, Sucursal, UsuarioPOS
 from personas.modulos import modulo_habilitado, modulos_efectivos
 from pos.version import APP_VERSION
@@ -175,24 +176,24 @@ class EdicionProgramadaNoAutorizada(ErrorVenta):
     status_code = 403
 
 
-def permiso_pos(campo):
-    """Aplica autorización de negocio además de la sesión Django."""
+def _respuesta_capacidad_denegada():
+    response = JsonResponse(
+        {"error": "La cuenta no tiene permiso para realizar esta operación.",
+         "codigo": "capacidad_denegada"},
+        status=403,
+    )
+    patch_cache_control(response, no_store=True, private=True)
+    return response
+
+
+def permiso_pos(capacidad):
+    """Autoriza cada acción por una capacidad persistida del perfil POS."""
 
     def decorar(vista):
         @wraps(vista)
         def protegida(request, *args, **kwargs):
-            if not getattr(settings, "POS_REQUIRE_AUTH", True):
-                return vista(request, *args, **kwargs)
-            if request.user.is_superuser:
-                return vista(request, *args, **kwargs)
-            perfil = getattr(request, "pos_user", None)
-            if perfil is None or not getattr(perfil.rol, campo, False):
-                response = JsonResponse(
-                    {"error": "La cuenta no tiene permiso para realizar esta operación."},
-                    status=403,
-                )
-                patch_cache_control(response, no_store=True, private=True)
-                return response
+            if not tiene_capacidad(request, capacidad):
+                return _respuesta_capacidad_denegada()
             return vista(request, *args, **kwargs)
 
         return protegida
@@ -246,7 +247,7 @@ PERMISOS_ADMINISTRADOR = {
     "gestionar_usuarios": True,
     "reiniciar_folios": True,
     "cambiar_clave_maestra": True,
-    "gestionar_configuracion_tecnica": True,
+    "gestionar_configuracion_tecnica": False,
 }
 PERMISOS_ELEVADO = {
     "gestionar_usuarios": False,
@@ -254,6 +255,19 @@ PERMISOS_ELEVADO = {
     "cambiar_clave_maestra": False,
     "gestionar_configuracion_tecnica": False,
 }
+
+
+def _permisos_administrador(request, nivel):
+    if nivel == "elevado":
+        return dict(PERMISOS_ELEVADO)
+    if not getattr(settings, "POS_REQUIRE_AUTH", True):
+        return dict(PERMISOS_ADMINISTRADOR)
+    return {
+        "gestionar_usuarios": tiene_capacidad(request, Capacidad.GESTIONAR_USUARIOS),
+        "reiniciar_folios": tiene_capacidad(request, Capacidad.REINICIAR_FOLIOS),
+        "cambiar_clave_maestra": tiene_capacidad(request, Capacidad.GESTIONAR_USUARIOS),
+        "gestionar_configuracion_tecnica": False,
+    }
 
 
 def _limpiar_acceso_administrador(request):
@@ -266,6 +280,9 @@ def _limpiar_acceso_administrador(request):
 
 
 def _acceso_administrador_actual(request):
+    if not tiene_capacidad(request, Capacidad.ADMINISTRAR_NEGOCIO):
+        _limpiar_acceso_administrador(request)
+        return None
     try:
         autorizado_hasta = float(request.session.get("admin_autorizado_hasta", 0) or 0)
     except (TypeError, ValueError):
@@ -278,8 +295,8 @@ def _acceso_administrador_actual(request):
     if nivel == "administrador":
         return {
             "nivel": nivel,
-            "perfil": None,
-            "permisos": dict(PERMISOS_ADMINISTRADOR),
+            "perfil": getattr(request, "pos_user", None),
+            "permisos": _permisos_administrador(request, nivel),
         }
     if nivel == "elevado":
         perfil = (
@@ -288,15 +305,14 @@ def _acceso_administrador_actual(request):
                 pk=request.session.get("admin_perfil_id"),
                 sucursal=_sucursal(),
                 activo=True,
-                rol__tipo=Rol.Tipo.ELEVADO,
             )
             .first()
         )
-        if perfil is not None:
+        if perfil_tiene_capacidad(perfil, Capacidad.ADMINISTRAR_NEGOCIO):
             return {
                 "nivel": nivel,
                 "perfil": perfil,
-                "permisos": dict(PERMISOS_ELEVADO),
+                "permisos": _permisos_administrador(request, nivel),
             }
 
     _limpiar_acceso_administrador(request)
@@ -318,27 +334,30 @@ def acceso_administrador(vista):
     return protegida
 
 
-def acceso_administrador_maestro(vista):
-    @wraps(vista)
-    def protegida(request, *args, **kwargs):
-        acceso = _acceso_administrador_actual(request)
-        if acceso is None:
-            return JsonResponse(
-                {"error": "Vuelve a ingresar una clave de acceso administrativo."},
-                status=401,
-            )
-        if acceso["nivel"] != "administrador":
-            return JsonResponse(
-                {
-                    "error": "Esta acción requiere la clave maestra del administrador.",
-                    "codigo": "administrador_maestro_requerido",
-                },
-                status=403,
-            )
-        request.acceso_administrador = acceso
-        return vista(request, *args, **kwargs)
+def acceso_administrador_maestro(vista=None, *, capacidad=Capacidad.GESTIONAR_USUARIOS):
+    def decorar(vista_real):
+        @wraps(vista_real)
+        def protegida(request, *args, **kwargs):
+            acceso = _acceso_administrador_actual(request)
+            if acceso is None:
+                return JsonResponse(
+                    {"error": "Vuelve a ingresar una clave de acceso administrativo."},
+                    status=401,
+                )
+            if acceso["nivel"] != "administrador" or not tiene_capacidad(request, capacidad):
+                return JsonResponse(
+                    {
+                        "error": "Esta acción requiere la clave maestra del administrador.",
+                        "codigo": "administrador_maestro_requerido",
+                    },
+                    status=403,
+                )
+            request.acceso_administrador = acceso
+            return vista_real(request, *args, **kwargs)
 
-    return protegida
+        return protegida
+
+    return decorar(vista) if vista is not None else decorar
 
 
 def _validar_clave_admin_datos(sucursal, datos):
@@ -842,13 +861,11 @@ def _inicio(request, modo_tableta=False):
     modulos = modulos_efectivos(sucursal)
     if modulos["programados"]:
         activar_programados(sucursal)
-    perfil = getattr(request, "pos_user", None)
-    acceso_total = not getattr(settings, "POS_REQUIRE_AUTH", True) or request.user.is_superuser
     permisos = {
-        "cobrar": acceso_total or bool(perfil and perfil.rol.puede_cobrar),
-        "reimprimir": acceso_total or bool(perfil and perfil.rol.puede_reimprimir),
-        "cancelar": acceso_total or bool(perfil and perfil.rol.puede_cancelar),
-        "sincronizar": acceso_total or bool(perfil and perfil.rol.puede_sincronizar),
+        "cobrar": tiene_capacidad(request, Capacidad.COBRAR),
+        "reimprimir": tiene_capacidad(request, Capacidad.REIMPRIMIR),
+        "cancelar": tiene_capacidad(request, Capacidad.CANCELAR),
+        "sincronizar": tiene_capacidad(request, Capacidad.SINCRONIZAR_PEDIDOS),
     }
     productos = []
     for producto in Producto.objects.select_related("categoria").filter(sucursal=sucursal, activo=True):
@@ -920,6 +937,8 @@ def tabletas(request):
 
 
 def administrador(request):
+    if not tiene_capacidad(request, Capacidad.ADMINISTRAR_NEGOCIO):
+        return HttpResponseForbidden("La cuenta no tiene acceso al Administrador.")
     sucursal = _sucursal()
     response = render(
         request,
@@ -1033,7 +1052,9 @@ def api_identificar_operador(request):
     except ErrorVenta:
         pass
     else:
-        puede_acceder_movimientos = True
+        puede_acceder_movimientos = tiene_capacidad(
+            request, Capacidad.ADMINISTRAR_NEGOCIO
+        )
 
     limpiar_fallos(clave_limite)
     request.session["mesero_pos_id"] = str(perfil.id)
@@ -1065,7 +1086,7 @@ def api_salir_operador(request):
 
 @require_POST
 @requiere_modulo("pedidos_sucursales")
-@permiso_pos("puede_sincronizar")
+@permiso_pos(Capacidad.SINCRONIZAR_PEDIDOS)
 def api_sincronizar_sucursales(request):
     integracion = sincronizar_pedidos_confirmados(_sucursal())
     return JsonResponse({"integracion_sucursales": integracion})
@@ -1119,6 +1140,7 @@ def api_archivo_impresion(request, trabajo_id):
 
 
 @require_POST
+@permiso_pos(Capacidad.COMANDAS)
 def api_abrir_ticket(request):
     device_id = ""
     try:
@@ -1154,6 +1176,8 @@ def api_ticket(request, ticket_id):
         return _respuesta_error_venta(exc)
 
     if request.method == "PATCH":
+        if not tiene_capacidad(request, Capacidad.MODIFICAR_PARTIDAS):
+            return _respuesta_capacidad_denegada()
         try:
             datos = _json(request)
             with transaction.atomic():
@@ -1276,6 +1300,7 @@ def api_ticket(request, ticket_id):
 
 
 @require_POST
+@permiso_pos(Capacidad.COMANDAS)
 def api_agregar_comanda(request, ticket_id):
     device_id = ""
     try:
@@ -1384,6 +1409,7 @@ def api_cliente(request, cliente_id):
 
 
 @require_http_methods(["POST", "DELETE"])
+@permiso_pos(Capacidad.MODIFICAR_PARTIDAS)
 def api_ticket_cliente(request, ticket_id):
     device_id = ""
     try:
@@ -1460,6 +1486,7 @@ def api_ticket_cliente(request, ticket_id):
 
 
 @require_POST
+@permiso_pos(Capacidad.MODIFICAR_PARTIDAS)
 def api_convertir_ticket(request, ticket_id):
     device_id = ""
     try:
@@ -1481,6 +1508,7 @@ def api_convertir_ticket(request, ticket_id):
 
 
 @require_http_methods(["POST", "DELETE"])
+@permiso_pos(Capacidad.COMANDAS)
 def api_bloqueo_ticket(request, ticket_id):
     device_id = ""
     try:
@@ -1505,6 +1533,7 @@ def api_bloqueo_ticket(request, ticket_id):
 
 
 @require_POST
+@permiso_pos(Capacidad.MODIFICAR_PARTIDAS)
 def api_agregar_partida(request, ticket_id):
     device_id = ""
     try:
@@ -1582,10 +1611,16 @@ def api_agregar_partida(request, ticket_id):
         )
 
 @require_http_methods(["PATCH", "DELETE"])
+@permiso_pos(Capacidad.MODIFICAR_PARTIDAS)
 def api_partida(request, partida_id):
     device_id = ""
     try:
         datos = _json(request)
+        if request.method == "DELETE" or (
+            "cantidad" in datos and Decimal(str(datos["cantidad"])) <= 0
+        ):
+            if not tiene_capacidad(request, Capacidad.CANCELAR):
+                return _respuesta_capacidad_denegada()
         with transaction.atomic():
             partida = Partida.objects.select_related("ticket__sucursal").get(pk=partida_id, sucursal=_sucursal())
             ticket = partida.ticket
@@ -1596,6 +1631,8 @@ def api_partida(request, partida_id):
                 permitir_programado=True,
             )
             cantidad = Decimal("0") if request.method == "DELETE" else Decimal(str(datos.get("cantidad", partida.cantidad)))
+            if cantidad <= 0 and not tiene_capacidad(request, Capacidad.CANCELAR):
+                return _respuesta_capacidad_denegada()
             termino = datos.get("termino") if "termino" in datos else None
             if partida.producto_sucursal_id:
                 actualizar_partida_sucursal(partida, cantidad)
@@ -1610,10 +1647,14 @@ def api_partida(request, partida_id):
 
 
 @require_POST
+@permiso_pos(Capacidad.MODIFICAR_PARTIDAS)
 def api_ajustar_partidas(request, ticket_id):
     device_id = ""
     try:
         datos = _json(request)
+        if datos.get("eliminar") or Decimal(str(datos.get("cantidad", "1"))) <= 0:
+            if not tiene_capacidad(request, Capacidad.CANCELAR):
+                return _respuesta_capacidad_denegada()
         with transaction.atomic():
             ticket = _ticket(ticket_id)
             ticket, device_id = _asegurar_edicion_ticket(
@@ -1625,6 +1666,8 @@ def api_ajustar_partidas(request, ticket_id):
             partida_ids = [str(valor) for valor in datos.get("partida_ids", [])]
             eliminar = bool(datos.get("eliminar", False))
             cantidad = Decimal(str(datos.get("cantidad", "1")))
+            if (eliminar or cantidad <= 0) and not tiene_capacidad(request, Capacidad.CANCELAR):
+                return _respuesta_capacidad_denegada()
             ajustar_grupo_partidas(ticket, partida_ids, cantidad, datos.get("termino"), eliminar)
             ticket.refresh_from_db()
         return JsonResponse({"ticket": _ticket_payload(_ticket(ticket.id), device_id)})
@@ -1635,6 +1678,7 @@ def api_ajustar_partidas(request, ticket_id):
 
 
 @require_POST
+@permiso_pos(Capacidad.MODIFICAR_PARTIDAS)
 def api_modificador(request, ticket_id):
     device_id = ""
     try:
@@ -1676,6 +1720,7 @@ def api_modificador(request, ticket_id):
 
 
 @require_POST
+@permiso_pos(Capacidad.COMANDAS)
 def api_procesar(request, ticket_id):
     device_id = ""
     try:
@@ -1696,6 +1741,7 @@ def api_procesar(request, ticket_id):
 
 
 @require_POST
+@permiso_pos(Capacidad.COBRAR)
 def api_cobrar(request, ticket_id):
     device_id = ""
     try:
@@ -1727,6 +1773,7 @@ def api_cobrar(request, ticket_id):
 
 @require_POST
 @requiere_modulo("pedidos_sucursales")
+@permiso_pos(Capacidad.ADMINISTRAR_NEGOCIO)
 def api_completar_sucursal(request, ticket_id):
     device_id = ""
     try:
@@ -1743,6 +1790,7 @@ def api_completar_sucursal(request, ticket_id):
 
 @require_POST
 @requiere_modulo("pedidos_sucursales")
+@permiso_pos(Capacidad.ADMINISTRAR_NEGOCIO)
 def api_reactivar_sucursal(request, ticket_id):
     device_id = ""
     try:
@@ -1765,6 +1813,7 @@ def api_reactivar_sucursal(request, ticket_id):
 
 
 @require_POST
+@permiso_pos(Capacidad.CANCELAR)
 def api_cancelar(request, ticket_id):
     device_id = ""
     try:
@@ -1803,6 +1852,7 @@ def api_cancelar(request, ticket_id):
         return _respuesta_error_venta(exc, device_id)
 
 @require_POST
+@permiso_pos(Capacidad.REIMPRIMIR)
 def api_imprimir(request, ticket_id):
     try:
         datos = _json(request)
@@ -1844,6 +1894,8 @@ def api_imprimir(request, ticket_id):
 
 @require_POST
 def api_admin_acceso(request):
+    if not tiene_capacidad(request, Capacidad.ADMINISTRAR_NEGOCIO):
+        return _respuesta_capacidad_denegada()
     sucursal = _sucursal()
     clave_limite = clave_intentos(request, "administrador", sucursal)
     if limite_agotado(clave_limite):
@@ -1867,10 +1919,9 @@ def api_admin_acceso(request):
     request.session["admin_nivel"] = nivel
     if perfil is None:
         request.session.pop("admin_perfil_id", None)
-        permisos = PERMISOS_ADMINISTRADOR
     else:
         request.session["admin_perfil_id"] = str(perfil.id)
-        permisos = PERMISOS_ELEVADO
+    permisos = _permisos_administrador(request, nivel)
     return JsonResponse(
         {
             "ok": True,
@@ -2030,6 +2081,10 @@ def api_admin_usuarios(request):
 def api_admin_usuario(request, usuario_id):
     try:
         datos = _json(request)
+        if datos.get("clave") not in (None, "") and not tiene_capacidad(
+            request, Capacidad.CAMBIAR_PINES_AJENOS
+        ):
+            return _respuesta_capacidad_denegada()
         sucursal = _sucursal()
         usuario = UsuarioPOS.objects.get(pk=usuario_id, sucursal=sucursal)
         usuario = guardar_usuario(sucursal, datos, usuario=usuario)
@@ -2349,7 +2404,7 @@ def api_admin_acciones_tickets_lote(request):
 
 
 @require_POST
-@acceso_administrador_maestro
+@acceso_administrador_maestro(capacidad=Capacidad.REINICIAR_FOLIOS)
 def api_admin_reiniciar_folios(request):
     try:
         _json(request)
@@ -2490,6 +2545,17 @@ def service_worker(request):
 const PRECACHE=__PRECACHE__;
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(PRECACHE)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())));
-self.addEventListener('fetch', e => { if (e.request.method === 'GET') e.respondWith(fetch(e.request).catch(() => caches.match(e.request))); });
+const OFFLINE='<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Edge sin conexión</title><body style="font:18px system-ui;padding:2rem"><h1>Edge sin conexión</h1><p>Comprueba la red local y el servidor de la sucursal.</p><a href="/">Reintentar</a></body></html>';
+self.addEventListener('fetch', e => {
+  const u = new URL(e.request.url);
+  if (e.request.method !== 'GET' || u.origin !== self.location.origin) return;
+  if (e.request.mode === 'navigate') {
+    e.respondWith(fetch(e.request).catch(() => new Response(OFFLINE, {headers: {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'}})));
+    return;
+  }
+  if (u.pathname.startsWith('/static/')) {
+    e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+  }
+});
 """.replace("__CACHE__", PWA_CACHE).replace("__PRECACHE__", json.dumps(precache))
     return HttpResponse(codigo, content_type="application/javascript", headers={"Cache-Control": "no-cache"})

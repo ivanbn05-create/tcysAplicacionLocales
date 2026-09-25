@@ -1197,14 +1197,14 @@ class FlujoPOSTests(TestCase):
         self.assertIn("posiciones", sin_posicion.json()["error"])
 
         Mesa.objects.filter(sucursal=self.sucursal, canal=Mesa.Canal.DOMICILIO).update(activa=True)
-        configurar_modulos(self.sucursal, [])
-        deshabilitado = self.client.post(
+        self.assertIn("domicilios", configurar_modulos(self.sucursal, []))
+        nucleo_habilitado = self.client.post(
             f"/api/tickets/{origen.id}/comandas/",
             data=json.dumps({"idempotency_key": str(uuid.uuid4())}),
             content_type="application/json",
         )
-        self.assertEqual(deshabilitado.status_code, 400)
-        self.assertIn("no está habilitado", deshabilitado.json()["error"])
+        self.assertEqual(nucleo_habilitado.status_code, 200)
+        self.assertEqual(nucleo_habilitado.json()["ticket"]["canal"], Mesa.Canal.DOMICILIO)
 
         recoger, _ = abrir_ticket(Mesa.objects.get(sucursal=self.sucursal, clave="REC-3"))
         recoger.cliente_nombre = "Cliente mostrador"
@@ -2983,6 +2983,7 @@ class FlujoPOSTests(TestCase):
 @override_settings(
     POS_REQUIRE_AUTH=True,
     MIDDLEWARE=SECURITY_MIDDLEWARE,
+    PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"],
     PEDIDOS_SUCURSALES_AUTO_SYNC=False,
     PRINT_BACKEND="archivo",
     PRINT_SYNC=False,
@@ -3002,6 +3003,7 @@ class SeguridadPOSTests(TestCase):
         cls.rol = Rol.objects.create(
             sucursal=cls.sucursal,
             nombre="Operador de seguridad",
+            tipo=Rol.Tipo.ELEVADO,
             puede_cobrar=True,
             puede_reimprimir=True,
             puede_cancelar=True,
@@ -3263,7 +3265,7 @@ class SeguridadPOSTests(TestCase):
         self.assertEqual(autorizado.status_code, 200)
         self.assertEqual(autorizado.json()["modo"], "ticket_nuevo")
 
-    def test_acciones_cotidianas_usan_clave_admin_y_la_impresion_no_la_requiere(self):
+    def test_mesero_no_cobra_ni_reimprime_y_elevado_conserva_verificacion_pin(self):
         restringido = get_user_model().objects.create_user(
             username="operador-restringido",
             password="Clave-restringida-2026",
@@ -3299,15 +3301,14 @@ class SeguridadPOSTests(TestCase):
             data=json.dumps({"forma_pago": "efectivo", "importe_recibido": "0"}),
             content_type="application/json",
         )
-        self.assertEqual(sin_clave.status_code, 400)
-        self.assertIn("clave", sin_clave.json()["error"].lower())
+        self.assertEqual(sin_clave.status_code, 403)
 
         impresion = self.client.post(
             f"/api/tickets/{ticket.id}/imprimir/",
             data=json.dumps({"formato": "cuenta"}),
             content_type="application/json",
         )
-        self.assertEqual(impresion.status_code, 200)
+        self.assertEqual(impresion.status_code, 403)
 
         sincronizacion = self.client.post(
             "/api/sincronizacion/sucursales/",
@@ -3316,6 +3317,21 @@ class SeguridadPOSTests(TestCase):
         )
         self.assertEqual(sincronizacion.status_code, 403)
         self.assertIn("permiso", sincronizacion.json()["error"])
+
+        self.client.force_login(self.user)
+        sin_clave_elevado = self.client.post(
+            f"/api/tickets/{ticket.id}/cobrar/",
+            data=json.dumps({"forma_pago": "efectivo", "importe_recibido": "0"}),
+            content_type="application/json",
+        )
+        self.assertEqual(sin_clave_elevado.status_code, 400)
+        self.assertIn("clave", sin_clave_elevado.json()["error"].lower())
+        reimpresion_elevado = self.client.post(
+            f"/api/tickets/{ticket.id}/imprimir/",
+            data=json.dumps({"formato": "cuenta"}),
+            content_type="application/json",
+        )
+        self.assertEqual(reimpresion_elevado.status_code, 200)
 
     def test_login_valido_sin_perfil_pos_no_crea_sesion(self):
         sin_perfil = get_user_model().objects.create_user(

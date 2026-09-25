@@ -470,6 +470,23 @@ class ReleaseServidorTests(unittest.TestCase):
                     ),
                 )
 
+    def test_rechaza_clave_privada_xml_aunque_no_se_incluya_en_rutas(self):
+        with tempfile.TemporaryDirectory() as temporal:
+            raiz = Path(temporal)
+            fuente = self._crear_fuente(raiz)
+            (fuente / "publisher-private.xml").write_text(
+                "<RSAKeyValue><D>secreto</D></RSAKeyValue>", encoding="ascii"
+            )
+            with self.assertRaisesRegex(ErrorRelease, "clave privada XML"):
+                crear_release(
+                    origen=fuente,
+                    destino=raiz / "salida",
+                    version="1.2.3-prueba.1",
+                    commit=COMMIT_PRUEBA,
+                    source_date_epoch=EPOCH_PRUEBA,
+                    rutas_incluidas=self._rutas_contrato(),
+                )
+
     def test_exige_version_autoritativa_y_coincidente(self):
         with tempfile.TemporaryDirectory() as temporal:
             raiz = Path(temporal)

@@ -22,6 +22,18 @@
 
   function obtenerDeviceId() {
     try {
+      const url = new URL(window.location.href);
+      const externo = url.searchParams.get("terminal_id");
+      if (externo && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(externo)) {
+        localStorage.setItem(DEVICE_ID_KEY, externo);
+        url.searchParams.delete("terminal_id");
+        try {
+          window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+        } catch {
+          // La identidad ya quedó persistida.
+        }
+        return externo;
+      }
       const guardado = localStorage.getItem(DEVICE_ID_KEY);
       if (guardado) return guardado;
       const nuevo = crearDeviceId();
@@ -243,9 +255,6 @@
     history.replaceState(null, "", "#" + nombre);
     const movimientoReducido = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     window.scrollTo({ top: 0, behavior: movimientoReducido ? "auto" : "smooth" });
-    if (nombre === "configuracion-tecnica") {
-      cargarConfiguracionesImpresion();
-    }
     return true;
   }
 
@@ -930,11 +939,13 @@
 
   function configurarTipoUsuario(tipo = "mesero") {
     const selector = $("#usuario-tipo");
-    const opcionPrincipal = $("#usuario-tipo-encargado");
-    const esOperadorPrincipal = tipo === "encargado";
-    opcionPrincipal.hidden = !esOperadorPrincipal;
-    opcionPrincipal.disabled = !esOperadorPrincipal;
-    selector.disabled = esOperadorPrincipal;
+    const opcionPrincipal = $("#usuario-tipo-protegido");
+    const esPerfilProtegido = tipo === "dueno" || tipo === "encargado";
+    opcionPrincipal.value = tipo;
+    opcionPrincipal.textContent = tipo === "dueno" ? "Dueño de sucursal" : "Encargado legado";
+    opcionPrincipal.hidden = !esPerfilProtegido;
+    opcionPrincipal.disabled = !esPerfilProtegido;
+    selector.disabled = esPerfilProtegido;
     selector.value = tipo;
   }
 
@@ -1544,11 +1555,6 @@
       await regresarDesdeAdministrador();
       return;
     }
-    const editarRuta = evento.target.closest("[data-editar-configuracion-impresion]");
-    if (editarRuta) {
-      editarConfiguracionImpresion(editarRuta.dataset.editarConfiguracionImpresion);
-      return;
-    }
     const navegacion = evento.target.closest("[data-panel], [data-panel-ir]");
     if (navegacion) {
       await navegarPanel(navegacion.dataset.panel || navegacion.dataset.panelIr);
@@ -1771,22 +1777,6 @@
   document.addEventListener("fullscreenchange", actualizarBotonPantallaCompleta);
   document.addEventListener("webkitfullscreenchange", actualizarBotonPantallaCompleta);
   document.addEventListener("pointerdown", activarPantallaCompletaAdminConPrimerToque, true);
-  $("#actualizar-configuraciones-impresion").addEventListener("click", evento => {
-    cargarConfiguracionesImpresion(evento.currentTarget);
-  });
-  $("#nueva-configuracion-impresion").addEventListener("click", () => {
-    if (!exigirPermisoAdministrador("gestionar_configuracion_tecnica")) return;
-    limpiarFormularioConfiguracionImpresion();
-    $("#configuracion-impresion-nombre").focus();
-  });
-  $("#usar-device-id-actual").addEventListener("click", () => {
-    if (!exigirPermisoAdministrador("gestionar_configuracion_tecnica")) return;
-    $("#configuracion-impresion-device-id").value = POS_DEVICE_ID;
-    $("#configuracion-impresion-device-id").focus();
-  });
-  $("#cancelar-configuracion-impresion").addEventListener("click", limpiarFormularioConfiguracionImpresion);
-  $("#desactivar-configuracion-impresion").addEventListener("click", desactivarConfiguracionImpresion);
-  $("#form-configuracion-impresion").addEventListener("submit", guardarConfiguracionImpresion);
 
   $("#nuevo-usuario").addEventListener("click", () => {
     if (!exigirPermisoAdministrador("gestionar_usuarios")) return;
@@ -1872,7 +1862,6 @@
   }
   configurarRegresoAdministrador();
   actualizarDeviceIdActual();
-  limpiarFormularioConfiguracionImpresion();
   iniciarPantallaCompletaAdmin();
   cargarResumen();
 })();

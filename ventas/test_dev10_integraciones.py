@@ -662,7 +662,7 @@ class CatalogoCentralAtomicoTests(TestCase):
             sucursal=self.sucursal,
             producto=producto,
             importe=Decimal("25.00"),
-            vigente_desde=timezone.localdate(),
+            vigente_desde=date(2026, 9, 1),
         )
         IdentidadCategoriaCentral.objects.create(
             sucursal=self.sucursal,

@@ -1,87 +1,24 @@
-# Aplicación de escritorio
+# Cliente ligero Windows Production 1.0
 
-`TocayosPOS.exe` presenta el punto de venta en una ventana independiente de Windows.
-No duplica el frontend: carga el mismo Django local que usan las terminales y tabletas,
-por lo que una actualización del sistema se aplica a todos los clientes de la sucursal.
+TocayosPOS.exe abre el frontend del Edge local de la sucursal en Microsoft Edge modo aplicación. Es una terminal: no incluye SQLite de negocio, catálogo independiente ni credenciales del VPS. El mismo ejecutable sirve a todas las sucursales.
 
 ## Construcción
 
-Desde PowerShell, en la raíz del proyecto:
+Desde PowerShell en la raíz:
 
-```powershell
-.\desktop\build.ps1
-```
+    .\desktop\build.ps1
+    .\desktop\build-package.ps1 -PrivateKeyPath "D:\custodia\publisher-private.xml" -TrustStorePath "D:\custodia\release-trust.json"
 
-El resultado queda en `desktop\dist\TocayosPOS.exe`. En esta primera versión el
-ejecutable usa el motor instalado de Microsoft Edge en modo aplicación; la ventana no
-muestra pestañas ni barra de direcciones y no requiere instalar un runtime adicional.
-El cliente y el bootstrap del instalador comparten actualmente la versión
-`0.3.0.0`. El bootstrap devuelve al sistema el código de salida real del script
-de instalación, y el registro de desinstalación obtiene `DisplayVersion` del
-ejecutable instalado en vez de mantener otro valor manual.
+La clave privada y el trust store deben estar fuera del repositorio. Para laboratorio puede usarse el modo GenerateLabKey de herramientas/release_firma.ps1; nunca distribuir esa clave como productiva. El paquete contiene un manifiesto con hashes por archivo, el ZIP, SHA256SUMS.txt y una firma RSA-3072/SHA-256. El bootstrap verifica firma, hashes y archivos antes de ejecutar la instalación. La clave pública procede de un trust store previamente provisionado en %ProgramData%\LosTocayosPOS\release-trust.json, o de la ruta absoluta indicada en TOCAYOS_RELEASE_TRUST. La huella de ese trust store se entrega por un canal independiente. Para comprobar el paquete sin instalar, ejecutar Instalador-LosTocayosPOS.exe --verificar con esa variable de entorno. Si falta el trust store o está revocado, la instalación falla.
 
-## Ejecución
+build.ps1 produce desktop/dist/TocayosPOS.exe. build-package.ps1 produce el ZIP, un instalador por usuario y sus hashes SHA-256 en desktop/release/. La versión de archivo y la versión informativa derivan de VERSION; no se mantiene otra versión manual. El compilador de .NET Framework incluido en Windows no emite binarios idénticos en dos builds del mismo fuente; el manifiesto de release debe fijar y firmar el hash de cada artefacto exacto. El paquete no incorpora URL de sucursal.
 
-```powershell
-.\desktop\dist\TocayosPOS.exe
-```
+## Instalación y configuración
 
-Si la dirección configurada es local y el servidor no responde, el programa solicita a
-Windows iniciar el servicio `LosTocayosPOS`. No ejecuta migraciones ni crea un proceso
-`runserver`/Waitress fuera del servicio. La instalación inicial del servidor se hace
-una vez, como administrador, con `instalar-servidor.ps1` desde la raíz del proyecto.
-`instalar-servicio-lan.ps1` es únicamente el motor interno y no debe invocarse de
-forma directa.
+En una PC Windows 10/11 con Edge instalado, ejecutar el instalador del cliente. El técnico copia la URL del Edge anunciada para esa sucursal y la introduce al instalar, por ejemplo https://edge-arboledas.local:8443. El instalador comprueba /salud/ y puede guardar la URL aunque el Edge esté temporalmente apagado. Configurar servidor del menú Inicio permite cambiarla después. HTTPS exige un certificado válido para el hostname/IP y una CA confiable en Windows. HTTP LAN sólo existe como transición explícita y exige escribir HTTP LAN.
 
-Para abrir directamente la interfaz táctil a pantalla completa:
+La URL se guarda por usuario en %LOCALAPPDATA%\LosTocayosPOS\servidor.txt. El cliente genera un ID pc-UUID en %LOCALAPPDATA%\LosTocayosPOS\terminal-id.txt, lo conserva al actualizar y lo entrega al frontend para ruteo de impresión y bloqueo de comandas. TocayosPOS.exe --identidad muestra URL e ID; --comprobar devuelve 0 si el Edge responde y 2 si no. El ID es técnico, no una credencial. El perfil separado de Edge queda bajo la misma carpeta de usuario. El cliente admite la antigua URL servidor.txt contigua al ejecutable como transición.
 
-```powershell
-.\desktop\dist\TocayosPOS.exe --tableta
-```
+Si el Edge está fuera de servicio, el cliente ofrece Reintentar y no abre una copia local de los datos. En la PC servidor, una URL loopback permite solicitar el inicio del servicio Windows existente. Actualizar el frontend del Edge no requiere actualizar el contenedor Windows; cuando cambie el propio contenedor, ejecutar el nuevo instalador. Se conservan URL e ID de terminal.
 
-Para solicitar el inicio del servicio y comprobarlo sin abrir la interfaz:
-
-```powershell
-.\desktop\dist\TocayosPOS.exe --solo-servidor
-```
-
-`TocayosPOS.exe --comprobar` valida silenciosamente la conexión configurada y devuelve
-código cero cuando el servidor responde; se utiliza para diagnosticar los paquetes.
-
-El valor opcional `TOCAYOS_SERVER_URL` permite que el ejecutable sea sólo un cliente de
-otro servidor de la red. Por ejemplo:
-
-```powershell
-$env:TOCAYOS_SERVER_URL = "http://192.168.0.30:8000"
-.\desktop\dist\TocayosPOS.exe --tableta
-```
-
-El cliente también lee `servidor.txt` junto al ejecutable. Este archivo es el mecanismo
-usado por el paquete distribuible y evita configurar variables de entorno manualmente.
-Por seguridad sólo se acepta un origen `http://host:puerto` o `https://host:puerto`, sin
-credenciales, ruta, consulta ni fragmento.
-
-## Paquete para otras computadoras
-
-```powershell
-.\desktop\build-package.ps1 -ServerUrl "https://pos.tocayos.local"
-```
-
-Genera en `desktop\release\` un ZIP, un instalador autoextraíble y sus sumas SHA-256.
-La instalación se realiza por usuario, no requiere permisos de administrador, crea
-accesos directos y registra un desinstalador en Windows. La dirección puede modificarse
-desde **Menú Inicio > Los Tocayos POS > Configurar servidor**.
-
-Si durante una transición se empaqueta una URL HTTP, debe declararse de forma
-consciente con `-AllowInsecureHttp`. Además, el instalador y el configurador exigirán
-escribir `HTTP LAN` antes de guardar una URL sin cifrar; no basta con aceptar el valor
-predeterminado.
-
-En la computadora principal, el servicio usa Waitress, cuenta `LocalService`, ACL
-restringidas y recuperación automática. El paquete de clientes no contiene la base ni
-credenciales del servidor. Sigue siendo recomendable firmar el instalador y usar un
-origen HTTPS antes de distribuirlo fuera de una LAN controlada.
-
-La coincidencia `0.3.0.0` sólo coordina hoy el cliente y su bootstrap. Sigue
-pendiente definir una política única que relacione versiones del servidor,
-actualizador, cliente, protocolo, esquema, catálogo, configuración y módulos.
+Antes de desplegar en sucursal, verificar en PC real: instalación por usuario, actualización, certificado HTTPS, Edge ausente y retorno, sesión, comanda, cobro y selección de impresora. El ZIP es el payload auditable; la instalación se inicia con el bootstrap verificador. Antes de abrir el ejecutable, el técnico compara el SHA-256 del instalador con el valor autorizado por el canal de release.

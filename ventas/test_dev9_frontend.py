@@ -363,7 +363,7 @@ assert.deepEqual(
         self.assertIn("@container movimientos (max-width: 520px)", self.admin_css)
         self.assertIn(".hoja-captura-movimiento {", self.admin_css)
 
-@override_settings(SUCURSAL_CLAVE="ARBOLEDAS", POS_REQUIRE_AUTH=False)
+@override_settings(SUCURSAL_CLAVE="ARBOLEDAS", POS_REQUIRE_AUTH=False, PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
 class CapacidadMovimientosOperadorDev9Tests(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -454,7 +454,7 @@ class CapacidadMovimientosOperadorDev9Tests(TestCase):
         )
 
     @override_settings(POS_REQUIRE_AUTH=True)
-    def test_operador_actual_reanuda_y_salir_limpia_la_sesion(self):
+    def test_pin_ajeno_no_eleva_la_sesion_y_salir_limpia_el_operador(self):
         self.client.force_login(self.cuenta)
         identificacion = self._identificar("2222")
         self.assertEqual(identificacion.status_code, 200)
@@ -464,7 +464,15 @@ class CapacidadMovimientosOperadorDev9Tests(TestCase):
         self.assertEqual(actual.json()["operador"]["id"], str(self.elevado.id))
         self.assertIs(
             actual.json()["operador"]["puede_acceder_movimientos"],
-            True,
+            False,
+        )
+        self.assertEqual(
+            self.client.post(
+                "/api/administrador/acceso/",
+                data=json.dumps({"clave_administrador": "2222"}),
+                content_type="application/json",
+            ).status_code,
+            403,
         )
 
         salida = self.client.post(

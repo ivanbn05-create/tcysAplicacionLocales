@@ -10,7 +10,8 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import ConfiguracionImpresionTerminal, TrabajoImpresion
+from .models import (AsignacionImpresoraTerminal, ConfiguracionImpresionTerminal, TrabajoImpresion)
+from .network import resolver_ip_impresora
 from .render import (
     enviar_tcp,
     guardar_png,
@@ -52,11 +53,20 @@ def _recuperar_trabajos_abandonados(ahora):
         .values_list("pk", flat=True)[:100]
     )
     if ids:
-        TrabajoImpresion.objects.filter(pk__in=ids).update(
-            estado=TrabajoImpresion.Estado.PENDIENTE,
-            procesado_en=None,
-            error="El procesamiento anterior se interrumpió; se reintentará.",
-        )
+        if settings.PRINT_BACKEND == "tcp":
+            # Tras un reinicio no sabemos si la impresora recibió todos los bytes.
+            # Evita un segundo papel hasta que soporte revise el trabajo.
+            TrabajoImpresion.objects.filter(pk__in=ids).update(
+                estado=TrabajoImpresion.Estado.ERROR,
+                procesado_en=ahora,
+                error="El servicio se reinició durante el envío. Revisa el papel antes de reintentar.",
+            )
+        else:
+            TrabajoImpresion.objects.filter(pk__in=ids).update(
+                estado=TrabajoImpresion.Estado.PENDIENTE,
+                procesado_en=None,
+                error="El procesamiento anterior se interrumpió; se reintentará.",
+            )
     return len(ids)
 
 
@@ -129,12 +139,32 @@ def resolver_ruta_impresion(sucursal, device_id, destino):
             .first()
         )
     if configuracion is not None:
+        asignaciones = list(
+            AsignacionImpresoraTerminal.objects.select_related("impresora")
+            .filter(terminal=configuracion, destino__in=[destino, "todos"])
+        )
+        # La ruta específica prevalece sobre la general. No se redirige un
+        # recurso desactivado a otra impresora sin decisión del técnico.
+        asignacion = next(
+            (item for item in asignaciones if item.destino == destino),
+            next((item for item in asignaciones if item.destino == "todos"), None),
+        )
+        if asignacion is not None:
+            impresora = asignacion.impresora
+            return {
+                "device_id": identificador,
+                "printer_host": impresora.host if impresora.activa else "",
+                "printer_port": impresora.puerto,
+                "printer_name": impresora.nombre,
+                "origen_ruta": "recurso" if impresora.activa else "recurso_inactivo",
+            }
         host = configuracion.host_para(destino)
         if host:
             return {
                 "device_id": identificador,
                 "printer_host": str(host),
                 "printer_port": int(configuracion.puerto),
+                "printer_name": "",
                 "origen_ruta": "terminal",
             }
     host = str(settings.PRINTER_HOSTS.get(destino) or "").strip()
@@ -142,6 +172,7 @@ def resolver_ruta_impresion(sucursal, device_id, destino):
         "device_id": identificador,
         "printer_host": host or None,
         "printer_port": int(settings.PRINTER_PORT),
+        "printer_name": "",
         "origen_ruta": "legacy_env",
     }
 
@@ -342,8 +373,14 @@ def procesar_trabajo(trabajo):
         trabajo.archivo = relativo
         trabajo.save(update_fields=["archivo"])
         if settings.PRINT_BACKEND == "tcp":
+            if trabajo.origen_ruta == "recurso_inactivo":
+                raise OSError("El recurso de impresora está inactivo.")
             host = trabajo.printer_host or settings.PRINTER_HOSTS[trabajo.destino]
             puerto = trabajo.printer_port or settings.PRINTER_PORT
+            if trabajo.origen_ruta == "recurso":
+                # Fijar la IP validada evita que una segunda resolución DNS
+                # redirija el socket a un destino fuera de la LAN.
+                host = resolver_ip_impresora(host, puerto)
             enviar_tcp(
                 imagen,
                 trabajo.destino,

@@ -38,7 +38,7 @@ class AprovisionamientoClaveMaestraTests(TestCase):
         self.assertFalse(check_password("0000", configuracion.clave_administrador))
 
 
-@override_settings(SUCURSAL_CLAVE="ARBOLEDAS", POS_REQUIRE_AUTH=False)
+@override_settings(SUCURSAL_CLAVE="ARBOLEDAS", POS_REQUIRE_AUTH=False, PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
 class AccesoElevadoTests(TestCase):
     def setUp(self):
         call_command(
@@ -172,7 +172,7 @@ class AccesoElevadoTests(TestCase):
             if usuario["id"] == str(self.administrador.id)
         )
         self.assertEqual(operador["tipo"], Rol.Tipo.ENCARGADO)
-        self.assertEqual(operador["tipo_etiqueta"], "Operador principal")
+        self.assertEqual(operador["tipo_etiqueta"], "Encargado legado")
         self.assertNotIn("clave", operador)
 
         edicion = self.client.patch(
@@ -295,14 +295,13 @@ class AccesoElevadoTests(TestCase):
         sesion_revocada = self.client.get("/api/administrador/resumen/")
         self.assertEqual(sesion_revocada.status_code, 401)
 
-    def test_todos_los_pines_activos_y_la_clave_maestra_identifican_ventas(self):
+    def test_solo_pines_con_capacidad_y_clave_maestra_identifican_ventas(self):
         self._crear_elevado()
         casos = (
             ("0000", "Administrador"),
             ("9876", "Administrador de prueba"),
             ("2468", "Supervisora"),
             ("1111", "Operador de prueba"),
-            ("2222", "Repartidor de prueba"),
         )
         for pin, nombre in casos:
             with self.subTest(pin=pin):
@@ -314,6 +313,14 @@ class AccesoElevadoTests(TestCase):
                 self.assertEqual(respuesta.status_code, 200)
                 self.assertEqual(respuesta.json()["operador"]["nombre"], nombre)
                 self.assertNotIn("clave", respuesta.json()["operador"])
+
+        repartidor = self.client.post(
+            "/api/operador/identificar/",
+            data=json.dumps({"clave": "2222"}),
+            content_type="application/json",
+        )
+        self.assertEqual(repartidor.status_code, 400)
+        self.assertIn("no tiene acceso a Ventas", repartidor.json()["error"])
 
         inactivo = self._crear_usuario(
             "Usuario inactivo",
@@ -396,14 +403,14 @@ class InterfazPermisosAdministrativosTests(SimpleTestCase):
     def test_formulario_personal_crea_elevados_y_edita_el_operador_sin_precargar_pin(self):
         self.assertIn('<option value="elevado">Elevado</option>', self.html)
         self.assertIn(
-            '<option id="usuario-tipo-encargado" value="encargado" hidden disabled>Operador principal</option>',
+            '<option id="usuario-tipo-protegido" value="dueno" hidden disabled>Dueño de sucursal</option>',
             self.html,
         )
         for contrato in (
             'tipo: $("#usuario-tipo").value',
             'configurarTipoUsuario(datos.tipo);',
-            'const esOperadorPrincipal = tipo === "encargado";',
-            'selector.disabled = esOperadorPrincipal;',
+            'const esPerfilProtegido = tipo === "dueno" || tipo === "encargado";',
+            'selector.disabled = esPerfilProtegido;',
             '$("#usuario-clave").value = "";',
             '$("#usuario-clave").required = false;',
         ):

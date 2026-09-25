@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Production 1.0 enrollment success, delivered only once",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "request_id", "branch", "edge", "modules", "credentials"],
+  "properties": {
+    "version": {"const": "1.0"},
+    "request_id": {"type": "string", "format": "uuid"},
+    "branch": {"type": "object", "additionalProperties": false, "required": ["id", "code", "name"], "properties": {
+      "id": {"type": "string", "format": "uuid"}, "code": {"type": "string", "minLength": 1, "maxLength": 64}, "name": {"type": "string", "minLength": 1, "maxLength": 120}
+    }},
+    "edge": {"type": "object", "additionalProperties": false, "required": ["id", "label"], "properties": {
+      "id": {"type": "string", "format": "uuid"}, "label": {"type": "string", "minLength": 1, "maxLength": 100}
+    }},
+    "modules": {"type": "array", "minItems": 7, "items": {"type": "string", "enum": ["pos", "catalogo", "impresion", "respaldos", "domicilios", "pedidos_programados", "reparto", "pedidos_sucursales"]}},
+    "credentials": {"type": "object", "additionalProperties": false, "required": ["ingest", "catalog"], "properties": {
+      "ingest": {"$ref": "#/$defs/credential"}, "catalog": {"$ref": "#/$defs/credential"}
+    }}
+  },
+  "$defs": {"credential": {"type": "object", "additionalProperties": false, "required": ["token", "credential_id", "scopes", "expires_at"], "properties": {
+    "token": {"type": "string", "pattern": "^tcys_[A-Za-z0-9_-]{64}$"},
+    "credential_id": {"type": "string", "format": "uuid"},
+    "scopes": {"type": "array", "minItems": 2, "items": {"type": "string"}},
+    "expires_at": {"type": "string", "format": "date-time"}
+  }}}
+}

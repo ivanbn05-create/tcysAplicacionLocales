@@ -1,0 +1,134 @@
+@font-face {
+  font-family: "Montserrat Tocayos";
+  src: url("/static/ventas/fonts/Montserrat-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Bebas Neue Tocayos";
+  src: url("/static/ventas/fonts/BebasNeue-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+:root {
+  color-scheme: light;
+  --amarillo: #ffed00;
+  --verde: #2f7a26;
+  --rojo: #bf231f;
+  --carbon: #353436;
+  --riel: #242629;
+  --papel: #f8f7f5;
+  --lienzo: #e9e7e1;
+  --linea: #b6b3ad;
+  --muted: #625f62;
+  --foco: #0066cc;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--lienzo); color: var(--carbon); font: 500 .92rem/1.45 "Montserrat Tocayos", Montserrat, sans-serif; }
+::selection { color: var(--carbon); background: var(--amarillo); }
+a { color: inherit; text-underline-offset: .18em; }
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: wait; opacity: .6; }
+:focus-visible { outline: 3px solid var(--foco); outline-offset: 3px; }
+.cabecera { min-height: 70px; padding: 10px clamp(16px, 2.5vw, 34px); background: var(--amarillo); display: flex; align-items: center; gap: 24px; border-bottom: 2px solid var(--carbon); }
+.firma { white-space: nowrap; font: 400 2.25rem/.8 "Bebas Neue Tocayos", sans-serif; letter-spacing: .01em; }
+.firma span { color: #2f7a26; }
+.firma strong { color: var(--rojo); font-weight: 400; }
+.firma sup { font: 700 .55rem "Montserrat Tocayos", sans-serif; vertical-align: top; }
+.cabecera-contexto h1 { margin: 0; font: 400 1.65rem/1 "Bebas Neue Tocayos", sans-serif; text-transform: uppercase; }
+.cabecera-contexto p { margin: 3px 0 0; font-size: .75rem; }
+.salir { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: .76rem; }
+.salir button { min-height: 44px; padding: 8px 14px; color: var(--papel); background: var(--carbon); border: 1px solid var(--carbon); }
+.navegacion { display: flex; gap: 2px; overflow-x: auto; background: var(--riel); padding: 4px clamp(12px, 2.5vw, 32px); scrollbar-color: #a5a29c var(--riel); }
+.navegacion a { display: grid; align-items: center; min-height: 44px; padding: 8px 17px; color: #fff; text-decoration: none; white-space: nowrap; font-weight: 700; }
+.navegacion a:hover, .navegacion a:focus-visible { background: #4c4d4e; }
+main { width: min(1520px, 100%); margin: 0 auto; padding: 16px clamp(14px, 2.5vw, 34px) 64px; }
+.aviso { position: sticky; top: 8px; z-index: 5; margin-bottom: 12px; padding: 12px 16px; color: #103a0a; background: #e9f5e6; border: 2px solid var(--verde); box-shadow: 0 5px 16px #24262922; }
+.aviso.error { color: #74120d; background: #fde9e8; border-color: var(--rojo); }
+.seccion { scroll-margin-top: 16px; margin-top: 24px; }
+.seccion-titulo { display: flex; justify-content: space-between; align-items: end; gap: 18px; margin-bottom: 10px; padding-bottom: 9px; border-bottom: 2px solid var(--carbon); }
+h2, h3 { font-family: "Bebas Neue Tocayos", sans-serif; font-weight: 400; text-transform: uppercase; letter-spacing: .02em; }
+h2 { margin: 0; font-size: 2rem; line-height: 1; }
+h3 { margin: 0 0 12px; font-size: 1.45rem; line-height: 1; }
+p { margin: 0; }
+.seccion-titulo p, .configuracion-edge p, .ayuda { max-width: 72ch; color: var(--muted); font-size: .82rem; }
+.boton { min-height: 44px; padding: 8px 15px; border: 2px solid var(--carbon); background: var(--amarillo); color: var(--carbon); font-weight: 800; }
+.boton:hover { background: #fff9b8; }
+.boton.secundario { background: #fff; }
+.boton.secundario:hover { background: var(--papel); }
+.boton.mini { min-height: 44px; padding: 6px 10px; font-size: .75rem; }
+.hoja { background: var(--papel); border: 1px solid var(--carbon); padding: 18px; }
+.estado-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.datos { margin: 0; display: grid; align-content: start; gap: 10px; }
+.datos div { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; border-bottom: 1px solid var(--linea); padding-bottom: 8px; }
+.datos div:last-child { border-bottom: 0; padding-bottom: 0; }
+.datos dt { color: var(--muted); font-size: .78rem; }
+.datos dd { margin: 0; text-align: right; font-weight: 800; overflow-wrap: anywhere; }
+.datos dd.positivo { color: var(--verde); }
+.datos dd.alerta { color: var(--rojo); }
+.configuracion-edge { margin-top: 12px; display: grid; grid-template-columns: minmax(220px, .8fr) minmax(450px, 1.6fr); gap: 16px; align-items: start; }
+.campos-en-linea { display: grid; grid-template-columns: minmax(180px, 1fr) 100px auto auto; gap: 10px; align-items: end; }
+.campos-en-linea label, .formulario label { display: grid; gap: 5px; font-size: .79rem; font-weight: 800; }
+input:not([type="checkbox"]), select { width: 100%; min-width: 0; min-height: 44px; padding: 8px 10px; border: 1px solid var(--carbon); background: white; color: var(--carbon); border-radius: 2px; }
+input::placeholder { color: #625f62; opacity: 1; }
+.casilla { display: flex !important; align-items: center; gap: 10px !important; min-height: 44px; white-space: nowrap; }
+.casilla input { width: 19px; height: 19px; accent-color: var(--verde); }
+.dato-url { grid-column: 1 / -1; padding-top: 8px; border-top: 1px solid var(--linea); overflow-wrap: anywhere; font-weight: 800; }
+.maestro-detalle { display: grid; grid-template-columns: minmax(290px, .9fr) minmax(340px, 1.1fr); align-items: start; gap: 12px; }
+.lista { display: grid; gap: 8px; min-height: 94px; }
+.fila { display: grid; gap: 7px; border-bottom: 1px solid var(--linea); padding: 5px 0 12px; }
+.fila:last-child { border-bottom: 0; padding-bottom: 0; }
+.fila header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.fila strong { font-size: .95rem; }
+.fila small { color: var(--muted); overflow-wrap: anywhere; }
+.fila p { font-size: .78rem; overflow-wrap: anywhere; }
+.fila .acciones { justify-content: flex-start; }
+.estado { display: inline-block; padding: 3px 7px; border: 1px solid currentColor; color: var(--verde); font-size: .72rem; font-weight: 800; }
+.estado.error, .estado.inactiva { color: var(--rojo); }
+.estado.pendiente, .estado.procesando { color: #795a00; }
+.formulario { display: grid; gap: 12px; }
+.pila { display: grid; gap: 12px; }
+.acciones { display: flex; flex-wrap: wrap; gap: 8px; }
+.rutas-especiales { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.tabla-scroll { overflow-x: auto; scrollbar-color: var(--muted) var(--papel); }
+table { width: 100%; border-collapse: collapse; min-width: 760px; font-size: .8rem; }
+th, td { padding: 10px 8px; border-bottom: 1px solid var(--linea); text-align: left; vertical-align: top; }
+th { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
+td code { font-size: .8rem; overflow-wrap: anywhere; }
+td .acciones { min-width: 144px; }
+td:last-child { white-space: nowrap; }
+.vacio { color: var(--muted); padding: 12px 0; }
+@media (max-width: 1020px) {
+  .configuracion-edge { grid-template-columns: 1fr; }
+  .campos-en-linea { grid-template-columns: minmax(160px, 1fr) 100px auto auto; }
+}
+@media (max-width: 760px) {
+  .cabecera { flex-wrap: wrap; gap: 8px 16px; }
+  .cabecera-contexto { flex: 1; }
+  .salir { width: 100%; justify-content: space-between; }
+  .estado-grid, .maestro-detalle { grid-template-columns: 1fr; }
+  .seccion-titulo { align-items: start; flex-direction: column; }
+  .campos-en-linea { grid-template-columns: minmax(0, 1fr) 100px; }
+  .campos-en-linea .casilla, .campos-en-linea button { align-self: end; }
+  .rutas-especiales { grid-template-columns: 1fr; }
+}
+@media (max-width: 430px) {
+  .campos-en-linea { grid-template-columns: 1fr; }
+  .cabecera-contexto p { font-size: .69rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}
+
+
+.validacion-fisica { display: grid; grid-template-columns: minmax(230px, .8fr) minmax(350px, 1.2fr); gap: 16px; margin-top: 12px; }
+.validacion-fisica > div { display: grid; justify-items: start; align-content: start; gap: 8px; }
+.validacion-fisica h3 { margin-bottom: 0; }
+.validacion-fisica p { max-width: 65ch; color: var(--muted); font-size: .82rem; }
+.validacion-fisica .formulario { gap: 10px; }
+.validacion-fisica button { justify-self: start; }
+@media (max-width: 760px) { .validacion-fisica { grid-template-columns: 1fr; } }

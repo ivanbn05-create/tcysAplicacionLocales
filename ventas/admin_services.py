@@ -8,6 +8,7 @@ from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
+from personas.capacidades import Capacidad, perfil_tiene_capacidad
 from personas.models import Rol, Sucursal, UsuarioPOS
 from personas.modulos import modulo_habilitado
 
@@ -89,10 +90,15 @@ def autenticar_acceso_administrador(sucursal, clave):
     clave = _clave_cuatro_digitos(clave, "La clave de acceso")
     if check_password(clave, configuracion_sucursal(sucursal).clave_administrador):
         return "administrador", None
-    perfil = _perfil_por_clave(sucursal, clave, (Rol.Tipo.ELEVADO,))
-    if perfil is None:
+    perfil = _perfil_por_clave(sucursal, clave)
+    if not perfil_tiene_capacidad(perfil, Capacidad.ADMINISTRAR_NEGOCIO):
         raise ErrorVenta("La clave de acceso administrativo es incorrecta.")
-    return "elevado", perfil
+    nivel = (
+        "administrador"
+        if perfil_tiene_capacidad(perfil, Capacidad.GESTIONAR_USUARIOS)
+        else "elevado"
+    )
+    return nivel, perfil
 
 
 def validar_clave_administrativa(sucursal, clave):
@@ -193,12 +199,14 @@ def identificar_usuario_ventas(sucursal, clave, perfil_administrador=None):
     clave = _clave_cuatro_digitos(clave, "El código")
     perfil = _perfil_por_clave(sucursal, clave)
     if perfil is not None:
+        if not perfil_tiene_capacidad(perfil, Capacidad.VENTAS):
+            raise ErrorVenta("El código no tiene acceso a Ventas.")
         return perfil
     if check_password(clave, configuracion_sucursal(sucursal).clave_administrador):
         if (
             perfil_administrador is not None
             and perfil_administrador.sucursal_id == sucursal.id
-            and perfil_administrador.activo
+            and perfil_tiene_capacidad(perfil_administrador, Capacidad.VENTAS)
         ):
             return perfil_administrador
         return asegurar_actor_administrador(sucursal)
@@ -216,12 +224,9 @@ def usuario_payload(usuario):
         "id": str(usuario.id),
         "nombre": usuario.nombre,
         "tipo": usuario.rol.tipo,
-        "tipo_etiqueta": (
-            "Operador principal"
-            if usuario.rol.tipo == Rol.Tipo.ENCARGADO
-            else usuario.rol.get_tipo_display()
-        ),
+        "tipo_etiqueta": usuario.rol.get_tipo_display(),
         "activo": usuario.activo,
+        "capacidades": list(usuario.rol.capacidades or ()),
     }
 
 
@@ -239,18 +244,19 @@ def guardar_usuario(sucursal, datos, usuario=None):
         )
         if usuario.es_sistema:
             raise ErrorVenta("El actor Administrador es parte del sistema y no puede modificarse.")
-    es_operador_principal = bool(
-        usuario is not None and usuario.rol.tipo == Rol.Tipo.ENCARGADO
+    es_perfil_protegido = bool(
+        usuario is not None
+        and usuario.rol.tipo in {Rol.Tipo.DUENO, Rol.Tipo.ENCARGADO}
     )
-    if es_operador_principal and tipo != Rol.Tipo.ENCARGADO:
-        raise ErrorVenta("El operador principal conserva su función.")
+    if es_perfil_protegido and tipo != usuario.rol.tipo:
+        raise ErrorVenta("Este perfil conserva su función.")
     tipos_permitidos = {
         Rol.Tipo.ELEVADO,
         Rol.Tipo.MESERO,
         Rol.Tipo.REPARTIDOR,
     }
-    if es_operador_principal:
-        tipos_permitidos.add(Rol.Tipo.ENCARGADO)
+    if es_perfil_protegido:
+        tipos_permitidos.add(usuario.rol.tipo)
     if tipo not in tipos_permitidos:
         raise ErrorVenta("Selecciona Elevado, Mesero o Repartidor.")
     permisos_elevados = tipo == Rol.Tipo.ELEVADO

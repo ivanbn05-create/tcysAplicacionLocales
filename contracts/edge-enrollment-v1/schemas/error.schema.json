@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Enrollment or terminal error",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["error"],
+  "properties": {"error": {"type": "string", "minLength": 1, "maxLength": 64}}
+}

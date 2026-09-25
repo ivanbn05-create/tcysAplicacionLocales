@@ -63,16 +63,6 @@ urlpatterns = [
     path("api/tickets/<uuid:ticket_id>/imprimir/", views.api_imprimir, name="api_imprimir"),
     path("api/administrador/acceso/", views.api_admin_acceso, name="api_admin_acceso"),
     path("api/administrador/resumen/", views.api_admin_resumen, name="api_admin_resumen"),
-    path(
-        "api/administrador/configuracion-tecnica/impresion/",
-        views.api_admin_configuraciones_impresion,
-        name="api_admin_configuraciones_impresion",
-    ),
-    path(
-        "api/administrador/configuracion-tecnica/impresion/<uuid:configuracion_id>/",
-        views.api_admin_configuracion_impresion,
-        name="api_admin_configuracion_impresion",
-    ),
     path("api/administrador/usuarios/", views.api_admin_usuarios, name="api_admin_usuarios"),
     path(
         "api/administrador/usuarios/<uuid:usuario_id>/",

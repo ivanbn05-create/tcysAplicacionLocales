@@ -32,9 +32,9 @@ class Command(BaseCommand):
 
         rol, _ = Rol.objects.get_or_create(
             sucursal=sucursal,
-            tipo=Rol.Tipo.ENCARGADO,
+            tipo=Rol.Tipo.DUENO,
             defaults={
-                "nombre": "Encargado",
+                "nombre": "Dueño de sucursal",
                 "puede_cobrar": True,
                 "puede_reimprimir": True,
                 "puede_cancelar": True,
@@ -43,7 +43,7 @@ class Command(BaseCommand):
         )
         nombre = (options.get("nombre") or "").strip()
         if not nombre:
-            nombre = input("Nombre del primer operador [Encargado]: ").strip() or "Encargado"
+            nombre = input("Nombre del dueño de sucursal [Dueño de sucursal]: ").strip() or "Dueño de sucursal"
         nombre = nombre[:100]
 
         pin = (options.get("pin") or "").strip()
@@ -73,7 +73,7 @@ class Command(BaseCommand):
 
     @transaction.atomic
     def handle(self, *args, **options):
-        perfil = (
+        perfiles_libres = (
             UsuarioPOS.objects.select_for_update()
             .select_related("rol", "sucursal")
             .filter(
@@ -84,12 +84,22 @@ class Command(BaseCommand):
                 cuenta__isnull=True,
             )
             .order_by("creado_en")
-            .first()
         )
-        if perfil is None:
-            if options["crear_perfil_inicial"]:
+        if options["crear_perfil_inicial"]:
+            perfil = perfiles_libres.filter(rol__tipo=Rol.Tipo.DUENO).first()
+            if perfil is None:
+                if UsuarioPOS.objects.filter(
+                    sucursal__clave=settings.SUCURSAL_CLAVE,
+                    rol__tipo=Rol.Tipo.DUENO,
+                    es_sistema=False,
+                ).exists():
+                    raise CommandError(
+                        "Ya existe un dueño de sucursal vinculado; no se crea otro implícitamente."
+                    )
                 perfil = self._crear_perfil_inicial(options)
-            else:
+        else:
+            perfil = perfiles_libres.first()
+            if perfil is None:
                 raise CommandError(
                     "No hay un perfil POS libre. Crea otro en /admin/ o usa "
                     "--crear-perfil-inicial durante el primer alta."
