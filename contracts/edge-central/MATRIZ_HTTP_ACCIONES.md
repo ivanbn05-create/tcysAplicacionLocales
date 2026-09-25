@@ -52,3 +52,5 @@ La salida de `REQUIERE_CONCILIACION` necesita una instantánea/exportación auto
 | 429/5xx/timeout/TLS | Reintento en segundo plano; conservar versión activa. |
 
 Un checksum incorrecto, un esquema desconocido, una sucursal distinta, una cadena discontinua o una referencia incompleta nunca se convierten en menú activo. El ACK `aplicado` se crea en la misma transacción SQLite que la activación y sobrevive reinicio, actualización y restauración. Al activar un snapshot completo, el POS desactiva todas las filas de precio `central_v2` anteriores del producto antes de activar el precio publicado; así un precio futuro obsoleto no reaparece.
+
+Para catálogo v3 privado, el Edge usa `GET /api/v3/edge/catalogo/publicaciones/actual/` y `POST /api/v3/edge/catalogo/publicaciones/{uuid}/acuse/` sólo con su flag v3 activo. El ACK v3 aplicado/rechazado lleva `version_contrato=3`, mappings exhaustivos y límite de 1 MiB. Cada evento v2 ya persistido conserva su payload, hash y ruta v2; requiere el flag/scope v2 para drenarse. Ambas banderas siguen apagadas por defecto.
