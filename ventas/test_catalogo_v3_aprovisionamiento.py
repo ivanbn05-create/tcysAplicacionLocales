@@ -38,7 +38,8 @@ from ventas.catalogo_central import (
     encolar_ack_catalogo_rechazado,
 )
 from ventas.models import ConfiguracionSucursal, DefinicionPromocion, EventoOutbox
-from ventas.sincronizacion_central import _limite_payload_evento, _ruta_evento, json_canonico
+from ventas.promociones import _publicacion_activa
+from ventas.sincronizacion_central import _limite_payload_evento, _ruta_evento, hash_payload, json_canonico
 
 
 class CatalogoV3AprovisionamientoTests(TestCase):
@@ -318,6 +319,68 @@ class CatalogoV3AprovisionamientoTests(TestCase):
             publicacion.save(update_fields=["snapshot"])
             self.assertEqual(ids_productos_vendibles(self.sucursal), set())
             self.assertFalse(estado_aprovisionamiento(self.sucursal)["listo"])
+
+    def test_v3_inicia_cadena_propia_tras_v2_y_conserva_acks_historicos(self):
+        def v2(*, version=1, anterior=None):
+            datos = self.snapshot(version=version, anterior=anterior)
+            datos["version_contrato"] = 2
+            del datos["conteos"]["promociones"]
+            del datos["contenido"]["promociones"]
+            for producto in datos["contenido"]["productos"]:
+                del producto["disponible_sucursal"]
+            datos["contenido_sha256"] = checksum_snapshot(datos)
+            return datos
+
+        with self.identidad_settings():
+            primera_v2, _ = aplicar_publicacion_catalogo(self.sucursal, v2())
+            segunda_v2, _ = aplicar_publicacion_catalogo(
+                self.sucursal, v2(version=2, anterior=primera_v2.publicacion_id)
+            )
+            acks_v2 = list(
+                EventoOutbox.objects.filter(
+                    destino=EventoOutbox.Destino.CENTRAL_CATALOGO_ACK,
+                    version_contrato=2,
+                ).order_by("creado_en")
+            )
+            self.assertEqual(len(acks_v2), 2)
+            datos_v3 = self.snapshot()
+            primera_v3, creada = aplicar_publicacion_catalogo(self.sucursal, datos_v3)
+            self.assertTrue(creada)
+            repetida, creada_repetida = aplicar_publicacion_catalogo(self.sucursal, datos_v3)
+            self.assertFalse(creada_repetida)
+            self.assertEqual(repetida.pk, primera_v3.pk)
+            self.assertEqual(primera_v3.version, 1)
+            self.assertEqual(primera_v3.version_contrato, 3)
+            self.assertEqual(PublicacionCatalogoCentral.objects.count(), 3)
+            self.assertEqual(estado_aprovisionamiento(self.sucursal)["version_contrato"], 3)
+            self.assertEqual(_publicacion_activa(self.sucursal.id).pk, primera_v3.pk)
+            primera_v2.refresh_from_db()
+            self.assertEqual(primera_v2.snapshot["version_contrato"], 2)
+            for ack in acks_v2:
+                self.assertEqual(ack.datos["version_contrato"], 2)
+                self.assertEqual(ack.payload_hash, hash_payload(ack.datos))
+                self.assertEqual(
+                    _ruta_evento(ack),
+                    f"/api/v2/edge/catalogo/publicaciones/{ack.agregado_id}/acuse/",
+                )
+            marcar_listo(self.sucursal)
+            self.assertTrue(estado_aprovisionamiento(self.sucursal)["listo"])
+            vendible = IdentidadProductoCentral.objects.get(
+                central_id=self.vendible_id
+            ).producto
+            self.assertTrue(producto_vendible(self.sucursal, vendible))
+            segunda_v3, _ = aplicar_publicacion_catalogo(
+                self.sucursal,
+                self.snapshot(version=2, anterior=primera_v3.publicacion_id, importe="37.00"),
+            )
+            self.assertEqual(segunda_v3.version_contrato, 3)
+            self.assertEqual(estado_aprovisionamiento(self.sucursal)["version"], 2)
+            self.assertEqual(vendible.precio_actual().importe, Decimal("37.00"))
+            with self.assertRaises(ErrorCatalogoCentral):
+                aplicar_publicacion_catalogo(
+                    self.sucursal,
+                    v2(version=3, anterior=segunda_v2.publicacion_id),
+                )
 
     def test_no_admite_downgrade_a_v2_tras_publicacion_v3(self):
         primera, _ = aplicar_publicacion_catalogo(self.sucursal, self.snapshot())
