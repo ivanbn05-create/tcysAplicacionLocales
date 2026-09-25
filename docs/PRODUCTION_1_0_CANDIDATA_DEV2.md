@@ -24,7 +24,7 @@ Una instalación Central nueva expone estados durables `enrolado`, `esperando_ca
 
 ## Contrato y pruebas
 
-El contrato candidato ejecutable está en `contracts/edge-central/CATALOGO_V3_EDGE.md`, su JSON Schema y fixture LAB01. Incluye `contenido:{categorias,productos,promociones}`, availability obligatoria, precio, grupos y UUID, límite 1 MiB y checksum SHA-256 canónico. La ruta de descarga y ACK/scope deben congelarse con Central antes del E2E; actualmente el cliente usa rutas v2 candidatas. Las banderas de distribución permanecen apagadas.
+El contrato candidato ejecutable está en `contracts/edge-central/CATALOGO_V3_EDGE.md`, su JSON Schema y fixture LAB01. Incluye `contenido:{categorias,productos,promociones}`, availability obligatoria, precio, grupos y UUID, límite 1 MiB y checksum SHA-256 canónico. Central y Edge acordaron para el E2E privado rutas v3 de descarga/acuse, ACK `version_contrato=3`, scopes `catalog:v3:read`/`catalog:v3:ack` ligados a Edge/sucursal y límite de ACK v3 de 1 MiB. El cliente conserva rutas, payloads y acuses v2 durables para rollback; la selección de ruta v3 requiere `CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3=true`. Ambas banderas de distribución permanecen apagadas por defecto.
 
 Pruebas locales a repetir tras cada cambio:
 
@@ -40,6 +40,6 @@ Estas pruebas usan SQLite de test y fixture sintético. Cubren equivalencia PB/P
 ## Gates restantes
 
 1. Importar y auditar el catálogo vigente real de Arboledas en Central: categorías, UUID estables, productos, precios, PB/PL/P4/PK como datos, fotos y excepciones. Resolver colisiones sin empatar por nombre. Aprobar la fuente y el acta de import.
-2. Acordar rutas/scopes/ACK v3 y probar descarga TLS, aplicación, reintento, falla parcial, reinicio, offline y confirmación Central ↔ Edge con PostgreSQL; mantener v2/legado como rollback hasta el corte.
+2. Ejecutar E2E de rutas/scopes/ACK v3: descarga TLS, aplicación, reintento, falla parcial, reinicio, offline y confirmación Central ↔ Edge con PostgreSQL; mantener v2/legado como rollback hasta el corte.
 3. Ensayar instalación nueva y actualización 1.x en Windows aislado, con impresoras físicas, backup y restore, colas/outbox, dos terminales y APK. La confirmación de `listo` sólo sigue a esa verificación.
 4. Verificar UI táctil con operador real y pruebas de varias promociones simultáneas. No habilitar venta ni declarar versión base Production 1.0 por pasar sólo pruebas sintéticas.
