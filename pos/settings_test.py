@@ -42,6 +42,7 @@ for _nombre_secreto in (
 os.environ["CENTRAL_ENABLE_SALES_V2"] = "false"
 os.environ["CENTRAL_ENABLE_CUSTOMERS_V2"] = "false"
 os.environ["CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2"] = "false"
+os.environ["CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3"] = "false"
 # La suite no debe heredar credenciales ni un destino VPS del host.
 os.environ["VPS_CONSOLIDACION_URL"] = ""
 os.environ["VPS_CONSOLIDACION_TOKEN"] = ""
