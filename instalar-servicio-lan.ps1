@@ -1938,6 +1938,7 @@ if ($Modo -eq "Instalar") {
         Set-DotEnvValue -Path $entorno -Name "CENTRAL_ENABLE_SALES_V2" -Value "false"
         Set-DotEnvValue -Path $entorno -Name "CENTRAL_ENABLE_CUSTOMERS_V2" -Value "false"
         Set-DotEnvValue -Path $entorno -Name "CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2" -Value "false"
+        Set-DotEnvValue -Path $entorno -Name "CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3" -Value "false"
     }
     Set-DotEnvValue -Path $entorno -Name "PRINT_BACKEND" -Value $PrintBackend
     Set-DotEnvValue -Path $entorno -Name "PRINT_SYNC" -Value "false"
