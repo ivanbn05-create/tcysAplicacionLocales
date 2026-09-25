@@ -640,14 +640,22 @@ def aplicar_publicacion_catalogo(sucursal, datos):
     ) = validar_publicacion_catalogo(datos, sucursal)
     type(sucursal).objects.select_for_update().get(pk=sucursal.pk)
 
-    ultima = (
-        PublicacionCatalogoCentral.objects.select_for_update()
-        .filter(sucursal=sucursal, estado=PublicacionCatalogoCentral.Estado.APLICADA)
-        .order_by("-version")
-        .first()
+    publicaciones = PublicacionCatalogoCentral.objects.select_for_update().filter(
+        sucursal=sucursal,
+        estado=PublicacionCatalogoCentral.Estado.APLICADA,
     )
-    if ultima is not None and ultima.version_contrato >= 3 and raiz["version_contrato"] < 3:
+    ultima_activa = publicaciones.order_by("-version_contrato", "-version").first()
+    if (
+        ultima_activa is not None
+        and ultima_activa.version_contrato >= 3
+        and raiz["version_contrato"] < 3
+    ):
         _error("schema_no_soportado", "No se admite bajar el contrato de catálogo v3 a v2.")
+    # Central inicia v3 en 1 aunque exista una cadena v2. Cada contrato tiene
+    # su propia secuencia; las publicaciones y ACK v2 permanecen intactos.
+    ultima = publicaciones.filter(
+        version_contrato=raiz["version_contrato"]
+    ).order_by("-version").first()
     _validar_raices_promocionales_historicas(sucursal, raiz)
     existente = PublicacionCatalogoCentral.objects.filter(
         sucursal=sucursal,
