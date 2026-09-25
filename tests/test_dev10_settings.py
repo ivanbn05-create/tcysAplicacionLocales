@@ -79,6 +79,7 @@ class SettingsRemotosDev10Tests(unittest.TestCase):
                 "s.CENTRAL_ENABLE_SALES_V2, "
                 "s.CENTRAL_ENABLE_CUSTOMERS_V2, "
                 "s.CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2, "
+                "s.CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3, "
                 "bool(s.PEDIDOS_API_TOKEN), bool(s.CENTRAL_INGEST_TOKEN), "
                 "bool(s.CENTRAL_CATALOG_TOKEN))"
             )
@@ -86,7 +87,7 @@ class SettingsRemotosDev10Tests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             result.stdout.strip(),
-            "('desactivada', False, False, False, False, False, False)",
+            "('desactivada', False, False, False, False, False, False, False)",
         )
 
     def test_pedidos_v2_exige_https_token_fuerte_e_ids_positivos(self):
@@ -139,6 +140,16 @@ class SettingsRemotosDev10Tests(unittest.TestCase):
         )
         self.assertEqual(catalog.returncode, 0, catalog.stderr)
         self.assertEqual(catalog.stdout.strip(), "(True, False)")
+        catalog_v3 = self.importar(
+            extra={
+                **base,
+                "CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3": "true",
+                "CENTRAL_CATALOG_TOKEN": TOKEN_CATALOGO,
+            },
+            expresion="(s.CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3, s.CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2)",
+        )
+        self.assertEqual(catalog_v3.returncode, 0, catalog_v3.stderr)
+        self.assertEqual(catalog_v3.stdout.strip(), "(True, False)")
 
         cases = (
             (
@@ -180,6 +191,14 @@ class SettingsRemotosDev10Tests(unittest.TestCase):
                 {
                     **base,
                     "CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2": "true",
+                    "CENTRAL_CATALOG_TOKEN": "",
+                },
+                "CENTRAL_CATALOG_TOKEN independiente",
+            ),
+            (
+                {
+                    **base,
+                    "CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3": "true",
                     "CENTRAL_CATALOG_TOKEN": "",
                 },
                 "CENTRAL_CATALOG_TOKEN independiente",
