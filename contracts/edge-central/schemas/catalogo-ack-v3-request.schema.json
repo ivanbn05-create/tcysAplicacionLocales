@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.lostocayos.invalid/edge-central/catalogo-ack-v3-request.schema.json",
+  "title": "Evento durable de ACK de catálogo v3 propuesto",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version_contrato",
+    "ack_id",
+    "pos_instance_id",
+    "sucursal",
+    "release_id",
+    "publicacion_id",
+    "version_sucursal",
+    "contenido_sha256",
+    "estado",
+    "registrado_en",
+    "resultado",
+    "mapeos_categoria",
+    "mapeos_producto"
+  ],
+  "properties": {
+    "version_contrato": {
+      "const": 3
+    },
+    "ack_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "pos_instance_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "sucursal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "clave"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "clave": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 30
+        }
+      }
+    },
+    "release_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "publicacion_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "version_sucursal": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "contenido_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "recibido",
+        "aplicado",
+        "rechazado"
+      ]
+    },
+    "registrado_en": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "resultado": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codigo",
+        "detalle"
+      ],
+      "properties": {
+        "codigo": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "checksum_invalido",
+            "schema_no_soportado",
+            "sucursal_incorrecta",
+            "version_fuera_de_orden",
+            "conflicto_local",
+            "payload_excede_limite"
+          ]
+        },
+        "detalle": {
+          "type": "string",
+          "maxLength": 200
+        }
+      }
+    },
+    "mapeos_categoria": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "categoria_central_id",
+          "categoria_local_id"
+        ],
+        "properties": {
+          "categoria_central_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "categoria_local_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      }
+    },
+    "mapeos_producto": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "producto_central_id",
+          "producto_local_id"
+        ],
+        "properties": {
+          "producto_central_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "producto_local_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      }
+    }
+  }
+}
