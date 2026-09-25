@@ -42,6 +42,15 @@ MAX_BODY_POR_DESTINO = {
 }
 
 
+def _limite_payload_evento(evento):
+    if (
+        evento.destino == EventoOutbox.Destino.CENTRAL_CATALOGO_ACK
+        and evento.version_contrato == 3
+    ):
+        return 1024 * 1024
+    return MAX_BODY_POR_DESTINO[evento.destino]
+
+
 def json_canonico(datos):
     return json.dumps(
         datos,
@@ -289,13 +298,16 @@ def encolar_cliente_central(cliente):
     )
 
 
-def _flujo_habilitado(destino):
+def _flujo_habilitado(destino, version_contrato=None):
     if destino == EventoOutbox.Destino.CENTRAL_VENTAS:
         return bool(settings.CENTRAL_ENABLE_SALES_V2)
     if destino == EventoOutbox.Destino.CENTRAL_CLIENTES:
         return bool(settings.CENTRAL_ENABLE_CUSTOMERS_V2)
     if destino == EventoOutbox.Destino.CENTRAL_CATALOGO_ACK:
-        return bool(settings.CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2)
+        if version_contrato == 2:
+            return bool(settings.CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2)
+        if version_contrato == 3:
+            return bool(settings.CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3)
     return False
 
 
@@ -321,7 +333,12 @@ def _ruta_evento(evento):
         publicacion_id = _uuid_canonico(
             evento.datos.get("publicacion_id"), "publicacion_id"
         )
-        return f"/api/v2/edge/catalogo/publicaciones/{publicacion_id}/acuse/"
+        contrato = evento.version_contrato
+        if type(contrato) is not int or contrato not in {2, 3}:
+            raise ErrorContratoCentral("Version de ACK de catalogo no soportada.")
+        if evento.datos.get("version_contrato") != contrato:
+            raise ErrorContratoCentral("Version de ACK no coincide con el outbox durable.")
+        return f"/api/v{contrato}/edge/catalogo/publicaciones/{publicacion_id}/acuse/"
     try:
         return RUTAS_CENTRAL[evento.destino]
     except KeyError as exc:
@@ -508,7 +525,7 @@ def sincronizar_outbox_central(*, limite=50, cliente_factory=ClienteCentral):
     }
     clientes = {}
     for candidato in candidatos:
-        if not _flujo_habilitado(candidato.destino):
+        if not _flujo_habilitado(candidato.destino, candidato.version_contrato):
             resultado["pendientes"] += 1
             continue
 
@@ -540,7 +557,7 @@ def sincronizar_outbox_central(*, limite=50, cliente_factory=ClienteCentral):
             ):
                 resultado["suspendidos"] += 1
             continue
-        if len(json_canonico(evento.datos)) > MAX_BODY_POR_DESTINO[evento.destino]:
+        if len(json_canonico(evento.datos)) > _limite_payload_evento(evento):
             if _actualizar_evento(
                 evento.id,
                 intento=intento,
