@@ -47,7 +47,7 @@ from ventas.services import (
     ajustar_grupo_partidas,
     registrar_evento,
 )
-from ventas.sincronizacion_central import hash_payload
+from ventas.sincronizacion_central import _ruta_evento, hash_payload
 
 
 class ActorAdministradorProtegidoTests(TestCase):
@@ -554,6 +554,12 @@ class CatalogoCentralAtomicoTests(TestCase):
             EventoOutbox.EstadoEntrega.PENDIENTE,
         )
         self.assertEqual(ack.datos["estado"], "aplicado")
+        self.assertEqual(ack.version_contrato, 2)
+        self.assertEqual(ack.datos["version_contrato"], 2)
+        self.assertEqual(
+            _ruta_evento(ack),
+            f"/api/v2/edge/catalogo/publicaciones/{publicacion.publicacion_id}/acuse/",
+        )
         self.assertEqual(
             ack.datos["contenido_sha256"],
             datos["contenido_sha256"],
