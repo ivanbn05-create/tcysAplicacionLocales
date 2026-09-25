@@ -1,6 +1,6 @@
 # Credenciales, scopes y variables por sucursal
 
-Este documento separa tres planos de confianza. Los nombres marcados como **existentes** ya están reconocidos por el candidato POS; los marcados como **propuestos** requieren implementación o reconciliación. Ninguna bandera v2 debe habilitarse hasta completar el E2E con agente1.
+Este documento separa tres planos de confianza. Los nombres marcados como **existentes** ya están reconocidos por el candidato POS; los marcados como **propuestos** requieren implementación o reconciliación. Ninguna bandera de catálogo v2/v3 debe habilitarse hasta completar el E2E con agente1.
 
 ## Credenciales
 
@@ -9,7 +9,7 @@ Este documento separa tres planos de confianza. Los nombres marcados como **exis
 | `PEDIDOS_API_TOKEN` | Una instalación Edge y una allowlist de `SucursalCliente.id` | `orders:v2:read` limitado a esas identidades | Leer páginas de pedidos y obtener un cursor firmado | El nombre existe en POS. El candidato de Pedidos `8fad56815f856b4286a2f60f488480960e34cde5` todavía usa una allowlist global; el binding y scope por Edge son **propuestos**. |
 | `VPS_CONSOLIDACION_TOKEN` | Una sucursal central (`Branch.source_id`) | `sales:v1:write` | Consolidación mensual v1 | Flujo **implementado como candidato privado**. El modelo central enlaza credencial y sucursal, pero el scope explícito es **propuesto**. |
 | `CENTRAL_INGEST_TOKEN` | Una instalación Edge + una sucursal | `sales:v2:write`, y sólo si se habilita clientes, `customers:v2:write` | Ventas detalladas y eventos de cliente | Nombres y banderas existen en POS; rutas/scopes centrales **propuestos y desactivados**. Puede emitirse un token separado para cada scope si se desea menor privilegio. |
-| `CENTRAL_CATALOG_TOKEN` | Una instalación Edge + una sucursal | `catalog:v2:read`, `catalog:v2:ack` | Descargar snapshots completos de su sucursal y confirmar recepción/aplicación/rechazo | Nombres y bandera existen en POS; rutas/scopes centrales **propuestos y desactivados**. |
+| `CENTRAL_CATALOG_TOKEN` | Una instalación Edge + una sucursal | `catalog:v3:read`, `catalog:v3:ack`; durante transición también `catalog:v2:read`, `catalog:v2:ack` | Descargar snapshots completos de su sucursal y confirmar aplicación/rechazo | Token separado de Pedidos e ingesta; rutas privadas v3 candidatas, apagadas. Los ACK v2 pendientes requieren scopes v2. |
 
 Un token de catálogo no publica, edita ni aprueba precios. Esas acciones pertenecen al portal humano del central con MFA y step-up. Una credencial de Pedidos nunca se reutiliza contra el central, y `CENTRAL_INGEST_TOKEN` nunca se usa para leer Pedidos. La rotación de una credencial no cambia UUID, cursores, outbox, lotes ni ACK de otra integración.
 
@@ -55,7 +55,7 @@ Ejemplo separado para catalogo:
   "branch_source_id": "11111111-1111-4111-8111-111111111111",
   "branch_code": "LAB01",
   "audience": "central-catalog",
-  "scopes": ["catalog:v2:read", "catalog:v2:ack"],
+  "scopes": ["catalog:v2:read", "catalog:v2:ack", "catalog:v3:read", "catalog:v3:ack"],
   "expires_at": "2026-12-31T23:59:59Z"
 }
 ```
@@ -64,7 +64,7 @@ Interfaz CLI propuesta para implementar en el central; estos comandos **no exist
 
 ```bash
 python manage.py issue_scoped_edge_token --branch-source-id 11111111-1111-4111-8111-111111111111 --pos-instance-id 23232323-2323-4232-8232-232323232323 --audience central-ingest --scope sales:v2:write --scope customers:v2:write --output /run/secrets/lab01-central-ingest.token
-python manage.py issue_scoped_edge_token --branch-source-id 11111111-1111-4111-8111-111111111111 --pos-instance-id 23232323-2323-4232-8232-232323232323 --audience central-catalog --scope catalog:v2:read --scope catalog:v2:ack --output /run/secrets/lab01-central-catalog.token
+python manage.py issue_scoped_edge_token --branch-source-id 11111111-1111-4111-8111-111111111111 --pos-instance-id 23232323-2323-4232-8232-232323232323 --audience central-catalog --scope catalog:v2:read --scope catalog:v2:ack --scope catalog:v3:read --scope catalog:v3:ack --output /run/secrets/lab01-central-catalog.token
 python manage.py rotate_edge_token --credential-id 26262626-2626-4262-8262-262626262621 --output /run/secrets/lab01-central-ingest-next.token
 python manage.py revoke_edge_token --credential-id 26262626-2626-4262-8262-262626262621 --reason rotacion_completada
 ```
@@ -101,7 +101,7 @@ Las variables legacy `PEDIDOS_SUCURSALES_DATABASE_URL` y `PEDIDOS_SUCURSALES_DB_
 | `VPS_CONSOLIDACION_URL` | Endpoint HTTPS completo de mensual v1; debe configurarse junto con su token. |
 | `VPS_CONSOLIDACION_TOKEN` | Secreto exclusivo de mensual v1. |
 | `VPS_CONSOLIDACION_TIMEOUT` | 1–60 segundos. |
-| `CENTRAL_API_BASE_URL` | Origen HTTPS único de las rutas v2 candidatas. |
+| `CENTRAL_API_BASE_URL` | Origen HTTPS único de las rutas v2/v3 candidatas. |
 | `CENTRAL_BRANCH_ID` | UUID exacto de `personas.Sucursal.id` = `Branch.source_id`. |
 | `CENTRAL_BRANCH_CODE` | Código exacto esperado por ambos extremos; es comprobación adicional, no identidad sustituta. |
 | `CENTRAL_POS_INSTANCE_ID` | UUID durable creado por instalación; no cambia en una actualización. |
@@ -110,7 +110,8 @@ Las variables legacy `PEDIDOS_SUCURSALES_DATABASE_URL` y `PEDIDOS_SUCURSALES_DB_
 | `CENTRAL_API_CA_BUNDLE` | CA confiable. No `verify=False`. |
 | `CENTRAL_ENABLE_SALES_V2` | Debe permanecer `false` hasta que agente1 implemente y habilite la ruta. |
 | `CENTRAL_ENABLE_CUSTOMERS_V2` | Debe permanecer `false`; la API de clientes no está activada. |
-| `CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2` | Debe permanecer `false`; no existe distribución real todavía. |
+| `CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2` | Rollback y drenaje de ACK v2; `false` por defecto. |
+| `CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3` | GET/ACK v3 del candidato privado; `false` por defecto hasta E2E. |
 | `CENTRAL_CONNECT_TIMEOUT_SECONDS` | 1–30; base 5. |
 | `CENTRAL_READ_TIMEOUT_SECONDS` | 1–60; base 15. |
 | `CENTRAL_MAX_RESPONSE_BYTES` | 4 KiB–4 MiB; base 1 MiB. |
@@ -124,10 +125,12 @@ Los siguientes nombres deben agregarse al backend central con valor seguro por d
 CENTRAL_ENABLE_SALES_V2=false
 CENTRAL_ENABLE_CUSTOMERS_V2=false
 CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2=false
+CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3=false
 CENTRAL_SALES_V2_MAX_BODY_BYTES=262144
 CENTRAL_CUSTOMERS_V2_MAX_BODY_BYTES=65536
 CENTRAL_CATALOG_V2_MAX_BODY_BYTES=1048576
 CENTRAL_CATALOG_ACK_V2_MAX_BODY_BYTES=16384
+CENTRAL_CATALOG_ACK_V3_MAX_BODY_BYTES=1048576
 CENTRAL_EDGE_TOKEN_TTL_DAYS=90
 CENTRAL_EDGE_TOKEN_HASH_PEPPER_FILE=/run/secrets/central_edge_token_pepper
 ```
