@@ -77,6 +77,21 @@ class EnrollmentTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 write_private_receipt(receipt, path)
 
+    def test_catalog_credential_accepts_v3_and_transition_scopes(self):
+        original = json.loads(RESPONSE_BYTES)
+        v3 = {"catalog:v3:read", "catalog:v3:ack"}
+        transition = v3 | {"catalog:v2:read", "catalog:v2:ack"}
+        for scopes in (v3, transition):
+            with self.subTest(scopes=scopes):
+                data = json.loads(RESPONSE_BYTES)
+                data["credentials"]["catalog"]["scopes"] = sorted(scopes)
+                receipt = validate_receipt(json.dumps(data).encode(), CARD)
+                self.assertEqual(receipt.branch_id, CARD.expected_branch_id)
+                self.assertNotEqual(receipt.central_catalog_token, receipt.central_ingest_token)
+        original["credentials"]["catalog"]["scopes"] = ["catalog:v3:read"]
+        with self.assertRaises(EnrollmentError):
+            validate_receipt(json.dumps(original).encode(), CARD)
+
     def test_card_requires_exact_private_identifiers(self):
         data = json.loads(CARD_BYTES)
         data["expected_branch_id"] = str(uuid.uuid4())
