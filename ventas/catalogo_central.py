@@ -482,6 +482,13 @@ def _mapeos_ack(sucursal, publicacion):
             central_id__in=productos_ids,
         ).order_by("central_id")
     ]
+    if (
+        len(categorias) != len(categorias_ids)
+        or len(productos) != len(productos_ids)
+        or {uuid.UUID(item["categoria_central_id"]) for item in categorias} != categorias_ids
+        or {uuid.UUID(item["producto_central_id"]) for item in productos} != productos_ids
+    ):
+        _error("conflicto_local", "El ACK no contiene todos los mapeos de la publicacion.")
     return categorias, productos
 
 
@@ -491,7 +498,7 @@ def _crear_ack(sucursal, publicacion):
     ack_id = uuid.uuid4()
     categorias, productos = _mapeos_ack(sucursal, publicacion)
     payload = {
-        "version_contrato": 2,
+        "version_contrato": publicacion.version_contrato,
         "ack_id": str(ack_id),
         "pos_instance_id": obtener_pos_instance_id(sucursal),
         "sucursal": {"id": str(sucursal.id), "clave": sucursal.clave},
@@ -514,15 +521,23 @@ def _crear_ack(sucursal, publicacion):
         datos=payload,
         destino=EventoOutbox.Destino.CENTRAL_CATALOGO_ACK,
         estado_entrega=EventoOutbox.EstadoEntrega.PENDIENTE,
-        version_contrato=2,
+        version_contrato=publicacion.version_contrato,
         version_origen=publicacion.version,
         payload_hash=hash_payload(payload),
     )
 
 
-def encolar_ack_catalogo_rechazado(sucursal, datos, error):
+def encolar_ack_catalogo_rechazado(
+    sucursal, datos, error, *, version_contrato=None
+):
     """Persiste un rechazo seguro si la publicacion puede identificarse sin ambiguedad."""
 
+    if type(datos) is not dict:
+        return None
+    if version_contrato is None:
+        version_contrato = datos.get("version_contrato")
+    if type(version_contrato) is not int or version_contrato not in {2, 3}:
+        return None
     if error.codigo == "sucursal_incorrecta":
         return None
     try:
@@ -545,7 +560,7 @@ def encolar_ack_catalogo_rechazado(sucursal, datos, error):
     ack_id = uuid.uuid4()
     codigo = error.codigo if error.codigo in CODIGOS_RECHAZO else "schema_no_soportado"
     payload = {
-        "version_contrato": 2,
+        "version_contrato": version_contrato,
         "ack_id": str(ack_id),
         "pos_instance_id": obtener_pos_instance_id(sucursal),
         "sucursal": {"id": str(sucursal.id), "clave": sucursal.clave},
@@ -568,7 +583,7 @@ def encolar_ack_catalogo_rechazado(sucursal, datos, error):
         datos=payload,
         destino=EventoOutbox.Destino.CENTRAL_CATALOGO_ACK,
         estado_entrega=EventoOutbox.EstadoEntrega.PENDIENTE,
-        version_contrato=2,
+        version_contrato=version_contrato,
         version_origen=version,
         payload_hash=hash_payload(payload),
         ultimo_error=codigo,
