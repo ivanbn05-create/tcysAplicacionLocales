@@ -34,7 +34,7 @@ def _publicacion_activa(sucursal_id):
             sucursal_id=sucursal_id,
             estado=PublicacionCatalogoCentral.Estado.APLICADA,
         )
-        .order_by("-version")
+        .order_by("-version_contrato", "-version")
         .first()
     )
 
