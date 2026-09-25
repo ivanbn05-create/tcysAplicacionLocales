@@ -473,6 +473,9 @@ class EdgeCentralContractTests(unittest.TestCase):
             ("get", "/api/v2/edge/catalogo/publicaciones/actual/"): ("propuesto-desactivado", "catalog:v2:read"),
             ("get", "/api/v2/edge/catalogo/publicaciones/{publicacion_id}/"): ("propuesto-desactivado", "catalog:v2:read"),
             ("post", "/api/v2/edge/catalogo/publicaciones/{publicacion_id}/acuse/"): ("propuesto-desactivado", "catalog:v2:ack"),
+            ("get", "/api/v3/edge/catalogo/publicaciones/actual/"): ("propuesto-desactivado", "catalog:v3:read"),
+            ("get", "/api/v3/edge/catalogo/publicaciones/{uuid}/"): ("propuesto-desactivado", "catalog:v3:read"),
+            ("post", "/api/v3/edge/catalogo/publicaciones/{uuid}/acuse/"): ("propuesto-desactivado", "catalog:v3:ack"),
         }
         actual: dict[tuple[str, str], tuple[str, str]] = {}
         for path, path_item in api["paths"].items():
@@ -534,6 +537,31 @@ class EdgeCentralContractTests(unittest.TestCase):
                 if http.get("scope"):
                     self.assertEqual(http["scope"], operation["x-required-scope"])
 
+    def test_catalog_ack_v3_fixture_is_exhaustive_and_versioned(self) -> None:
+        snapshot = load_json(FIXTURE_ROOT / "catalogo-publicacion-v3-lab01-promocion.json")
+        request_schema = load_json(SCHEMA_ROOT / "catalogo-ack-v3-request.schema.json")
+        response_schema = load_json(SCHEMA_ROOT / "catalogo-ack-v3-response.schema.json")
+        aplicado = load_json(FIXTURE_ROOT / "catalogo-ack-v3-request-aplicado.json")
+        rechazado = load_json(FIXTURE_ROOT / "catalogo-ack-v3-request-rechazado.json")
+        respuesta = load_json(FIXTURE_ROOT / "catalogo-ack-v3-response-aplicado.json")
+        for ack in (aplicado, rechazado):
+            validate_schema(ack, request_schema)
+            self.assertEqual(ack["version_contrato"], 3)
+            self.assertEqual(ack["publicacion_id"], snapshot["publicacion_id"])
+            self.assertEqual(ack["release_id"], snapshot["release_id"])
+        validate_schema(respuesta, response_schema)
+        self.assertEqual(respuesta["ack_id"], aplicado["ack_id"])
+        self.assertEqual(aplicado["contenido_sha256"], snapshot["contenido_sha256"])
+        self.assertEqual(
+            {item["categoria_central_id"] for item in aplicado["mapeos_categoria"]},
+            {item["categoria_central_id"] for item in snapshot["contenido"]["categorias"]},
+        )
+        self.assertEqual(
+            {item["producto_central_id"] for item in aplicado["mapeos_producto"]},
+            {item["producto_central_id"] for item in snapshot["contenido"]["productos"]},
+        )
+        self.assertEqual(rechazado["mapeos_producto"], [])
+
     def test_ack_identity_is_stable_before_and_after_purge(self) -> None:
         monthly_received = load_json(FIXTURE_ROOT / "consolidacion-mensual-v1-response-recibido.json")
         monthly_purged = load_json(FIXTURE_ROOT / "consolidacion-mensual-v1-response-purgado.json")
@@ -550,6 +578,8 @@ class EdgeCentralContractTests(unittest.TestCase):
             "cliente-evento-v2-request.json": 64 * 1024,
             "catalogo-ack-v2-request-aplicado.json": 16 * 1024,
             "catalogo-ack-v2-request-rechazado.json": 16 * 1024,
+            "catalogo-ack-v3-request-aplicado.json": 1024 * 1024,
+            "catalogo-ack-v3-request-rechazado.json": 1024 * 1024,
             "catalogo-publicacion-v2-lab01-global.json": 1024 * 1024,
             "catalogo-publicacion-v2-lab02-excepcion.json": 1024 * 1024,
         }
@@ -566,7 +596,7 @@ class EdgeCentralContractTests(unittest.TestCase):
             self.assertIn("CENTRAL_INGEST_TOKEN", text)
             self.assertIn("CENTRAL_CATALOG_TOKEN", text)
             self.assertIn("verify=False", text)
-        for scope in ("orders:v2:read", "sales:v2:write", "customers:v2:write", "catalog:v2:read", "catalog:v2:ack"):
+        for scope in ("orders:v2:read", "sales:v2:write", "customers:v2:write", "catalog:v2:read", "catalog:v2:ack", "catalog:v3:read", "catalog:v3:ack"):
             self.assertIn(scope, credentials)
         for command in ("issue_scoped_edge_token", "rotate_edge_token", "revoke_edge_token"):
             self.assertIn(command, credentials)
