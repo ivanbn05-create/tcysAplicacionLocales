@@ -22,13 +22,15 @@ class Command(BaseCommand):
     help = "Descarga y aplica una publicacion candidata de catalogo cuando el flag esta activo."
 
     def handle(self, *args, **options):
-        if not settings.CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2:
+        if not (settings.CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2
+                or settings.CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3):
             self.stdout.write(
                 self.style.WARNING(
                     "Distribucion Central de catalogo apagada; no se realizo ninguna solicitud."
                 )
             )
             return
+        contrato = 3 if settings.CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3 else 2
         try:
             sucursal = Sucursal.objects.get(
                 clave=settings.SUCURSAL_CLAVE,
@@ -57,7 +59,7 @@ class Command(BaseCommand):
         try:
             respuesta = cliente.solicitar(
                 metodo="GET",
-                ruta="/api/v2/edge/catalogo/publicaciones/actual/",
+                ruta=f"/api/v{contrato}/edge/catalogo/publicaciones/actual/",
             )
         except ErrorCentral as exc:
             raise CommandError(str(exc)) from exc
@@ -77,6 +79,11 @@ class Command(BaseCommand):
                 f"El Central rechazo la descarga de catalogo (HTTP {respuesta.status})."
             )
         try:
+            if respuesta.datos.get("version_contrato") != contrato:
+                raise ErrorCatalogoCentral(
+                    "La respuesta no coincide con el contrato solicitado.",
+                    codigo="schema_no_soportado",
+                )
             raiz, *_identidades = validar_publicacion_catalogo(
                 respuesta.datos,
                 sucursal,
@@ -93,7 +100,9 @@ class Command(BaseCommand):
                 respuesta.datos,
             )
         except ErrorCatalogoCentral as exc:
-            encolar_ack_catalogo_rechazado(sucursal, respuesta.datos, exc)
+            encolar_ack_catalogo_rechazado(
+                sucursal, respuesta.datos, exc, version_contrato=contrato
+            )
             raise CommandError(
                 f"Publicacion rechazada de forma segura: {exc.codigo}."
             ) from exc
