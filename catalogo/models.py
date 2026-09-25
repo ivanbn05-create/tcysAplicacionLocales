@@ -227,7 +227,7 @@ class PublicacionCatalogoCentral(models.Model):
     aplicado_en = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        ordering = ["-version"]
+        ordering = ["-version_contrato", "-version"]
         constraints = [
             models.UniqueConstraint(
                 fields=["sucursal", "release_id"],
@@ -238,8 +238,8 @@ class PublicacionCatalogoCentral(models.Model):
                 name="catalogo_publicacion_unica_sucursal",
             ),
             models.UniqueConstraint(
-                fields=["sucursal", "version"],
-                name="catalogo_version_unica_sucursal",
+                fields=["sucursal", "version_contrato", "version"],
+                name="catalogo_version_unica_por_contrato",
             ),
         ]
 
