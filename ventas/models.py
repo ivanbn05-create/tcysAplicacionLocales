@@ -684,11 +684,63 @@ class EstadoSincronizacionPedidos(models.Model):
     intentos = models.PositiveIntegerField(default=0)
     ultima_sincronizacion_en = models.DateTimeField(null=True, blank=True)
     conciliacion_requerida_en = models.DateTimeField(null=True, blank=True)
+    ultimo_recovery_id = models.UUIDField(null=True, blank=True)
+    ultimo_recovery_snapshot_sha256 = models.CharField(max_length=64, blank=True)
     actualizado_en = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"Pedidos {self.version_api} - {self.sucursal.clave} - {self.estado}"
 
+
+class RecuperacionPedidosV2(models.Model):
+    """Acta local durable del recovery Ed25519; ningún ACK se regenera tras timeout."""
+
+    class Estado(models.TextChoices):
+        ACUSE_PENDIENTE = "acuse_pendiente", "Acuse pendiente"
+        INTERVENCION_MANUAL = "intervencion_manual", "Intervención manual"
+        COMPLETADA = "completada", "Completada"
+
+    id = models.UUIDField(primary_key=True, editable=False)
+    sucursal = models.ForeignKey(
+        Sucursal, on_delete=models.PROTECT, related_name="recuperaciones_pedidos_v2"
+    )
+    edge_id = models.UUIDField()
+    pos_branch_id = models.UUIDField()
+    sender_ids = models.JSONField(default=list)
+    prestate = models.JSONField(default=dict)
+    prestate_sha256 = models.CharField(max_length=64)
+    snapshot_sha256 = models.CharField(max_length=64)
+    manifest_sha256 = models.CharField(max_length=64)
+    orders_sha256 = models.CharField(max_length=64)
+    recovered_orders_sha256 = models.CharField(max_length=64)
+    tombstones_sha256 = models.CharField(max_length=64)
+    snapshot_path = models.CharField(max_length=300)
+    hasta = models.DateTimeField()
+    pedidos_key_id = models.CharField(max_length=80)
+    edge_key_id = models.CharField(max_length=80)
+    ack_nonce = models.UUIDField()
+    ack_json = models.TextField()
+    ack_sha256 = models.CharField(max_length=64)
+    receipt_json = models.TextField(blank=True)
+    receipt_sha256 = models.CharField(max_length=64, blank=True)
+    estado = models.CharField(
+        max_length=24, choices=Estado.choices, default=Estado.ACUSE_PENDIENTE
+    )
+    detalle_seguro = models.CharField(max_length=240, blank=True)
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sucursal"],
+                condition=Q(estado="acuse_pendiente"),
+                name="recuperacion_pedidos_v2_activa_unica",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Recovery Pedidos {self.id} - {self.estado}"
 
 class MovimientoCaja(models.Model):
     class Tipo(models.TextChoices):
