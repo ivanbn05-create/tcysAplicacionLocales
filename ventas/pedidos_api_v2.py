@@ -632,6 +632,8 @@ class ClientePedidosV2:
         url: str,
         token: str,
         sucursal_ids: Sequence[int],
+        edge_id: str | None = None,
+        pos_branch_id: str | None = None,
         ca_bundle: str | Path | None = None,
         timeout: float = 15.0,
         max_response_bytes: int = 2 * 1024 * 1024,
@@ -653,6 +655,19 @@ class ClientePedidosV2:
         ids = tuple(sorted(set(sucursal_ids)))
         if not ids or any(type(valor) is not int or valor <= 0 for valor in ids):
             raise ErrorConfiguracionPedidos("Se requieren IDs enteros positivos de sucursal.")
+        if (edge_id is None) != (pos_branch_id is None):
+            raise ErrorConfiguracionPedidos("La credencial agregada exige ambas identidades de Pedidos.")
+        for nombre, valor in (("edge_id", edge_id), ("pos_branch_id", pos_branch_id)):
+            if valor is None:
+                continue
+            if type(valor) is not str:
+                raise ErrorConfiguracionPedidos(f"{nombre} debe ser un UUID canonico.")
+            try:
+                identidad = uuid.UUID(valor)
+            except (ValueError, AttributeError) as exc:
+                raise ErrorConfiguracionPedidos(f"{nombre} debe ser un UUID canonico.") from exc
+            if identidad.int == 0 or str(identidad) != valor:
+                raise ErrorConfiguracionPedidos(f"{nombre} debe ser un UUID canonico no nulo.")
         if not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
             raise ErrorConfiguracionPedidos("El timeout de Pedidos debe ser positivo.")
         if type(max_response_bytes) is not int or not 1024 <= max_response_bytes <= 64 * 1024 * 1024:
@@ -672,6 +687,8 @@ class ClientePedidosV2:
 
         self._token = token
         self.sucursal_ids = ids
+        self.edge_id = edge_id
+        self.pos_branch_id = pos_branch_id
         self.timeout = float(timeout)
         self.max_response_bytes = max_response_bytes
         self.max_reintentos = max_reintentos
@@ -720,17 +737,17 @@ class ClientePedidosV2:
         return urlunsplit((partes.scheme, partes.netloc, partes.path, urlencode(parametros), ""))
 
     def _solicitud(self, url: str, request_id: str) -> Request:
-        return Request(
-            url,
-            method="GET",
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self._token}",
-                "Cache-Control": "no-store",
-                "X-Request-ID": request_id,
-                "User-Agent": "LosTocayosPOS/pedidos-api-v2",
-            },
-        )
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {self._token}",
+            "Cache-Control": "no-store",
+            "X-Request-ID": request_id,
+            "User-Agent": "LosTocayosPOS/pedidos-api-v2",
+        }
+        if self.edge_id is not None:
+            headers["X-POS-Edge-ID"] = self.edge_id
+            headers["X-POS-Branch-ID"] = self.pos_branch_id
+        return Request(url, method="GET", headers=headers)
 
     def _esperar(self, intento: int, retry_after: float | None = None) -> None:
         if retry_after is None:
