@@ -1,0 +1,47 @@
+name: H18 backup restore Windows
+
+on:
+  push:
+    branches:
+      - codex/production-1.0-catalogo-promociones-dev.2
+    paths:
+      - herramientas/respaldo_integral.py
+      - respaldo-integral.ps1
+      - tests/test_respaldo_integral.py
+      - tests/test_respaldo_integral_windows.ps1
+      - .github/workflows/h18-backup-restore-windows.yml
+  pull_request:
+    paths:
+      - herramientas/respaldo_integral.py
+      - respaldo-integral.ps1
+      - tests/test_respaldo_integral.py
+      - tests/test_respaldo_integral_windows.ps1
+      - .github/workflows/h18-backup-restore-windows.yml
+  workflow_dispatch:
+
+jobs:
+  isolated-restore:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Python H18 isolated backup and restore
+        shell: pwsh
+        run: |
+          python -m py_compile herramientas/respaldo_integral.py tests/test_respaldo_integral.py
+          python -m unittest discover -s tests -p test_respaldo_integral.py -v
+      - name: Parse Windows PowerShell 5.1 scripts
+        shell: powershell
+        run: |
+          foreach ($path in @('respaldo-integral.ps1', 'tests/test_respaldo_integral_windows.ps1')) {
+              $tokens = $null
+              $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile(
+                  (Resolve-Path $path), [ref]$tokens, [ref]$errors
+              ) | Out-Null
+              if ($errors.Count -ne 0) {
+                  throw "Error de sintaxis PowerShell H18 en $path."
+              }
+          }
