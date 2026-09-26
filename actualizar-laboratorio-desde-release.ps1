@@ -544,7 +544,7 @@ function Write-LabJournal {
     }
     finally { $stream.Dispose() }
     if (Test-Path -LiteralPath $Path -PathType Leaf) {
-        [IO.File]::Replace($temporary, $Path, $null)
+        [IO.File]::Replace($temporary, $Path, ($Path + '.previous-' + [Guid]::NewGuid().ToString('N')))
     }
     else { [IO.File]::Move($temporary, $Path) }
 }
