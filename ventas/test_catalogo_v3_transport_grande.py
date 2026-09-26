@@ -3,6 +3,7 @@
 import copy
 import json
 import uuid
+from http.client import IncompleteRead
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,6 +45,16 @@ class _RespuestaHTTP(BytesIO):
 
     def getcode(self):
         return 200
+
+
+class _RespuestaInterrumpida(_RespuestaHTTP):
+    def read(self, _limite=-1):
+        raise IncompleteRead(b'{"publicacion_id":', 12)
+
+
+class _OpenerInterrumpido:
+    def open(self, _solicitud, *, timeout):
+        return _RespuestaInterrumpida(b'{"publicacion_id":', declarar_longitud=False)
 
 
 class _Opener:
@@ -138,6 +149,18 @@ class CatalogoV3TransporteGrandeTests(SimpleTestCase):
         )
         self.assertEqual(respuesta.status, 200)
         self.assertEqual(respuesta.datos, snapshot)
+
+    def test_read_interrumpido_se_clasifica_como_respuesta_invalida(self):
+        cliente = ClienteCentral(
+            base_url="https://central.example.invalid",
+            token="T" * 40,
+            opener=_OpenerInterrumpido(),
+        )
+        with self.assertRaisesMessage(ErrorContratoCentral, "truncada"):
+            cliente.solicitar(
+                metodo="GET",
+                ruta="/api/v3/edge/catalogo/publicaciones/actual/",
+            )
 
     def test_content_length_truncado_rechaza_json_aun_valido(self):
         cuerpo = b'{"publicacion_id":"simulada"}'
