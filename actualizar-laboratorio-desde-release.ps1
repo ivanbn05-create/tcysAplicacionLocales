@@ -11,10 +11,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\actualizar-laboratorio-des
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$ArchivePath,
-    [Parameter(Mandatory = $true)][string]$ManifestPath,
-    [Parameter(Mandatory = $true)][string]$ChecksumPath,
-    [Parameter(Mandatory = $true)]
+    [string]$ArchivePath,
+    [string]$ManifestPath,
+    [string]$ChecksumPath,
     [ValidatePattern('^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$')]
     [string]$ExpectedVersion,
     [string]$InstallationRoot = 'C:\LosTocayosPOS',
@@ -25,7 +24,8 @@ param(
     [string]$TrustStorePath = 'C:\ProgramData\LosTocayosPOS\release-trust.json',
     [string]$SignatureVerifierPath,
     [string]$TrustedVerifierSha256,
-    [switch]$PrepareOnly
+    [switch]$PrepareOnly,
+    [switch]$RecoverOnly
 )
 
 Set-StrictMode -Version 2.0
@@ -529,12 +529,243 @@ function Restore-ManagedTaskSnapshots {
     }
 }
 
+
+# H17: journal privado fuera del árbol conmutado. Publicación atómica tras Flush(true).
+function Write-LabJournal {
+    param([object]$Journal, [string]$Path)
+    $temporary = $Path + '.next'
+    $json = $Journal | ConvertTo-Json -Depth 8 -Compress
+    [byte[]]$bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($json)
+    $stream = New-Object IO.FileStream($temporary, [IO.FileMode]::Create,
+        [IO.FileAccess]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::WriteThrough)
+    try {
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+    }
+    finally { $stream.Dispose() }
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        [IO.File]::Replace($temporary, $Path, $null)
+    }
+    else { [IO.File]::Move($temporary, $Path) }
+}
+function Set-LabJournalPhase {
+    param([object]$Journal, [string]$Path, [string]$Phase)
+    $Journal.phase = $Phase
+    Write-LabJournal -Journal $Journal -Path $Path
+}
+function Close-LabJournal {
+    param([object]$Journal, [string]$Path, [string]$Outcome)
+    Set-LabJournalPhase -Journal $Journal -Path $Path -Phase $Outcome
+    $archivePath = Join-Path (Split-Path -Parent $Path) (
+        'journal-' + [string]$Journal.id + '-' + $Outcome + '.json')
+    if (Test-Path -LiteralPath $archivePath) {
+        throw 'Ya existe un archivo de journal con el mismo identificador.'
+    }
+    [IO.File]::Move($Path, $archivePath)
+}
+function Assert-LabJournal {
+    param([object]$Journal, [string]$Installation, [string]$Workspace)
+    if ($null -eq $Journal -or [int]$Journal.schema -ne 1 -or
+        [string]$Journal.id -notmatch '^[a-f0-9]{32}$' -or
+        [string]$Journal.stamp -notmatch '^[0-9]{8}-[0-9]{6}-[a-f0-9]{8}$' -or
+        [string]$Journal.oldVersion -notmatch '^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$' -or
+        [string]$Journal.newVersion -notmatch '^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$' -or
+        [string]$Journal.environmentHash -notmatch '^[a-f0-9]{64}$' -or
+        [string]$Journal.startMode -notin @('Auto', 'Manual', 'Disabled') -or
+        [string]$Journal.phase -notin @(
+            'prepared', 'service_stopped', 'old_moved', 'candidate_promoted',
+            'state_copied', 'engine_running', 'engine_complete', 'complete',
+            'rolled_back')) {
+        throw 'Journal H17 inválido; se requiere conciliación manual.'
+    }
+    if (-not ([string]$Journal.installation).Equals($Installation, [StringComparison]::OrdinalIgnoreCase) -or
+        -not ([string]$Journal.workspace).Equals($Workspace, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'El journal H17 pertenece a otra instalación o workspace.'
+    }
+    $parent = Split-Path -Parent $Installation
+    $leaf = Split-Path -Leaf $Installation
+    $expectedBackup = Join-Path $parent ($leaf + '-respaldo-lab-' + [string]$Journal.stamp)
+    $expectedStaging = Join-Path $Workspace (
+        'stage-' + [string]$Journal.newVersion + '-' + [string]$Journal.stamp)
+    $expectedFailed = Join-Path $Workspace (
+        'fallida-' + [string]$Journal.newVersion + '-' + [string]$Journal.stamp)
+    if (-not ([string]$Journal.backup).Equals($expectedBackup, [StringComparison]::OrdinalIgnoreCase) -or
+        -not ([string]$Journal.staging).Equals($expectedStaging, [StringComparison]::OrdinalIgnoreCase) -or
+        -not ([string]$Journal.failed).Equals($expectedFailed, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'El journal H17 contiene rutas inesperadas.'
+    }
+    foreach ($path in @($Journal.backup, $Journal.staging, $Journal.failed, $Installation)) {
+        Assert-SafePath -Path $path -Description 'Una ruta del journal H17'
+        if (Test-Path -LiteralPath $path -PathType Container) {
+            Assert-NoReparseTree -Path $path -Description 'Un árbol del journal H17'
+        }
+    }
+    $names = @('LosTocayosPOS-RespaldoSQLite', 'LosTocayosPOS-PurgasFisicas')
+    $snapshots = @($Journal.tasks)
+    if ($snapshots.Count -ne 2 -or
+        @($snapshots | Where-Object { [string]$_.Name -notin $names }).Count -ne 0 -or
+        @($snapshots | Select-Object -ExpandProperty Name -Unique).Count -ne 2) {
+        throw 'El journal H17 no contiene snapshots válidos de tareas.'
+    }
+}
+function Assert-LabOldTree {
+    param([string]$Root, [object]$Journal)
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+        throw 'El árbol anterior del journal H17 no existe.'
+    }
+    $versionPath = Join-Path $Root 'VERSION'
+    if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf) -or
+        (Get-Content -LiteralPath $versionPath -Raw).Trim() -cne [string]$Journal.oldVersion) {
+        throw 'VERSION anterior no coincide con el journal H17.'
+    }
+    [void](Get-VerifiedEnvironmentSnapshot -Path (Join-Path $Root '.env') -ExpectedHash (
+        [string]$Journal.environmentHash))
+}
+function Disable-LabManagedTasks {
+    param([object[]]$Snapshots)
+    $rootTasks = @(Get-ScheduledTask -TaskPath '\' -ErrorAction Stop)
+    foreach ($snapshot in $Snapshots) {
+        $name = [string]$snapshot.Name
+        $matches = @($rootTasks | Where-Object { $_.TaskName -ieq $name })
+        if ($matches.Count -gt 1) { throw "Hay tareas administradas duplicadas: $name" }
+        if ($matches.Count -eq 1) {
+            Disable-ScheduledTask -TaskName $name -TaskPath '\' -ErrorAction Stop | Out-Null
+        }
+    }
+}
+function Get-LabStartMode {
+    $record = Get-CimInstance Win32_Service -Filter "Name='$serviceName'" -ErrorAction Stop
+    $delayed = Get-ItemPropertyValue -Path (
+        'HKLM:\SYSTEM\CurrentControlSet\Services\' + $serviceName
+    ) -Name DelayedAutoStart -ErrorAction SilentlyContinue
+    return [pscustomobject]@{
+        Mode = [string]$record.StartMode
+        Delayed = ([int]$delayed -eq 1)
+    }
+}
+function Set-LabStartMode {
+    param([string]$Mode, [bool]$Delayed)
+    $start = switch ($Mode) {
+        'Auto' { if ($Delayed) { 'delayed-auto' } else { 'auto' } }
+        'Manual' { 'demand' }
+        'Disabled' { 'disabled' }
+        default { throw 'Modo de inicio del servicio no reconocido.' }
+    }
+    & sc.exe config $serviceName start= $start | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'No se pudo conservar el modo de inicio del servicio.' }
+}
+function Recover-LabJournal {
+    param([string]$Path, [string]$Installation, [string]$Workspace)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    Assert-NoReparseTree -Path $Path -Description 'El journal H17'
+    $journal = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    Assert-LabJournal -Journal $journal -Installation $Installation -Workspace $Workspace
+    Assert-ServiceTargetsInstallation -Root $Installation
+    $phase = [string]$journal.phase
+    $backup = [string]$journal.backup
+    $failed = [string]$journal.failed
+    if ($phase -eq 'engine_running') {
+        Disable-LabManagedTasks -Snapshots @($journal.tasks)
+        Set-LabStartMode -Mode 'Manual' -Delayed $false
+        Stop-LabService
+        throw 'H17: el motor pudo migrar o iniciar la candidata. Servicio detenido; conserva journal, instalación y respaldo para conciliación SQLite/outbox.'
+    }
+    if ($phase -in @('engine_complete', 'complete')) {
+        if (-not (Test-Path -LiteralPath $Installation -PathType Container) -or
+            -not (Test-Path -LiteralPath $backup -PathType Container) -or
+            (Get-Content -LiteralPath (Join-Path $Installation 'VERSION') -Raw).Trim() -cne
+                [string]$journal.newVersion) {
+            Disable-LabManagedTasks -Snapshots @($journal.tasks)
+            Set-LabStartMode -Mode 'Manual' -Delayed $false
+            Stop-LabService
+            throw 'H17: la candidata posterior a migración no coincide con el journal; ambos árboles quedan conservados.'
+        }
+        try {
+            [void](Get-VerifiedEnvironmentSnapshot -Path (Join-Path $Installation '.env') -ExpectedHash (
+                [string]$journal.environmentHash))
+            Start-LabServiceAndVerify -Root $Installation
+            Set-LabStartMode -Mode ([string]$journal.startMode) -Delayed ([bool]$journal.delayed)
+            Close-LabJournal -Journal $journal -Path $Path -Outcome 'complete'
+            return
+        }
+        catch {
+            Disable-LabManagedTasks -Snapshots @($journal.tasks)
+            Set-LabStartMode -Mode 'Manual' -Delayed $false
+            Stop-LabService
+            throw ('H17: candidata posterior a migración sin salud verificada; ambos árboles quedan conservados. ' +
+                $_.Exception.Message)
+        }
+    }
+    Stop-LabService
+    Set-Location -LiteralPath $Workspace
+    if (Test-Path -LiteralPath $backup -PathType Container) {
+        Assert-LabOldTree -Root $backup -Journal $journal
+        if (Test-Path -LiteralPath $Installation -PathType Container) {
+            if (Test-Path -LiteralPath $failed) {
+                throw 'H17: destino fallido ocupado; no se moverá ningún árbol.'
+            }
+            [IO.Directory]::Move($Installation, $failed)
+        }
+        [IO.Directory]::Move($backup, $Installation)
+    }
+    else { Assert-LabOldTree -Root $Installation -Journal $journal }
+    Restore-ManagedTaskSnapshots -Snapshots @($journal.tasks)
+    Set-LabStartMode -Mode ([string]$journal.startMode) -Delayed ([bool]$journal.delayed)
+    try { Start-LabServiceAndVerify -Root $Installation }
+    catch {
+        Set-LabStartMode -Mode 'Manual' -Delayed $false
+        Stop-LabService
+        throw
+    }
+    Close-LabJournal -Journal $journal -Path $Path -Outcome 'rolled_back'
+}
+
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Ejecuta este actualizador de laboratorio desde PowerShell como administrador.'
 }
 
+$installation = Resolve-AbsoluteLiteralPath -Path $InstallationRoot -MayNotExist
+if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
+    $installationParent = Split-Path -Parent $installation
+    $installationLeaf = Split-Path -Leaf $installation
+    $WorkspaceRoot = Join-Path $installationParent ($installationLeaf + '-lab-actualizaciones')
+}
+$workspace = Resolve-AbsoluteLiteralPath -Path $WorkspaceRoot -ExpectedType Container -MayNotExist
+Assert-SafePath -Path $installation -Description 'InstallationRoot'
+Assert-SafePath -Path $workspace -Description 'WorkspaceRoot'
+if ((Test-PathWithin -Candidate $workspace -Parent $installation) -or
+    (Test-PathWithin -Candidate $installation -Parent $workspace)) {
+    throw 'WorkspaceRoot debe estar fuera de InstallationRoot y no puede contenerlo.'
+}
+if (-not ([IO.Path]::GetPathRoot($workspace)).Equals(
+    [IO.Path]::GetPathRoot($installation), [StringComparison]::OrdinalIgnoreCase
+)) {
+    throw 'WorkspaceRoot debe estar en la misma unidad que InstallationRoot.'
+}
+Assert-PrivilegedParent -Path (Split-Path -Parent $installation)
+$workspaceParent = Split-Path -Parent $workspace
+if (-not (Test-Path -LiteralPath $workspaceParent -PathType Container)) {
+    throw 'El padre del workspace debe existir y estar protegido.'
+}
+Assert-PrivilegedParent -Path $workspaceParent
+if (-not (Test-Path -LiteralPath $workspace)) { New-PrivateDirectory -Path $workspace }
+Assert-PrivateWorkspace -Path $workspace
+$journalPath = Join-Path $workspace 'actualizacion-pendiente.json'
+$maintenanceMutex = Enter-LabMaintenanceMutex
+try {
+    Recover-LabJournal -Path $journalPath -Installation $installation -Workspace $workspace
+    if ($RecoverOnly) {
+        Write-Host 'Recuperación H17 verificada; no hay actualización pendiente.' -ForegroundColor Green
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace($ArchivePath) -or
+        [string]::IsNullOrWhiteSpace($ManifestPath) -or
+        [string]::IsNullOrWhiteSpace($ChecksumPath) -or
+        [string]::IsNullOrWhiteSpace($ExpectedVersion)) {
+        throw 'ArchivePath, ManifestPath, ChecksumPath y ExpectedVersion son obligatorios salvo con -RecoverOnly.'
+    }
 $installation = Resolve-AbsoluteLiteralPath -Path $InstallationRoot -ExpectedType Container
 $archive = Resolve-AbsoluteLiteralPath -Path $ArchivePath -ExpectedType Leaf
 $manifest = Resolve-AbsoluteLiteralPath -Path $ManifestPath -ExpectedType Leaf
@@ -760,11 +991,10 @@ if ($PrepareOnly) {
 $serviceStopped = $false
 $oldRootMoved = $false
 $candidatePromoted = $false
-$maintenanceMutex = $null
 $copyBackupMutex = $null
-$taskSnapshots = $null
+$journal = $null
+$engineStarted = $false
 try {
-    $maintenanceMutex = Enter-LabMaintenanceMutex
     $copyBackupMutex = Enter-LabBackupMutex
 
     # Repite la precondición después de adquirir exclusión: la verificación del ZIP
@@ -777,26 +1007,55 @@ try {
     Wait-LabHealth -Root $installation -TimeoutSeconds 10
 
     # Captura configuración o ausencia antes de que el motor de la candidata pueda
-    # registrar tareas. El XML permanece sólo en memoria y no expone .env.
+    # registrar tareas. El XML se conserva en el journal privado y no expone .env.
     $taskSnapshots = @(Get-ManagedTaskSnapshots)
 
     $environmentImmediatelyBeforeStop = Get-VerifiedEnvironmentSnapshot `
         -Path (Join-Path $installation '.env') `
         -ExpectedHash $environmentHashBeforeSwap
 
+
+    $startMode = Get-LabStartMode
+    $journal = [pscustomobject]@{
+        schema = 1
+        id = [Guid]::NewGuid().ToString('N')
+        stamp = $stamp
+        installation = $installation
+        workspace = $workspace
+        backup = $backup
+        staging = $staging
+        failed = $failed
+        oldVersion = $installedVersion
+        newVersion = $ExpectedVersion
+        environmentHash = $environmentHashBeforeSwap
+        startMode = $startMode.Mode
+        delayed = $startMode.Delayed
+        tasks = @($taskSnapshots)
+        phase = 'prepared'
+    }
+    Write-LabJournal -Journal $journal -Path $journalPath
+    Disable-LabManagedTasks -Snapshots $taskSnapshots
+    # Evita que Windows arranque la candidata sin migrar si hay un apagón
+    # entre las dos operaciones de renombrado.
+    Set-LabStartMode -Mode 'Manual' -Delayed $false
+
     Write-Host 'Deteniendo el servicio saludable para conmutar el laboratorio...' -ForegroundColor Yellow
     Stop-LabService
     $serviceStopped = $true
+    Set-LabJournalPhase -Journal $journal -Path $journalPath -Phase 'service_stopped'
 
     # El respaldo completo mantiene código y estado previos. No se elimina al concluir.
     [IO.Directory]::Move($installation, $backup)
     $oldRootMoved = $true
+    Set-LabJournalPhase -Journal $journal -Path $journalPath -Phase 'old_moved'
     [IO.Directory]::Move($staging, $installation)
     $candidatePromoted = $true
+    Set-LabJournalPhase -Journal $journal -Path $journalPath -Phase 'candidate_promoted'
     Copy-OperationalState `
         -SourceRoot $backup `
         -DestinationRoot $installation `
         -ExpectedEnvironmentHash $environmentHashBeforeSwap
+    Set-LabJournalPhase -Journal $journal -Path $journalPath -Phase 'state_copied'
 
     # La copia consistente ya terminó. El motor oficial volverá a adquirir este
     # mutex para su respaldo verificable sin bloquear a su propio proceso hijo.
@@ -804,67 +1063,43 @@ try {
     $copyBackupMutex = $null
 
     Write-Host 'Aplicando dependencias, migraciones, estáticos, servicio y comprobación interna...' -ForegroundColor Yellow
+    Set-LabJournalPhase -Journal $journal -Path $journalPath -Phase 'engine_running'
+    $engineStarted = $true
     $global:LASTEXITCODE = 0
     & (Join-Path $installation 'actualizar-servidor.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'actualizar-servidor.ps1 devolvió un código de error.' }
+    Set-LabJournalPhase -Journal $journal -Path $journalPath -Phase 'engine_complete'
     Assert-ServiceTargetsInstallation -Root $installation
     Start-LabServiceAndVerify -Root $installation
+    Set-LabStartMode -Mode ([string]$journal.startMode) -Delayed ([bool]$journal.delayed)
+    Close-LabJournal -Journal $journal -Path $journalPath -Outcome 'complete'
 
     Write-Host "Laboratorio actualizado a $ExpectedVersion." -ForegroundColor Green
     Write-Host "Respaldo anterior conservado en: $backup"
 }
+
 catch {
     $originalFailure = $_
-    Write-Warning 'La candidata no completó actualización y salud; se restaurará el laboratorio anterior.'
-    $rollbackIssues = New-Object 'System.Collections.Generic.List[string]'
-    $rootRestored = $false
-
-    try {
-        # El motor cambia la ubicación actual a la release; salir de ella permite
-        # renombrar el árbol incluso cuando Windows protege el directorio en uso.
-        Set-Location -LiteralPath $workspace
-        if ($serviceStopped) { Stop-LabService }
-        if ($candidatePromoted -and (Test-Path -LiteralPath $installation -PathType Container)) {
-            [IO.Directory]::Move($installation, $failed)
-        }
-        if ($oldRootMoved -and (Test-Path -LiteralPath $backup -PathType Container)) {
-            [IO.Directory]::Move($backup, $installation)
-            Assert-ServiceTargetsInstallation -Root $installation
-            $rootRestored = $true
-        }
-        elseif (-not $oldRootMoved -and (Test-Path -LiteralPath $installation -PathType Container)) {
-            $rootRestored = $true
-        }
+    if ($engineStarted) {
+        try { Disable-LabManagedTasks -Snapshots @($journal.tasks); Set-LabStartMode -Mode 'Manual' -Delayed $false; Stop-LabService }
+        catch { Write-Warning ('No se pudo detener candidata ambigua: ' + $_.Exception.Message) }
+        throw ('H17: el motor pudo migrar o aceptar ventas. Ambos árboles y el journal ' +
+            'quedan intactos para conciliación; no se hará rollback automático. Causa: ' +
+            $originalFailure.Exception.Message)
     }
-    catch {
-        [void]$rollbackIssues.Add('No se pudo restaurar el árbol anterior: ' + $_.Exception.Message)
-    }
-
-    if ($null -ne $taskSnapshots) {
+    if ($null -ne $journal) {
         try {
-            Restore-ManagedTaskSnapshots -Snapshots $taskSnapshots
+            Recover-LabJournal -Path $journalPath -Installation $installation -Workspace $workspace
         }
         catch {
-            [void]$rollbackIssues.Add('No se pudieron restaurar las tareas administradas: ' + $_.Exception.Message)
+            throw ('H17: rollback pendiente; journal y árboles conservados. Causa original: ' +
+                $originalFailure.Exception.Message + ' | Recuperación: ' + $_.Exception.Message)
         }
-    }
-
-    if ($serviceStopped -and $rootRestored) {
-        try { Start-LabServiceAndVerify -Root $installation }
-        catch {
-            [void]$rollbackIssues.Add('La versión anterior no recuperó servicio y salud: ' + $_.Exception.Message)
-        }
-    }
-
-    if ($rollbackIssues.Count -gt 0) {
-        throw ('Falló la actualización y el rollback requiere atención: ' + ($rollbackIssues -join ' | '))
-    }
-    if ($oldRootMoved) {
-        Write-Warning "Se restauró la versión anterior y sus tareas: el respaldo volvió a ser la instalación activa. La candidata fallida permanece en $failed."
     }
     throw $originalFailure
 }
 finally {
     Release-LabMutex -Mutex $copyBackupMutex
-    Release-LabMutex -Mutex $maintenanceMutex
 }
+}
+finally { Release-LabMutex -Mutex $maintenanceMutex }
