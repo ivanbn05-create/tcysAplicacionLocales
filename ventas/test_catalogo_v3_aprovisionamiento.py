@@ -534,3 +534,59 @@ class FixtureCatalogoV3Tests(TestCase):
         ).producto
         self.assertFalse(principal.activo)
         self.assertEqual(segunda.version, 2)
+
+    def test_restore_v3_1_frente_a_central_v3_3_repite_rechazo_sin_reponer_v3_2(self):
+        """Caracteriza el bloqueo tras restaurar un Edge más viejo que Central."""
+        with self.identidad_settings():
+            primera, _ = aplicar_publicacion_catalogo(self.sucursal, self.snapshot())
+            marcar_listo(self.sucursal)
+            segunda_remota = self.snapshot(
+                version=2, anterior=primera.publicacion_id, importe="37.00"
+            )
+            tercera_remota = self.snapshot(
+                version=3,
+                anterior=segunda_remota["publicacion_id"],
+                importe="39.00",
+            )
+
+        with override_settings(
+            CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2=False,
+            CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3=True,
+            SUCURSAL_CLAVE=self.sucursal.clave,
+            CENTRAL_API_BASE_URL="https://central.example.invalid",
+            CENTRAL_BRANCH_ID=str(self.sucursal.id),
+            CENTRAL_BRANCH_CODE=self.sucursal.clave,
+            CENTRAL_POS_INSTANCE_ID=str(self.config.instalacion_id),
+            CENTRAL_CATALOG_TOKEN="T" * 40,
+        ):
+            cliente = SimpleNamespace(
+                solicitar=Mock(return_value=SimpleNamespace(status=200, datos=tercera_remota))
+            )
+            with patch(
+                "ventas.management.commands.sincronizar_catalogo_central.ClienteCentral",
+                return_value=cliente,
+            ):
+                for _ in range(2):
+                    with self.assertRaisesMessage(CommandError, "version_fuera_de_orden"):
+                        call_command("sincronizar_catalogo_central", stdout=StringIO())
+
+        self.assertEqual(cliente.solicitar.call_count, 2)
+        self.assertTrue(all(
+            llamada.kwargs["ruta"].endswith("/publicaciones/actual/")
+            for llamada in cliente.solicitar.call_args_list
+        ))
+        self.assertEqual(
+            list(PublicacionCatalogoCentral.objects.filter(
+                sucursal=self.sucursal, version_contrato=3
+            ).values_list("version", flat=True)),
+            [1],
+        )
+        self.assertEqual(
+            EventoOutbox.objects.filter(
+                sucursal=self.sucursal,
+                tipo="catalogo.rechazado",
+                version_contrato=3,
+            ).count(),
+            1,
+        )
+        self.assertTrue(estado_aprovisionamiento(self.sucursal)["listo"])
