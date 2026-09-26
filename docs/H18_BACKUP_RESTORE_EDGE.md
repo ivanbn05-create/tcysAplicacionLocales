@@ -9,9 +9,10 @@ respaldo-integral.ps1 -Action Backup detiene temporalmente **sólo** el servicio
 - runtime/db.sqlite3 completo: outbox pendiente, ACK, identidades, módulos, catálogo, terminales, impresoras, ruteo y datos operativos persistidos en SQLite;
 - .env: configuración e identidades del Edge, incluidos secretos; su contenido nunca se imprime ni se agrega al manifiesto;
 - archivos físicos de runtime distintos de los sidecars SQLite, media y certs;
-- copias de las autoridades de confianza configuradas en CENTRAL_API_CA_BUNDLE, PEDIDOS_API_CA_BUNDLE y PEDIDOS_SUCURSALES_DB_SSLROOTCERT, incluso si el archivo original estaba fuera de certs.
+- copias de las autoridades de confianza configuradas en CENTRAL_API_CA_BUNDLE, PEDIDOS_API_CA_BUNDLE y PEDIDOS_SUCURSALES_DB_SSLROOTCERT, incluso si el archivo original estaba fuera de certs;
+- trust store **público** de firmas de release indicado por -TrustStorePath (por defecto C:\ProgramData\LosTocayosPOS\release-trust.json). H18 valida el formato, la identidad SHA-256 y que cada RSAKeyValue sólo tenga Modulus y Exponent; rechaza clave privada y exige el archivo para releases 1.x.
 
-manifest.json enumera rutas, tamaños y hashes, la VERSION exacta del origen y los conteos de las tablas SQLite. El restore exige que VERSION en la release firmada del destino coincida exactamente antes de copiar un byte. Los hashes detectan corrupción accidental; no acreditan autoría frente a alguien que pueda modificar el volumen y el manifiesto. El código de la aplicación y .venv se reconstruyen desde una release firmada y verificada, por separado. Los logs, backups anteriores y secretos de la cuenta Windows no forman parte del paquete.
+manifest.json enumera rutas, tamaños y hashes, la VERSION exacta del origen y los conteos de las tablas SQLite. El restore exige que VERSION en la release firmada del destino coincida exactamente antes de copiar un byte. Los hashes detectan corrupción accidental; no acreditan autoría frente a alguien que pueda modificar el volumen y el manifiesto. El código de la aplicación y .venv se reconstruyen desde una release firmada y verificada, por separado. Los logs, backups anteriores, clave privada del publicador y secretos de la cuenta Windows no forman parte del paquete.
 
 ## Protección y copia externa
 
@@ -22,7 +23,7 @@ Conservar la clave de recuperación de BitLocker fuera de la VM y bajo custodia 
 Ejemplo en Windows PowerShell 5.1 elevado, con la unidad externa BitLocker E: desbloqueada:
 
 ~~~powershell
-.\respaldo-integral.ps1 -Action Backup -BackupRoot 'E:\LosTocayosPOS-H18'
+.\respaldo-integral.ps1 -Action Backup -BackupRoot 'E:\LosTocayosPOS-H18' -TrustStorePath 'C:\ProgramData\LosTocayosPOS\release-trust.json'
 .\respaldo-integral.ps1 -Action Verify -Bundle 'E:\LosTocayosPOS-H18\h18-AAAAMMDD-HHMMSS-xxxxxxxx'
 ~~~
 
@@ -32,19 +33,19 @@ La salida JSON muestra sólo estado, ruta, número de archivos y SHA-256 de SQLi
 
 1. Desbloquear el volumen BitLocker externo en la VM de recuperación. Preparar en una ruta nueva, por ejemplo C:\tcys-pos-restaurado, los archivos de **la misma release firmada** y sus dependencias .venv. No registrar ni iniciar allí el servicio; runtime\db.sqlite3 y .env deben estar ausentes. Mantener una copia separada de las herramientas/release en otra ruta, por ejemplo C:\h18-herramientas, desde donde se ejecutará el script.
 2. Crear en la raíz nueva la marca exacta .h18-restauracion-aislada con contenido H18:ISOLATED seguido de LF. El script compara rutas y además rechaza el destino si LosTocayosPOS apunta a esa raíz.
-3. Ejecutar Verify sobre el paquete externo antes del restore. Después ejecutar Restore con la raíz nueva. El restore verifica todo el paquete, rechaza archivos ajenos, hashes distintos, SQLite corrupta, enlaces, colisiones y destinos con datos previos; prepara archivos antes de publicarlos. Reescribe solamente SQLITE_PATH y las tres rutas de CA en .env para que apunten a certs\h18 de la nueva instalación. Conserva los demás valores y secretos. Aplica ACL privadas a .env, runtime, media y certs.
-4. En la instalación aislada, comprobar manage.py check, identidad de sucursal/Edge, módulos, conteos de outbox/ACK, impresoras/terminales, CA TLS y salud local sin enviar datos al Central. Registrar una prueba de venta e impresión sólo con dispositivos de laboratorio. No arrancar dos Edge con la misma identidad y tokens simultáneamente: mantener el origen desconectado o revocar/rotar las credenciales antes de poner la copia en línea.
+3. Ejecutar Verify sobre el paquete externo antes del restore. Después ejecutar Restore con la raíz nueva y -RestoreTrustStorePath absoluto, nuevo y **fuera** de la instalación y del paquete; por ejemplo C:\ProgramData\LosTocayosPOS\h18-recovered\release-trust.json. La carpeta de destino del trust store debe ser nueva o tener ACL privadas SYSTEM/Administradores. El restore verifica todo el paquete, incluidas ACL de cada archivo/carpeta, rechaza archivos ajenos, hashes distintos, SQLite corrupta, enlaces, colisiones y destinos con datos previos; prepara archivos antes de publicarlos. Reescribe solamente SQLITE_PATH y las tres rutas de CA en .env para que apunten a certs\h18 de la nueva instalación. Conserva los demás valores y secretos. Aplica ACL privadas a .env, runtime, media, certs y trust store de release.
+4. Pasar la ruta restaurada al actualizador en toda ejecución posterior: -TrustStorePath 'C:\ProgramData\LosTocayosPOS\h18-recovered\release-trust.json'. El actualizador H17 rechaza el trust store dentro de la instalación. En la instalación aislada, comprobar manage.py check, identidad de sucursal/Edge, módulos, conteos de outbox/ACK, impresoras/terminales, CA TLS y salud local sin enviar datos al Central. Registrar una prueba de venta e impresión sólo con dispositivos de laboratorio. No arrancar dos Edge con la misma identidad y tokens simultáneamente: mantener el origen desconectado o revocar/rotar las credenciales antes de poner la copia en línea.
 5. Sólo después de la prueba aislada, preparar el procedimiento de recuperación operativa del servicio/tareas/firewall con el dueño. Este paquete por sí solo no registra un servicio nuevo ni resuelve credenciales expiradas o rutas absolutas de infraestructura ajena a los tres CA capturados.
 
 Ejemplo de marca y restore, desde C:\h18-herramientas:
 
 ~~~powershell
 [IO.File]::WriteAllText('C:\tcys-pos-restaurado\.h18-restauracion-aislada', "H18:ISOLATED" + [char]10, (New-Object Text.UTF8Encoding($false)))
-.\respaldo-integral.ps1 -Action Restore -SourceRoot 'C:\h18-herramientas' -Python 'C:\h18-herramientas\.venv\Scripts\python.exe' -Bundle 'E:\LosTocayosPOS-H18\h18-AAAAMMDD-HHMMSS-xxxxxxxx' -TargetRoot 'C:\tcys-pos-restaurado'
+.\respaldo-integral.ps1 -Action Restore -Python 'C:\h18-herramientas\.venv\Scripts\python.exe' -Bundle 'E:\LosTocayosPOS-H18\h18-AAAAMMDD-HHMMSS-xxxxxxxx' -TargetRoot 'C:\tcys-pos-restaurado' -RestoreTrustStorePath 'C:\ProgramData\LosTocayosPOS\h18-recovered\release-trust.json'
 ~~~
 
 ## Pruebas
 
-python -m unittest tests.test_respaldo_integral realiza ida/vuelta con SQLite sintética, outbox pendiente, identidad, configuración, impresora, terminal, CA y archivos operativos; también comprueba corrupción, colisiones y symlinks. Ejecutarla en el runner Windows junto con los tests de respaldo SQLite existentes. La prueba tests/test_respaldo_integral_windows.ps1 de PowerShell y ACL necesita Windows PowerShell 5.1 elevado y un volumen BitLocker externo; sin ese entorno se registra como pendiente, no como aprobada. La validación integral exige además una restauración aislada en Windows con una release real, manage.py check y comprobación operacional sin tocar la instalación de sucursal.
+python -m unittest tests.test_respaldo_integral realiza ida/vuelta con SQLite sintética, outbox pendiente, identidad, configuración, impresora, terminal, CA, trust store público de release y archivos operativos; también comprueba pérdida total de la raíz origen, VERSION discordante, trust store ausente o con clave privada, corrupción, colisiones y symlinks. Ejecutarla en el runner Windows junto con los tests de respaldo SQLite existentes. La prueba tests/test_respaldo_integral_windows.ps1 de PowerShell, BitLocker y ACL recursivas necesita Windows PowerShell 5.1 elevado y un volumen BitLocker externo; sin ese entorno se registra como pendiente, no como aprobada. La validación integral exige además una restauración aislada en Windows con una release real, manage.py check y comprobación operacional sin tocar la instalación de sucursal.
 
 Nunca probar el restore contra C:\tcysAplicacionLocales ni contra una raíz con servicio LosTocayosPOS registrado.
