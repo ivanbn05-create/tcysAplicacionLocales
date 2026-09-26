@@ -113,6 +113,16 @@ class CatalogoV3TransporteGrandeTests(SimpleTestCase):
         self.assertLessEqual(canonicos, MAX_SNAPSHOT_BYTES)
         self.assertGreater(canonicos, 950 * 1024)
         self.assertGreater(len(cuerpo_http), 1024 * 1024)
+        # Central v3 hoy publica bytes canónicos; este caso cubre serialización
+        # HTTP estilo Django sin permitir un snapshot semántico mayor a 1 MiB.
+        self.assertGreaterEqual(
+            ClienteCentral(
+                base_url="https://central.example.invalid",
+                token="T" * 40,
+                opener=_Opener(b"{}"),
+            ).max_response_bytes,
+            len(cuerpo_http),
+        )
         respuesta = self._cliente(cuerpo_http).solicitar(
             metodo="GET",
             ruta="/api/v3/edge/catalogo/publicaciones/actual/",
