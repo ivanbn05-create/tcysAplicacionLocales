@@ -549,12 +549,17 @@ class CatalogoV3AprovisionamientoTests(TestCase):
         )
         self.assertFalse(estado_aprovisionamiento(self.sucursal)["listo"])
 
-    def test_historial_v3_ausente_corrupto_o_ciclico_no_aplica_ningun_tramo(self):
+    def test_historial_v3_ausente_corrupto_o_ciclico_conserva_ancla_y_ack(self):
+        with self.identidad_settings():
+            primera_local, _ = aplicar_publicacion_catalogo(
+                self.sucursal, self.snapshot()
+            )
+            marcar_listo(self.sucursal)
+        ack_original = EventoOutbox.objects.get(tipo="catalogo.aplicado")
         for caso in ("ausente", "id_ajeno", "checksum", "ciclo"):
             with self.subTest(caso=caso):
-                primera = self.snapshot()
                 segunda = self.snapshot(
-                    version=2, anterior=primera["publicacion_id"]
+                    version=2, anterior=primera_local.publicacion_id
                 )
                 tercera = self.snapshot(
                     version=3, anterior=segunda["publicacion_id"]
@@ -584,10 +589,55 @@ class CatalogoV3AprovisionamientoTests(TestCase):
                 ):
                     with self.assertRaises(CommandError):
                         call_command("sincronizar_catalogo_central", stdout=StringIO())
-                self.assertFalse(PublicacionCatalogoCentral.objects.exists())
-                self.assertFalse(
-                    EventoOutbox.objects.filter(tipo="catalogo.aplicado").exists()
+                self.assertEqual(
+                    list(PublicacionCatalogoCentral.objects.filter(
+                        sucursal=self.sucursal, version_contrato=3
+                    ).values_list("version", flat=True)),
+                    [1],
                 )
+                self.assertEqual(
+                    list(EventoOutbox.objects.filter(
+                        sucursal=self.sucursal, tipo="catalogo.aplicado"
+                    ).values_list("id", flat=True)),
+                    [ack_original.id],
+                )
+                self.assertTrue(estado_aprovisionamiento(self.sucursal)["listo"])
+
+    def test_actual_v3_obsoleta_no_contradice_ack_historico(self):
+        with self.identidad_settings():
+            primera, _ = aplicar_publicacion_catalogo(self.sucursal, self.snapshot())
+            marcar_listo(self.sucursal)
+            segunda, _ = aplicar_publicacion_catalogo(
+                self.sucursal,
+                self.snapshot(version=2, anterior=primera.publicacion_id),
+            )
+        cliente = SimpleNamespace(solicitar=Mock(return_value=SimpleNamespace(
+            status=200, datos=primera.snapshot
+        )))
+        with self.central_v3_settings(), patch(
+            "ventas.management.commands.sincronizar_catalogo_central.ClienteCentral",
+            return_value=cliente,
+        ):
+            with self.assertRaisesMessage(CommandError, "obsoleta"):
+                call_command("sincronizar_catalogo_central", stdout=StringIO())
+        self.assertEqual(
+            PublicacionCatalogoCentral.objects.filter(
+                sucursal=self.sucursal, version_contrato=3
+            ).order_by("-version").first().pk,
+            segunda.pk,
+        )
+        self.assertEqual(
+            EventoOutbox.objects.filter(
+                sucursal=self.sucursal, tipo="catalogo.aplicado"
+            ).count(),
+            2,
+        )
+        self.assertFalse(
+            EventoOutbox.objects.filter(
+                sucursal=self.sucursal, tipo="catalogo.rechazado"
+            ).exists()
+        )
+        self.assertTrue(estado_aprovisionamiento(self.sucursal)["listo"])
 
     def test_publicacion_futura_no_impide_recuperar_prefijo_vigente(self):
         primera = self.snapshot()
