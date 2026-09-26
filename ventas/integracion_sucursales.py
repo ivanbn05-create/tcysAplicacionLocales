@@ -853,6 +853,8 @@ def _sincronizar_pedidos_api_v2(sucursal_local):
         url=url,
         token=settings.PEDIDOS_API_TOKEN,
         sucursal_ids=ids_configurados,
+        edge_id=settings.PEDIDOS_API_EDGE_ID if settings.PEDIDOS_API_BOUND_IDENTITY else None,
+        pos_branch_id=settings.PEDIDOS_API_POS_BRANCH_ID if settings.PEDIDOS_API_BOUND_IDENTITY else None,
         ca_bundle=settings.PEDIDOS_API_CA_BUNDLE or None,
         timeout=max(
             settings.PEDIDOS_API_CONNECT_TIMEOUT_SECONDS,
