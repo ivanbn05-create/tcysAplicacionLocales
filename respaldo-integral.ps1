@@ -15,7 +15,9 @@ param(
     [string]$Python,
     [string]$BackupRoot,
     [string]$Bundle,
-    [string]$TargetRoot
+    [string]$TargetRoot,
+    [string]$TrustStorePath = 'C:\ProgramData\LosTocayosPOS\release-trust.json',
+    [string]$RestoreTrustStorePath
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,15 +35,18 @@ $helper = Join-Path $scriptRoot "herramientas\respaldo_integral.py"
 if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
     throw "Falta la herramienta H18."
 }
-$SourceRoot = [IO.Path]::GetFullPath($SourceRoot).TrimEnd('\')
-if (-not (Test-Path -LiteralPath $SourceRoot -PathType Container)) {
-    throw "Falta la instalación origen."
+if ($Action -eq "Backup") {
+    $SourceRoot = [IO.Path]::GetFullPath($SourceRoot).TrimEnd([char]92)
+    if (-not (Test-Path -LiteralPath $SourceRoot -PathType Container)) {
+        throw "Falta la instalación origen."
+    }
 }
 if ([string]::IsNullOrWhiteSpace($Python)) {
-    $Python = Join-Path $SourceRoot ".venv\Scripts\python.exe"
+    $pythonRoot = if ($Action -eq "Backup") { $SourceRoot } else { $scriptRoot }
+    $Python = Join-Path $pythonRoot ".venv\Scripts\python.exe"
 }
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
-    throw "Falta Python de la instalación."
+    throw "Falta Python de la instalación o de las herramientas."
 }
 
 function Assert-Physical {
@@ -55,6 +60,24 @@ function Assert-Physical {
     }
     if (-not $Directory -and $item.PSIsContainer) {
         throw "H18 esperaba un archivo físico."
+    }
+}
+
+function Assert-NoReparseParents {
+    param([string]$Path)
+    $current = [IO.Path]::GetFullPath($Path)
+    while ($true) {
+        if (Test-Path -LiteralPath $current) {
+            $item = Get-Item -LiteralPath $current -Force
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "H18 no acepta junctions ni enlaces en rutas de confianza."
+            }
+        }
+        $parent = Split-Path -Parent $current
+        if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $current) {
+            break
+        }
+        $current = $parent
     }
 }
 
@@ -124,23 +147,58 @@ function Assert-RestrictedAcl {
 function Protect-Tree {
     param([string]$Path, [string]$LocalService = "None")
     if (-not (Test-Path -LiteralPath $Path)) { return }
-    Assert-Physical -Path $Path -Directory
-    Set-RestrictedAcl -Path $Path -LocalService $LocalService
-    foreach ($item in Get-ChildItem -LiteralPath $Path -Recurse -Force) {
-        Assert-Physical -Path $item.FullName -Directory:($item.PSIsContainer)
-        Set-RestrictedAcl -Path $item.FullName -LocalService $LocalService
+    $pending = New-Object System.Collections.ArrayList
+    [void]$pending.Add($Path)
+    while ($pending.Count -gt 0) {
+        $index = $pending.Count - 1
+        $current = [string]$pending[$index]
+        $pending.RemoveAt($index)
+        Assert-Physical -Path $current -Directory
+        Set-RestrictedAcl -Path $current -LocalService $LocalService
+        foreach ($item in Get-ChildItem -LiteralPath $current -Force) {
+            Assert-Physical -Path $item.FullName -Directory:($item.PSIsContainer)
+            if ($item.PSIsContainer) {
+                [void]$pending.Add($item.FullName)
+            } else {
+                Set-RestrictedAcl -Path $item.FullName -LocalService $LocalService
+            }
+        }
     }
 }
 
+function Assert-PrivateTree {
+    param([string]$Path)
+    $pending = New-Object System.Collections.ArrayList
+    [void]$pending.Add($Path)
+    while ($pending.Count -gt 0) {
+        $index = $pending.Count - 1
+        $current = [string]$pending[$index]
+        $pending.RemoveAt($index)
+        Assert-Physical -Path $current -Directory
+        Assert-RestrictedAcl -Path $current
+        foreach ($item in Get-ChildItem -LiteralPath $current -Force) {
+            Assert-Physical -Path $item.FullName -Directory:($item.PSIsContainer)
+            Assert-RestrictedAcl -Path $item.FullName
+            if ($item.PSIsContainer) {
+                [void]$pending.Add($item.FullName)
+            }
+        }
+    }
+}
 
 function Assert-EncryptedExternalVolume {
     param([string]$Path, [string]$AgainstRoot)
     $full = [IO.Path]::GetFullPath($Path)
     $volume = [IO.Path]::GetPathRoot($full)
-    $sourceVolume = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($AgainstRoot))
+    $againstVolume = if ([string]::IsNullOrWhiteSpace($AgainstRoot)) {
+        $null
+    } else {
+        [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($AgainstRoot))
+    }
     if ([string]::IsNullOrWhiteSpace($volume) -or
         $volume.StartsWith("\\") -or
-        $volume.Equals($sourceVolume, [StringComparison]::OrdinalIgnoreCase)) {
+        ($null -ne $againstVolume -and
+         $volume.Equals($againstVolume, [StringComparison]::OrdinalIgnoreCase))) {
         throw "H18 exige un volumen externo distinto del Edge."
     }
     if (-not (Test-Path -LiteralPath $volume -PathType Container)) {
@@ -154,7 +212,7 @@ function Assert-EncryptedExternalVolume {
                 throw "H18 no acepta junctions en el volumen de respaldo."
             }
         }
-        if ($candidate.Equals($volume.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) -or
+        if ($candidate.Equals($volume.TrimEnd([char]92), [StringComparison]::OrdinalIgnoreCase) -or
             $candidate.Equals($volume, [StringComparison]::OrdinalIgnoreCase)) {
             break
         }
@@ -165,7 +223,8 @@ function Assert-EncryptedExternalVolume {
         $candidate = $parent
     }
     try {
-        $state = Get-BitLockerVolume -MountPoint $volume.TrimEnd('') -ErrorAction Stop
+        $mountPoint = $volume.TrimEnd([char]92)
+        $state = Get-BitLockerVolume -MountPoint $mountPoint -ErrorAction Stop
     } catch {
         throw "No se pudo acreditar BitLocker en el volumen externo."
     }
@@ -242,11 +301,11 @@ function Enter-BackupMutex {
     return $mutex
 }
 
-Assert-Physical -Path $SourceRoot -Directory
 $mutex = $null
 $restartService = $false
 try {
     if ($Action -eq "Backup") {
+        Assert-Physical -Path $SourceRoot -Directory
         if ([string]::IsNullOrWhiteSpace($BackupRoot)) {
             throw "Backup exige -BackupRoot en volumen externo cifrado."
         }
@@ -274,8 +333,13 @@ try {
                 $restartService = $true
             }
         }
+        if (-not [IO.Path]::IsPathRooted($TrustStorePath)) {
+            throw "Backup exige -TrustStorePath absoluto."
+        }
+        Assert-NoReparseParents -Path $TrustStorePath
         $result = Invoke-H18 -Arguments @(
-            "create", "--source-root", $SourceRoot, "--output-root", $BackupRoot
+            "create", "--source-root", $SourceRoot, "--output-root", $BackupRoot,
+            "--release-trust-path", $TrustStorePath
         )
         $parsed = $result | ConvertFrom-Json
         $bundlePath = [IO.Path]::GetFullPath([string]$parsed.bundle)
@@ -290,31 +354,29 @@ try {
         if ([string]::IsNullOrWhiteSpace($Bundle)) {
             throw "Verify requiere -Bundle."
         }
-        Assert-EncryptedExternalVolume -Path $Bundle -AgainstRoot $SourceRoot
-        Assert-Physical -Path $Bundle -Directory
-        Assert-RestrictedAcl -Path $Bundle
-        Assert-RestrictedAcl -Path (Join-Path $Bundle ".env")
+        Assert-EncryptedExternalVolume -Path $Bundle
+        Assert-PrivateTree -Path $Bundle
         Write-Output (Invoke-H18 -Arguments @("verify", "--bundle", $Bundle))
     } else {
         if ([string]::IsNullOrWhiteSpace($Bundle) -or
-            [string]::IsNullOrWhiteSpace($TargetRoot)) {
-            throw "Restore requiere -Bundle y -TargetRoot."
+            [string]::IsNullOrWhiteSpace($TargetRoot) -or
+            [string]::IsNullOrWhiteSpace($RestoreTrustStorePath)) {
+            throw "Restore requiere -Bundle, -TargetRoot y -RestoreTrustStorePath."
         }
-        Assert-EncryptedExternalVolume -Path $Bundle -AgainstRoot $SourceRoot
-        Assert-Physical -Path $Bundle -Directory
-        Assert-RestrictedAcl -Path $Bundle
-        Assert-RestrictedAcl -Path (Join-Path $Bundle ".env")
-        $TargetRoot = [IO.Path]::GetFullPath($TargetRoot).TrimEnd('\')
+        $TargetRoot = [IO.Path]::GetFullPath($TargetRoot).TrimEnd([char]92)
         Assert-Physical -Path $TargetRoot -Directory
+        Assert-EncryptedExternalVolume -Path $Bundle -AgainstRoot $TargetRoot
+        Assert-PrivateTree -Path $Bundle
         $marker = Join-Path $TargetRoot ".h18-restauracion-aislada"
         Assert-Physical -Path $marker
         if ([IO.File]::ReadAllText($marker) -cne ("H18:ISOLATED" + [char]10)) {
             throw "Falta la marca de restauración aislada."
         }
-        if ($TargetRoot.Equals($SourceRoot, [StringComparison]::OrdinalIgnoreCase) -or
-            $TargetRoot.StartsWith($SourceRoot + "\", [StringComparison]::OrdinalIgnoreCase) -or
-            $SourceRoot.StartsWith($TargetRoot + "\", [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Restore exige otra instalación aislada."
+        $toolRoot = [IO.Path]::GetFullPath($scriptRoot).TrimEnd([char]92)
+        if ($TargetRoot.Equals($toolRoot, [StringComparison]::OrdinalIgnoreCase) -or
+            $TargetRoot.StartsWith($toolRoot + "\", [StringComparison]::OrdinalIgnoreCase) -or
+            $toolRoot.StartsWith($TargetRoot + "\", [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Restore exige una raíz aislada distinta de las herramientas."
         }
         $service = Get-CimInstance Win32_Service -Filter "Name='LosTocayosPOS'" -ErrorAction Stop
         if ($null -ne $service) {
@@ -326,13 +388,36 @@ try {
                 throw "Restore no puede apuntar a la instalación con servicio registrado."
             }
         }
+        if (-not [IO.Path]::IsPathRooted($RestoreTrustStorePath)) {
+            throw "Restore exige ruta absoluta de trust store."
+        }
+        $RestoreTrustStorePath = [IO.Path]::GetFullPath($RestoreTrustStorePath)
+        $bundleFull = [IO.Path]::GetFullPath($Bundle).TrimEnd([char]92)
+        if ($RestoreTrustStorePath.StartsWith(
+            $TargetRoot + "\", [StringComparison]::OrdinalIgnoreCase
+        ) -or $RestoreTrustStorePath.StartsWith(
+            $bundleFull + "\", [StringComparison]::OrdinalIgnoreCase
+        ) -or (Test-Path -LiteralPath $RestoreTrustStorePath)) {
+            throw "Trust store restaurado exige archivo nuevo fuera de instalación y paquete."
+        }
+        $trustParent = Split-Path -Parent $RestoreTrustStorePath
+        Assert-NoReparseParents -Path $trustParent
+        if (-not (Test-Path -LiteralPath $trustParent -PathType Container)) {
+            New-Item -ItemType Directory -Path $trustParent | Out-Null
+            Set-RestrictedAcl -Path $trustParent
+        }
+        Assert-Physical -Path $trustParent -Directory
+        Assert-RestrictedAcl -Path $trustParent
         Set-RestrictedAcl -Path $TargetRoot -LocalService "Read"
         Assert-RestrictedAcl -Path $TargetRoot -AllowLocalService
         $mutex = Enter-BackupMutex
         $result = Invoke-H18 -Arguments @(
             "restore", "--bundle", $Bundle,
-            "--target-root", $TargetRoot, "--source-root", $SourceRoot
+            "--target-root", $TargetRoot,
+            "--release-trust-path", $RestoreTrustStorePath
         )
+        Set-RestrictedAcl -Path $RestoreTrustStorePath
+        Assert-RestrictedAcl -Path $RestoreTrustStorePath
         Set-RestrictedAcl -Path (Join-Path $TargetRoot ".env") -LocalService "Read"
         Protect-Tree -Path (Join-Path $TargetRoot "runtime") -LocalService "Modify"
         Protect-Tree -Path (Join-Path $TargetRoot "media") -LocalService "Modify"
