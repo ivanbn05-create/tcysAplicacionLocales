@@ -52,7 +52,7 @@ class ActualizadorLaboratorioTests(unittest.TestCase):
         self.assertLess(release, updater)
         self.assertNotIn("Remove-Item", text)
         self.assertIn("El respaldo completo mantiene código y estado previos", text)
-        self.assertIn("[IO.Directory]::Move($backup, $installation)", text)
+        self.assertIn("[IO.Directory]::Move($backup, $Installation)", text)
         self.assertNotIn("Move-Item -LiteralPath $backup", text)
 
     def test_snapshot_y_rollback_de_tareas_administradas(self):
