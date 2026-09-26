@@ -678,8 +678,8 @@ class CatalogoV3AprovisionamientoTests(TestCase):
             1,
         )
 
-    def test_restore_producto_nuevo_cambia_mapping_y_409_retiene_ack_en_conciliacion(self):
-        """El catch-up local es seguro; el ACK requiere acuerdo de restore con Central."""
+    def test_restore_producto_nuevo_conserva_mapping_y_ack_historico(self):
+        """El UUIDv5 v3 permite confirmar otra vez la misma publicación."""
         from django.db import transaction
 
         from ventas.sincronizacion_central import sincronizar_outbox_central
@@ -706,14 +706,18 @@ class CatalogoV3AprovisionamientoTests(TestCase):
         segunda["conteos"]["productos"] = 3
         segunda["contenido_sha256"] = checksum_snapshot(segunda)
 
-        # Un savepoint representa la base antes de v3/2, conservando el ACK
-        # histórico de v3/1. El primer v3/2 ya pudo haber sido confirmado por Central.
         punto = transaction.savepoint()
         with self.identidad_settings():
             aplicar_publicacion_catalogo(self.sucursal, segunda)
         mapping_pre_restore = IdentidadProductoCentral.objects.get(
             sucursal=self.sucursal, central_id=nueva_identidad
         ).producto_id
+        ack_historico = EventoOutbox.objects.get(
+            sucursal=self.sucursal,
+            tipo="catalogo.aplicado",
+            agregado_id=uuid.UUID(segunda["publicacion_id"]),
+        )
+        mapeos_historicos = copy.deepcopy(ack_historico.datos["mapeos_producto"])
         transaction.savepoint_rollback(punto)
         self.assertFalse(IdentidadProductoCentral.objects.filter(
             sucursal=self.sucursal, central_id=nueva_identidad
@@ -730,26 +734,53 @@ class CatalogoV3AprovisionamientoTests(TestCase):
         mapping_reaplicado = IdentidadProductoCentral.objects.get(
             sucursal=self.sucursal, central_id=nueva_identidad
         ).producto_id
-        self.assertNotEqual(mapping_pre_restore, mapping_reaplicado)
+        self.assertEqual(mapping_pre_restore, mapping_reaplicado)
+        self.assertEqual(mapping_reaplicado.version, 5)
         ack = EventoOutbox.objects.get(
             sucursal=self.sucursal,
             tipo="catalogo.aplicado",
             agregado_id=uuid.UUID(segunda["publicacion_id"]),
         )
-        self.assertIn(
-            str(mapping_reaplicado),
-            {item["producto_local_id"] for item in ack.datos["mapeos_producto"]},
-        )
-        self.assertNotIn(
-            str(mapping_pre_restore),
-            {item["producto_local_id"] for item in ack.datos["mapeos_producto"]},
-        )
-        hash_inicial = ack.payload_hash
+        self.assertEqual(ack.datos["mapeos_producto"], mapeos_historicos)
+
         rutas = []
+        class ClienteConfirmacion:
+            def solicitar(self, **kwargs):
+                rutas.append(kwargs["ruta"])
+                return SimpleNamespace(
+                    status=200,
+                    headers={},
+                    datos={
+                        "recibido": True,
+                        "acuse": str(uuid.uuid4()),
+                        "ack_id": str(ack.id),
+                        "estado_registrado": "aplicado",
+                    },
+                )
+
+        with self.central_v3_settings():
+            resultado = sincronizar_outbox_central(
+                cliente_factory=lambda **_opciones: ClienteConfirmacion()
+            )
+        ack.refresh_from_db()
+        self.assertEqual(resultado["entregados"], 1)
+        self.assertEqual(ack.estado_entrega, EventoOutbox.EstadoEntrega.ENTREGADO)
+        self.assertEqual(len(rutas), 1)
+        self.assertIn("/api/v3/", rutas[0])
+        self.assertTrue(estado_aprovisionamiento(self.sucursal)["listo"])
+
+    def test_ack_v3_409_conserva_evento_en_conciliacion(self):
+        from ventas.sincronizacion_central import sincronizar_outbox_central
+
+        with self.identidad_settings():
+            aplicar_publicacion_catalogo(self.sucursal, self.snapshot())
+        ack = EventoOutbox.objects.get(tipo="catalogo.aplicado")
+        hash_inicial = ack.payload_hash
+        llamadas = []
 
         class ClienteConflicto:
             def solicitar(self, **kwargs):
-                rutas.append(kwargs["ruta"])
+                llamadas.append(kwargs)
                 return SimpleNamespace(
                     status=409,
                     headers={},
@@ -760,20 +791,106 @@ class CatalogoV3AprovisionamientoTests(TestCase):
             resultado = sincronizar_outbox_central(
                 cliente_factory=lambda **_opciones: ClienteConflicto()
             )
-            segundo_intento = sincronizar_outbox_central(
+            segundo = sincronizar_outbox_central(
                 cliente_factory=lambda **_opciones: ClienteConflicto()
             )
         ack.refresh_from_db()
         self.assertEqual(resultado["conciliacion"], 1)
-        self.assertEqual(segundo_intento["conciliacion"], 0)
-        self.assertEqual(len(rutas), 1)
-        self.assertIn("/api/v3/", rutas[0])
-        self.assertEqual(
-            ack.estado_entrega, EventoOutbox.EstadoEntrega.CONCILIACION
-        )
+        self.assertEqual(segundo["conciliacion"], 0)
+        self.assertEqual(len(llamadas), 1)
+        self.assertIn("/api/v3/", llamadas[0]["ruta"])
+        self.assertEqual(ack.estado_entrega, EventoOutbox.EstadoEntrega.CONCILIACION)
         self.assertEqual(ack.payload_hash, hash_inicial)
         self.assertEqual(ack.datos["ack_id"], str(ack.id))
-        self.assertTrue(estado_aprovisionamiento(self.sucursal)["listo"])
+
+    def test_colision_uuid_v3_de_categoria_o_producto_rechaza_sin_remapear(self):
+        from catalogo.models import Categoria
+        from ventas.catalogo_central import _id_local_v3
+
+        with self.identidad_settings():
+            primera, _ = aplicar_publicacion_catalogo(self.sucursal, self.snapshot())
+        categoria_local = Producto.objects.get(
+            sucursal=self.sucursal, codigo="VENDIBLE"
+        ).categoria
+        producto_central_nuevo = uuid.uuid4()
+        segunda_producto = self.snapshot(
+            version=2, anterior=primera.publicacion_id
+        )
+        producto_nuevo = copy.deepcopy(segunda_producto["contenido"]["productos"][0])
+        producto_nuevo.update({
+            "producto_central_id": str(producto_central_nuevo),
+            "codigo": "NUEVO-COLISION",
+            "nombre": "Nuevo producto",
+            "nombre_corto": "NUEVO",
+            "orden": 3,
+        })
+        segunda_producto["contenido"]["productos"].append(producto_nuevo)
+        segunda_producto["conteos"]["productos"] = 3
+        segunda_producto["contenido_sha256"] = checksum_snapshot(segunda_producto)
+        Producto.objects.create(
+            id=_id_local_v3(self.sucursal.id, "producto", producto_central_nuevo),
+            sucursal=self.sucursal,
+            categoria=categoria_local,
+            codigo="COLISION-LOCAL",
+            nombre="Colisión local",
+            nombre_corto="COLISION",
+        )
+        with self.identidad_settings(), self.assertRaises(ErrorCatalogoCentral) as error:
+            aplicar_publicacion_catalogo(self.sucursal, segunda_producto)
+        self.assertEqual(error.exception.codigo, "conflicto_local")
+        self.assertFalse(IdentidadProductoCentral.objects.filter(
+            sucursal=self.sucursal, central_id=producto_central_nuevo
+        ).exists())
+
+        categoria_central_nueva = uuid.uuid4()
+        segunda_categoria = self.snapshot(
+            version=2, anterior=primera.publicacion_id
+        )
+        segunda_categoria["contenido"]["categorias"].append({
+            "categoria_central_id": str(categoria_central_nueva),
+            "codigo": "OTRA-CAT",
+            "nombre": "Otra categoría",
+            "orden": 2,
+            "activa": True,
+        })
+        segunda_categoria["conteos"]["categorias"] = 2
+        segunda_categoria["contenido_sha256"] = checksum_snapshot(segunda_categoria)
+        Categoria.objects.create(
+            id=_id_local_v3(self.sucursal.id, "categoria", categoria_central_nueva),
+            sucursal=self.sucursal,
+            nombre="Colisión de categoría",
+        )
+        with self.identidad_settings(), self.assertRaises(ErrorCatalogoCentral) as error:
+            aplicar_publicacion_catalogo(self.sucursal, segunda_categoria)
+        self.assertEqual(error.exception.codigo, "conflicto_local")
+        self.assertEqual(
+            list(PublicacionCatalogoCentral.objects.filter(
+                sucursal=self.sucursal, version_contrato=3
+            ).values_list("version", flat=True)),
+            [1],
+        )
+        self.assertEqual(
+            EventoOutbox.objects.filter(
+                sucursal=self.sucursal, tipo="catalogo.aplicado"
+            ).count(),
+            1,
+        )
+
+    def test_altas_v2_conservan_uuid4_sin_migrar_identidad(self):
+        datos = self.snapshot()
+        datos["version_contrato"] = 2
+        del datos["conteos"]["promociones"]
+        del datos["contenido"]["promociones"]
+        for producto in datos["contenido"]["productos"]:
+            del producto["disponible_sucursal"]
+        datos["contenido_sha256"] = checksum_snapshot(datos)
+        with self.identidad_settings():
+            aplicar_publicacion_catalogo(self.sucursal, datos)
+        producto = IdentidadProductoCentral.objects.get(
+            sucursal=self.sucursal, central_id=self.vendible_id
+        ).producto
+        self.assertEqual(producto.id.version, 4)
+        self.assertEqual(producto.categoria_id.version, 4)
 
     def test_ack_v3_respuesta_perdida_reintenta_misma_identidad_y_acepta_repetido(self):
         """Un ACK recibido por Central con respuesta perdida conserva su idempotencia."""
