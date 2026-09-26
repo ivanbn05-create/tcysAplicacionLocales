@@ -673,8 +673,13 @@ function Recover-LabJournal {
     Assert-NoReparseTree -Path $Path -Description 'El journal H17'
     $journal = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     Assert-LabJournal -Journal $journal -Installation $Installation -Workspace $Workspace
-    Assert-ServiceTargetsInstallation -Root $Installation
     $phase = [string]$journal.phase
+    try { Assert-ServiceTargetsInstallation -Root $Installation }
+    catch {
+        throw ('H17: identidad del servicio no verificable; no se detuvo otro servicio. ' +
+            'El journal y ambos árboles quedan intactos, pero la candidata puede seguir activa; ' +
+            'requiere intervención manual inmediata. Causa: ' + $_.Exception.Message)
+    }
     $backup = [string]$journal.backup
     $failed = [string]$journal.failed
     if ($phase -eq 'engine_running') {
