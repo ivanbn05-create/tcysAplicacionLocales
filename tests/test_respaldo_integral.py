@@ -1,6 +1,7 @@
 """H18: ida y vuelta del respaldo integral en carpetas de laboratorio."""
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import tempfile
@@ -63,6 +64,19 @@ class RespaldoIntegralTests(unittest.TestCase):
                 INSERT INTO impresion_terminal VALUES ('t1', 'p1');
                 """
             )
+        public_xml = "<RSAKeyValue><Modulus>QUJD</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>"
+        self.trust_source = self.base / "release-trust-origen.json"
+        self.trust_source.write_text(json.dumps({
+            "schema_version": 1,
+            "keys": [{
+                "key_id": hashlib.sha256(public_xml.encode("utf-8")).hexdigest(),
+                "public_xml": public_xml,
+                "status": "trusted",
+            }],
+        }), encoding="utf-8")
+        self.trust_parent = self.base / "trust-restaurado"
+        self.trust_parent.mkdir()
+        self.trust_dest = self.trust_parent / "release-trust.json"
         self.output = self.base / "externo-ntfs"
         self.output.mkdir()
         self.target = self.base / "edge-aislado"
@@ -72,7 +86,7 @@ class RespaldoIntegralTests(unittest.TestCase):
         (self.target / ".h18-restauracion-aislada").write_text(h18.MARKER, encoding="utf-8")
 
     def test_paquete_integral_restaurable_con_outbox_identidad_y_trust(self):
-        created = h18.create(self.source, self.output)
+        created = h18.create(self.source, self.output, self.trust_source)
         bundle = Path(created["bundle"])
         manifest = h18.verify(bundle)
         manifest_text = (bundle / "manifest.json").read_text(encoding="utf-8")
@@ -85,7 +99,8 @@ class RespaldoIntegralTests(unittest.TestCase):
         with sqlite3.connect(self.source / "runtime" / "db.sqlite3") as db:
             db.execute("DELETE FROM ventas_eventooutbox")
         (self.source / ".env").write_text("DB_ENGINE=sqlite\n", encoding="utf-8")
-        restored = h18.restore(bundle, self.target, self.source)
+        self.source.rename(self.base / "edge-origen-perdido")
+        restored = h18.restore(bundle, self.target, self.trust_dest)
         self.assertEqual(restored["status"], "ok")
         with sqlite3.connect(self.target / "runtime" / "db.sqlite3") as db:
             row = db.execute(
@@ -107,30 +122,62 @@ class RespaldoIntegralTests(unittest.TestCase):
             '{"estado":"pendiente"}',
         )
         self.assertEqual((self.target / "media" / "imagen.webp").read_bytes(), b"imagen-lab")
+        self.assertEqual(self.trust_dest.read_bytes(), self.trust_source.read_bytes())
+        self.assertFalse((self.target / "trust" / "release-trust.json").exists())
+        self.assertEqual(manifest["release_trust"], h18.RELEASE_TRUST_REL)
+
+    def test_trust_store_obligatorio_y_solo_claves_publicas(self):
+        with self.assertRaises(h18.BackupIntegralError):
+            h18.create(self.source, self.output)
+        self.trust_source.unlink()
+        with self.assertRaises(h18.BackupIntegralError):
+            h18.create(self.source, self.output, self.trust_source)
+        private_xml = (
+            "<RSAKeyValue><Modulus>QUJD</Modulus><Exponent>AQAB</Exponent><D>QUJD</D></RSAKeyValue>"
+        )
+        self.trust_source.write_text(json.dumps({
+            "schema_version": 1,
+            "keys": [{
+                "key_id": hashlib.sha256(private_xml.encode("utf-8")).hexdigest(),
+                "public_xml": private_xml,
+                "status": "trusted",
+            }],
+        }), encoding="utf-8")
+        with self.assertRaises(h18.BackupIntegralError):
+            h18.create(self.source, self.output, self.trust_source)
+
+    def test_restore_exige_destino_externo_nuevo_para_trust_store(self):
+        bundle = Path(h18.create(self.source, self.output, self.trust_source)["bundle"])
+        with self.assertRaises(h18.BackupIntegralError):
+            h18.restore(bundle, self.target)
+        self.assertFalse((self.target / ".env").exists())
+        with self.assertRaises(h18.BackupIntegralError):
+            h18.restore(bundle, self.target, self.target / "release-trust.json")
+        self.assertFalse((self.target / ".env").exists())
 
     def test_tamper_rechazado_antes_de_modificar_destino(self):
-        bundle = Path(h18.create(self.source, self.output)["bundle"])
+        bundle = Path(h18.create(self.source, self.output, self.trust_source)["bundle"])
         (bundle / ".env").write_text("DB_ENGINE=sqlite\n", encoding="utf-8")
         with self.assertRaises(h18.BackupIntegralError):
-            h18.restore(bundle, self.target, self.source)
+            h18.restore(bundle, self.target, self.trust_dest)
         self.assertFalse((self.target / "runtime").exists())
 
     def test_restore_no_sobrescribe_instalacion_ni_origen(self):
-        bundle = Path(h18.create(self.source, self.output)["bundle"])
+        bundle = Path(h18.create(self.source, self.output, self.trust_source)["bundle"])
         (self.target / ".env").write_text("SECRETO=otro\n", encoding="utf-8")
         with self.assertRaises(h18.BackupIntegralError):
-            h18.restore(bundle, self.target, self.source)
+            h18.restore(bundle, self.target, self.trust_dest)
         with self.assertRaises(h18.BackupIntegralError):
-            h18.restore(bundle, self.source, self.source)
+            h18.restore(bundle, self.source)
         self.assertEqual(
             (self.target / ".env").read_text(encoding="utf-8"), "SECRETO=otro\n"
         )
 
     def test_version_de_release_distinta_bloquea_restore(self):
-        bundle = Path(h18.create(self.source, self.output)["bundle"])
+        bundle = Path(h18.create(self.source, self.output, self.trust_source)["bundle"])
         (self.target / "VERSION").write_text("1.0.1\n", encoding="utf-8")
         with self.assertRaises(h18.BackupIntegralError):
-            h18.restore(bundle, self.target, self.source)
+            h18.restore(bundle, self.target, self.trust_dest)
         self.assertFalse((self.target / ".env").exists())
 
     def test_enlace_en_media_rechazado(self):
@@ -142,7 +189,7 @@ class RespaldoIntegralTests(unittest.TestCase):
         except (OSError, NotImplementedError):
             self.skipTest("El usuario Windows no puede crear symlinks.")
         with self.assertRaises(h18.BackupIntegralError):
-            h18.create(self.source, self.output)
+            h18.create(self.source, self.output, self.trust_source)
 
 
 if __name__ == "__main__":
