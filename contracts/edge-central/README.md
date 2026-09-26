@@ -4,13 +4,13 @@ Este paquete contiene contratos ejecutables y datos exclusivamente sintéticos. 
 
 ## Estado por flujo
 
-| Flujo | Estado comprobado al 2026-09-24 |
+| Flujo | Estado comprobado al 2026-09-26 |
 | --- | --- |
 | POS → Central, consolidación mensual v1 | **Implementado como candidato privado** en el central. `consolidacion-mensual-v1-receptor-actual.schema.json` reproduce su aceptación observada; `consolidacion-mensual-v1-request.schema.json` es el perfil estricto emitido por el POS. |
 | POS → Central, ventas detalladas v2 | **Propuesto y desactivado**. No existe todavía la ruta central ni el productor durable completo en el POS. |
 | POS → Central, clientes v2 | **Propuesto y desactivado**. La ruta central v1 de borrador permanece apagada y no debe activarse como sustituto. |
-| Central → POS, catálogo y ACK v2 | **Propuesto y desactivado**. Se conserva como compatibilidad mientras migra el contrato. |
-| Central → POS, catálogo y promociones v3 | **Candidato Edge, sin ruta final ni despliegue**. Exige disponibilidad por sucursal y promociones dinámicas; Central aún debe importar el catálogo real vigente de Arboledas, publicar el primer snapshot y acordar ruta/ACK. |
+| Central → POS, catálogo y ACK v2 | **Candidato de laboratorio**. Se conserva la compatibilidad v2 y el límite ACK legado de 16 KiB; `mappings-large-1` requiere negociación y flag Central explícito. No hay corte productivo. |
+| Central → POS, catálogo y promociones v3 | **Candidato Edge/Central de laboratorio, sin despliegue**. El E2E sintético v3/1→v3/4 por PostgreSQL/TLS pasó; Central aún debe importar sólo el menú real clasificado de Arboledas y publicar el primer snapshot autorizado. |
 | Pedidos v2 → POS | **Candidato sin merge ni despliegue** `8fad56815f856b4286a2f60f488480960e34cde5`. Contrato ejecutable separado en `contracts/pedidos-v2/`; v1/Supabase legacy se conservan. |
 
 ## Rutas ejecutables por flujo
@@ -46,11 +46,14 @@ La implementación central v1 acepta actualmente propiedades adicionales dentro 
 | Consolidación mensual v1 | 256 KiB |
 | Lote de ventas v2 | 256 KiB y 100 eventos |
 | Evento de cliente v2 | 64 KiB, 10 teléfonos y 10 domicilios |
-| ACK de catálogo v2 legado | 16 KiB sin perfil |\n| ACK de catálogo v2 `mappings-large-1` | 1 MiB, sólo tras `OPTIONS` autenticado a la misma ruta de acuse con 204, `X-Catalog-Ack-Profile: mappings-large-1`, `X-Catalog-Ack-Max-Body-Bytes: 1048576` y `Cache-Control: no-store`; POST agrega el encabezado del perfil y conserva cuerpo, `ack_id` e idempotencia |
+| ACK de catálogo v2 legado | 16 KiB sin perfil |
+| ACK de catálogo v2 `mappings-large-1` | 1 MiB, sólo tras `OPTIONS` autenticado a la misma ruta de acuse con 204, `X-Catalog-Ack-Profile: mappings-large-1`, `X-Catalog-Ack-Max-Body-Bytes: 1048576` y `Cache-Control: no-store`; POST agrega el encabezado del perfil y conserva cuerpo, `ack_id` e idempotencia |
 | Snapshot completo de catálogo v2 | 1 MiB sin imágenes binarias |
 | Snapshot completo de catálogo/promociones v3 candidato | 1 MiB sin imágenes binarias |
 
-El perfil grande v2 es candidato de laboratorio y requiere activación explícita en Central. Si un servidor viejo no anuncia la capacidad, el ACK local válido queda pendiente con reintento; no se envía un cuerpo mayor al límite legado ni se descarta el outbox. Un 413 después de anunciar el perfil también conserva el evento para revisar proxy/worker. La forma JSON y `version_contrato=2` no cambian.\n\n## Índices y matrices\n
+El perfil grande v2 es candidato de laboratorio y requiere activación explícita en Central. Si un servidor viejo no anuncia la capacidad, el ACK local válido queda pendiente con reintento; no se envía un cuerpo mayor al límite legado ni se descarta el outbox. Un 413 después de anunciar el perfil también conserva el evento para revisar proxy/worker. La forma JSON y `version_contrato=2` no cambian. Si Central desactiva el perfil o revierte a un binario anterior después de recibir el ACK pero antes de que Edge guarde su respuesta, el evento local permanece pendiente hasta restaurar la capacidad o conciliarlo; drenar ACK grandes antes del rollback evita ese bloqueo operativo. La reversión no autoriza borrar ni regenerar eventos.
+
+## Índices y matrices\n
 - `contracts/edge-central/fixtures/index.json`: metadatos HTTP reproducibles de los flujos con el central.
 - `contracts/pedidos-v2/fixtures/index.json`: metadatos HTTP reproducibles de Pedidos v2, incluyendo cursor legado y `410 retention_gap`.
 - `contracts/edge-central/MATRIZ_IDENTIDADES.md`: correspondencias explícitas; la forma ejecutable está en `contracts/edge-central/fixtures/matriz-identidades-v1.json`.
