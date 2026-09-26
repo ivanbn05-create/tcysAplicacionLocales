@@ -31,6 +31,23 @@ $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Ejecuta el instalador universal desde PowerShell como administrador.'
 }
+if ($Https -and $AllowInsecureHttpLan) {
+    throw '-Https y -AllowInsecureHttpLan son opciones mutuamente excluyentes.'
+}
+if ($Https -and -not $PSBoundParameters.ContainsKey('ListenAddress')) {
+    $ListenAddress = '127.0.0.1'
+}
+$listenAddressIp = $null
+if (-not [Net.IPAddress]::TryParse($ListenAddress, [ref]$listenAddressIp)) {
+    throw 'ListenAddress debe ser una dirección IP local concreta.'
+}
+if ($Https -and -not [Net.IPAddress]::IsLoopback($listenAddressIp)) {
+    throw 'Con -Https, Waitress debe usar una dirección loopback.'
+}
+if (-not $Https -and -not [Net.IPAddress]::IsLoopback($listenAddressIp) -and
+    -not $AllowInsecureHttpLan) {
+    throw 'HTTP LAN no cifra credenciales ni pedidos. Usa -Https o confirma el riesgo con -AllowInsecureHttpLan.'
+}
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $client = Join-Path $root 'herramientas\enrolamiento_edge.py'
 $motor = Join-Path $root 'instalar-servicio-lan.ps1'
