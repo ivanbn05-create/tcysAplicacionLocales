@@ -29,6 +29,20 @@ CODIGOS_FIJOS_LEGACY_V2 = {"PB", "PL", "P4", "PK", "TB", "TBI", "LB", "LOBQ"}
 MAX_CATEGORIAS = 500
 MAX_PRODUCTOS = 5000
 MAX_SNAPSHOT_BYTES = 1024 * 1024
+# Namespace versionado: altas v3 reproducen el mismo UUID tras restaurar SQLite.
+# No se aplica a mappings existentes ni a publicaciones v2.
+MAPPING_V3_NAMESPACE = uuid.uuid5(
+    uuid.NAMESPACE_URL, "los-tocayos-pos/catalogo-v3/mapping/v1"
+)
+
+
+def _id_local_v3(sucursal_id, tipo, central_id):
+    if tipo not in {"categoria", "producto"}:
+        raise ValueError("Tipo de identidad de catálogo desconocido.")
+    return uuid.uuid5(
+        MAPPING_V3_NAMESPACE, f"{sucursal_id}:{tipo}:{central_id}"
+    )
+
 CODIGOS_RECHAZO = {
     "checksum_invalido",
     "schema_no_soportado",
@@ -378,7 +392,7 @@ def validar_publicacion_catalogo(datos, sucursal):
     return raiz, release_id, publicacion_id, anterior_id, version, checksum
 
 
-def _categoria_local(sucursal, datos, existentes):
+def _categoria_local(sucursal, datos, existentes, *, alta_v3=False):
     central_id = uuid.UUID(datos["categoria_central_id"])
     mapeo = existentes.get(central_id)
     if mapeo:
@@ -388,7 +402,14 @@ def _categoria_local(sucursal, datos, existentes):
             "conflicto_local",
             "Categoria local con el mismo nombre requiere mapeo explicito.",
         )
+    identidad_local = {}
+    if alta_v3:
+        local_id = _id_local_v3(sucursal.id, "categoria", central_id)
+        if Categoria.objects.filter(pk=local_id).exists():
+            _error("conflicto_local", "UUID local de categoria v3 ya ocupado.")
+        identidad_local["id"] = local_id
     categoria = Categoria.objects.create(
+        **identidad_local,
         sucursal=sucursal,
         nombre=datos["nombre"],
         orden=datos["orden"],
@@ -403,7 +424,9 @@ def _categoria_local(sucursal, datos, existentes):
     return categoria
 
 
-def _producto_local(sucursal, datos, categoria, existentes, *, compatibilidad_legacy_v2):
+def _producto_local(
+    sucursal, datos, categoria, existentes, *, compatibilidad_legacy_v2, alta_v3=False
+):
     central_id = uuid.UUID(datos["producto_central_id"])
     mapeo = existentes.get(central_id)
     if mapeo:
@@ -431,7 +454,14 @@ def _producto_local(sucursal, datos, categoria, existentes, *, compatibilidad_le
             "conflicto_local",
             "Codigo local existente requiere un mapeo explicito previo.",
         )
+    identidad_local = {}
+    if alta_v3:
+        local_id = _id_local_v3(sucursal.id, "producto", central_id)
+        if Producto.objects.filter(pk=local_id).exists():
+            _error("conflicto_local", "UUID local de producto v3 ya ocupado.")
+        identidad_local["id"] = local_id
     producto = Producto.objects.create(
+        **identidad_local,
         sucursal=sucursal,
         categoria=categoria,
         codigo=datos["codigo"],
@@ -743,6 +773,7 @@ def aplicar_publicacion_catalogo(sucursal, datos):
             sucursal,
             datos_categoria,
             categorias_existentes,
+            alta_v3=raiz["version_contrato"] == 3,
         )
         if Categoria.objects.filter(
             sucursal=sucursal,
@@ -767,6 +798,7 @@ def aplicar_publicacion_catalogo(sucursal, datos):
             categorias_por_central[categoria_id],
             productos_existentes,
             compatibilidad_legacy_v2=raiz["version_contrato"] == 2,
+            alta_v3=raiz["version_contrato"] == 3,
         )
         vendible = datos_producto["activo"] and datos_producto.get("disponible_sucursal", True)
         producto.categoria = categorias_por_central[categoria_id]
