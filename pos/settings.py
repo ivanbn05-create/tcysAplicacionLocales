@@ -437,6 +437,17 @@ if (
 ):
     raise ImproperlyConfigured("PEDIDOS_API_ENDPOINT debe ser una ruta absoluta relativa al mismo origen.")
 PEDIDOS_API_TOKEN = os.getenv("PEDIDOS_API_TOKEN", "").strip()
+PEDIDOS_API_BOUND_IDENTITY = env_bool("PEDIDOS_API_BOUND_IDENTITY", False)
+PEDIDOS_API_EDGE_ID = env_uuid_canonico("PEDIDOS_API_EDGE_ID")
+PEDIDOS_API_POS_BRANCH_ID = env_uuid_canonico("PEDIDOS_API_POS_BRANCH_ID")
+if PEDIDOS_API_BOUND_IDENTITY and (not PEDIDOS_API_EDGE_ID or not PEDIDOS_API_POS_BRANCH_ID):
+    raise ImproperlyConfigured(
+        "PEDIDOS_API_BOUND_IDENTITY exige PEDIDOS_API_EDGE_ID y PEDIDOS_API_POS_BRANCH_ID."
+    )
+if not PEDIDOS_API_BOUND_IDENTITY and (PEDIDOS_API_EDGE_ID or PEDIDOS_API_POS_BRANCH_ID):
+    raise ImproperlyConfigured(
+        "Las identidades vinculadas de Pedidos exigen PEDIDOS_API_BOUND_IDENTITY=true."
+    )
 PEDIDOS_API_CA_BUNDLE = os.getenv("PEDIDOS_API_CA_BUNDLE", "").strip()
 try:
     PEDIDOS_API_SUCURSAL_IDS = tuple(
