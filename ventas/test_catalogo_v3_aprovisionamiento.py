@@ -428,112 +428,6 @@ class CatalogoV3AprovisionamientoTests(TestCase):
         self.assertEqual(PublicacionCatalogoCentral.objects.count(), 1)
 
 
-class FixtureCatalogoV3Tests(TestCase):
-    def test_fixture_sintetico_aplica_promocion_y_availability(self):
-        ruta = (
-            Path(__file__).resolve().parents[1]
-            / "contracts/edge-central/fixtures/catalogo-publicacion-v3-lab01-promocion.json"
-        )
-        datos = json.loads(ruta.read_text(encoding="utf-8"))
-        sucursal = Sucursal.objects.create(
-            id=uuid.UUID(datos["sucursal"]["id"]),
-            clave=datos["sucursal"]["clave"],
-            nombre="Laboratorio 01",
-        )
-        ConfiguracionSucursal.objects.create(
-            sucursal=sucursal, clave_administrador=make_password("7391")
-        )
-        publicacion, creada = aplicar_publicacion_catalogo(sucursal, datos)
-        self.assertTrue(creada)
-        self.assertEqual(publicacion.version_contrato, 3)
-        self.assertEqual(IdentidadProductoCentral.objects.filter(sucursal=sucursal).count(), 3)
-        fuera = IdentidadProductoCentral.objects.get(
-            sucursal=sucursal,
-            central_id=uuid.UUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee3"),
-        ).producto
-        self.assertFalse(fuera.activo)
-        self.assertFalse(fuera.disponible_sucursal)
-        promocion = DefinicionPromocion.objects.get(publicacion=publicacion)
-        self.assertEqual(promocion.codigo, "LAB-PROMO")
-        self.assertEqual(promocion.grupos.get().cantidad, 2)
-
-    def test_fixture_v3_promocion_se_activa_tras_dos_publicaciones_v2(self):
-        base = Path(__file__).resolve().parents[1] / "contracts/edge-central/fixtures"
-        legado = json.loads(
-            (base / "catalogo-publicacion-v2-lab01-global.json").read_text(encoding="utf-8")
-        )
-        inicial_v3 = json.loads(
-            (base / "catalogo-publicacion-v3-lab01-promocion.json").read_text(encoding="utf-8")
-        )
-        sucursal = Sucursal.objects.create(
-            id=uuid.UUID(legado["sucursal"]["id"]),
-            clave=legado["sucursal"]["clave"],
-            nombre="Laboratorio transición",
-        )
-        ConfiguracionSucursal.objects.create(
-            sucursal=sucursal, clave_administrador=make_password("7391")
-        )
-        primera_v2, _ = aplicar_publicacion_catalogo(sucursal, legado)
-        segunda = copy.deepcopy(legado)
-        segunda["release_id"] = str(uuid.uuid4())
-        segunda["publicacion_id"] = str(uuid.uuid4())
-        segunda["publicacion_anterior_id"] = str(primera_v2.publicacion_id)
-        segunda["version_sucursal"] = 2
-        segunda_v2, _ = aplicar_publicacion_catalogo(sucursal, segunda)
-        primera_v3, _ = aplicar_publicacion_catalogo(sucursal, inicial_v3)
-        self.assertEqual(primera_v3.version, 1)
-        self.assertEqual(_publicacion_activa(sucursal.id).pk, primera_v3.pk)
-        principal = IdentidadProductoCentral.objects.get(
-            sucursal=sucursal,
-            central_id=uuid.UUID(inicial_v3["contenido"]["promociones"][0]["producto_central_id"]),
-        ).producto
-        from ventas.promociones import configuracion_promocion
-        definicion = configuracion_promocion(principal)
-        self.assertIsNotNone(definicion)
-        self.assertEqual(definicion.publicacion_id, primera_v3.pk)
-        self.assertEqual(definicion.origen, DefinicionPromocion.Origen.CENTRAL)
-        self.assertEqual(
-            PublicacionCatalogoCentral.objects.get(pk=segunda_v2.pk).version_contrato, 2
-        )
-
-    def test_retirar_promocion_exige_desactivar_su_producto_principal(self):
-        ruta = (
-            Path(__file__).resolve().parents[1]
-            / "contracts/edge-central/fixtures/catalogo-publicacion-v3-lab01-promocion.json"
-        )
-        inicial = json.loads(ruta.read_text(encoding="utf-8"))
-        sucursal = Sucursal.objects.create(
-            id=uuid.UUID(inicial["sucursal"]["id"]),
-            clave=inicial["sucursal"]["clave"],
-            nombre="Laboratorio 01",
-        )
-        ConfiguracionSucursal.objects.create(
-            sucursal=sucursal, clave_administrador=make_password("7391")
-        )
-        primera, _ = aplicar_publicacion_catalogo(sucursal, inicial)
-        siguiente = copy.deepcopy(inicial)
-        siguiente["release_id"] = str(uuid.uuid4())
-        siguiente["publicacion_id"] = str(uuid.uuid4())
-        siguiente["publicacion_anterior_id"] = str(primera.publicacion_id)
-        siguiente["version_sucursal"] = 2
-        siguiente["contenido"]["promociones"] = []
-        siguiente["conteos"]["promociones"] = 0
-        siguiente["contenido_sha256"] = checksum_snapshot(siguiente)
-        with self.assertRaises(ErrorCatalogoCentral) as captura:
-            aplicar_publicacion_catalogo(sucursal, siguiente)
-        self.assertEqual(captura.exception.codigo, "schema_no_soportado")
-        self.assertEqual(PublicacionCatalogoCentral.objects.filter(sucursal=sucursal).count(), 1)
-        self.assertEqual(DefinicionPromocion.objects.filter(sucursal=sucursal).count(), 1)
-        siguiente["contenido"]["productos"][0]["disponible_sucursal"] = False
-        siguiente["contenido_sha256"] = checksum_snapshot(siguiente)
-        segunda, _ = aplicar_publicacion_catalogo(sucursal, siguiente)
-        self.assertEqual(DefinicionPromocion.objects.filter(sucursal=sucursal).count(), 1)
-        principal = IdentidadProductoCentral.objects.get(
-            sucursal=sucursal,
-            central_id=uuid.UUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2"),
-        ).producto
-        self.assertFalse(principal.activo)
-        self.assertEqual(segunda.version, 2)
 
     def test_restore_v3_1_frente_a_central_v3_3_repite_rechazo_sin_reponer_v3_2(self):
         """Caracteriza el bloqueo tras restaurar un Edge más viejo que Central."""
@@ -660,3 +554,110 @@ class FixtureCatalogoV3Tests(TestCase):
         ack.refresh_from_db()
         self.assertEqual(ack.estado_entrega, EventoOutbox.EstadoEntrega.ENTREGADO)
         self.assertEqual(ack.intentos, 2)
+
+class FixtureCatalogoV3Tests(TestCase):
+    def test_fixture_sintetico_aplica_promocion_y_availability(self):
+        ruta = (
+            Path(__file__).resolve().parents[1]
+            / "contracts/edge-central/fixtures/catalogo-publicacion-v3-lab01-promocion.json"
+        )
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+        sucursal = Sucursal.objects.create(
+            id=uuid.UUID(datos["sucursal"]["id"]),
+            clave=datos["sucursal"]["clave"],
+            nombre="Laboratorio 01",
+        )
+        ConfiguracionSucursal.objects.create(
+            sucursal=sucursal, clave_administrador=make_password("7391")
+        )
+        publicacion, creada = aplicar_publicacion_catalogo(sucursal, datos)
+        self.assertTrue(creada)
+        self.assertEqual(publicacion.version_contrato, 3)
+        self.assertEqual(IdentidadProductoCentral.objects.filter(sucursal=sucursal).count(), 3)
+        fuera = IdentidadProductoCentral.objects.get(
+            sucursal=sucursal,
+            central_id=uuid.UUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee3"),
+        ).producto
+        self.assertFalse(fuera.activo)
+        self.assertFalse(fuera.disponible_sucursal)
+        promocion = DefinicionPromocion.objects.get(publicacion=publicacion)
+        self.assertEqual(promocion.codigo, "LAB-PROMO")
+        self.assertEqual(promocion.grupos.get().cantidad, 2)
+
+    def test_fixture_v3_promocion_se_activa_tras_dos_publicaciones_v2(self):
+        base = Path(__file__).resolve().parents[1] / "contracts/edge-central/fixtures"
+        legado = json.loads(
+            (base / "catalogo-publicacion-v2-lab01-global.json").read_text(encoding="utf-8")
+        )
+        inicial_v3 = json.loads(
+            (base / "catalogo-publicacion-v3-lab01-promocion.json").read_text(encoding="utf-8")
+        )
+        sucursal = Sucursal.objects.create(
+            id=uuid.UUID(legado["sucursal"]["id"]),
+            clave=legado["sucursal"]["clave"],
+            nombre="Laboratorio transición",
+        )
+        ConfiguracionSucursal.objects.create(
+            sucursal=sucursal, clave_administrador=make_password("7391")
+        )
+        primera_v2, _ = aplicar_publicacion_catalogo(sucursal, legado)
+        segunda = copy.deepcopy(legado)
+        segunda["release_id"] = str(uuid.uuid4())
+        segunda["publicacion_id"] = str(uuid.uuid4())
+        segunda["publicacion_anterior_id"] = str(primera_v2.publicacion_id)
+        segunda["version_sucursal"] = 2
+        segunda_v2, _ = aplicar_publicacion_catalogo(sucursal, segunda)
+        primera_v3, _ = aplicar_publicacion_catalogo(sucursal, inicial_v3)
+        self.assertEqual(primera_v3.version, 1)
+        self.assertEqual(_publicacion_activa(sucursal.id).pk, primera_v3.pk)
+        principal = IdentidadProductoCentral.objects.get(
+            sucursal=sucursal,
+            central_id=uuid.UUID(inicial_v3["contenido"]["promociones"][0]["producto_central_id"]),
+        ).producto
+        from ventas.promociones import configuracion_promocion
+        definicion = configuracion_promocion(principal)
+        self.assertIsNotNone(definicion)
+        self.assertEqual(definicion.publicacion_id, primera_v3.pk)
+        self.assertEqual(definicion.origen, DefinicionPromocion.Origen.CENTRAL)
+        self.assertEqual(
+            PublicacionCatalogoCentral.objects.get(pk=segunda_v2.pk).version_contrato, 2
+        )
+
+    def test_retirar_promocion_exige_desactivar_su_producto_principal(self):
+        ruta = (
+            Path(__file__).resolve().parents[1]
+            / "contracts/edge-central/fixtures/catalogo-publicacion-v3-lab01-promocion.json"
+        )
+        inicial = json.loads(ruta.read_text(encoding="utf-8"))
+        sucursal = Sucursal.objects.create(
+            id=uuid.UUID(inicial["sucursal"]["id"]),
+            clave=inicial["sucursal"]["clave"],
+            nombre="Laboratorio 01",
+        )
+        ConfiguracionSucursal.objects.create(
+            sucursal=sucursal, clave_administrador=make_password("7391")
+        )
+        primera, _ = aplicar_publicacion_catalogo(sucursal, inicial)
+        siguiente = copy.deepcopy(inicial)
+        siguiente["release_id"] = str(uuid.uuid4())
+        siguiente["publicacion_id"] = str(uuid.uuid4())
+        siguiente["publicacion_anterior_id"] = str(primera.publicacion_id)
+        siguiente["version_sucursal"] = 2
+        siguiente["contenido"]["promociones"] = []
+        siguiente["conteos"]["promociones"] = 0
+        siguiente["contenido_sha256"] = checksum_snapshot(siguiente)
+        with self.assertRaises(ErrorCatalogoCentral) as captura:
+            aplicar_publicacion_catalogo(sucursal, siguiente)
+        self.assertEqual(captura.exception.codigo, "schema_no_soportado")
+        self.assertEqual(PublicacionCatalogoCentral.objects.filter(sucursal=sucursal).count(), 1)
+        self.assertEqual(DefinicionPromocion.objects.filter(sucursal=sucursal).count(), 1)
+        siguiente["contenido"]["productos"][0]["disponible_sucursal"] = False
+        siguiente["contenido_sha256"] = checksum_snapshot(siguiente)
+        segunda, _ = aplicar_publicacion_catalogo(sucursal, siguiente)
+        self.assertEqual(DefinicionPromocion.objects.filter(sucursal=sucursal).count(), 1)
+        principal = IdentidadProductoCentral.objects.get(
+            sucursal=sucursal,
+            central_id=uuid.UUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2"),
+        ).producto
+        self.assertFalse(principal.activo)
+        self.assertEqual(segunda.version, 2)
