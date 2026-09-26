@@ -64,6 +64,7 @@ class RespaldoIntegralTests(unittest.TestCase):
                 INSERT INTO impresion_terminal VALUES ('t1', 'p1');
                 """
             )
+        db.close()
         public_xml = "<RSAKeyValue><Modulus>QUJD</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>"
         self.trust_source = self.base / "release-trust-origen.json"
         self.trust_source.write_text(json.dumps({
