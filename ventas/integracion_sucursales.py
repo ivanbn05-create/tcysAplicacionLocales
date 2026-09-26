@@ -6,6 +6,7 @@ pedido aparece abierto en el primer espacio libre de su sucursal para que el
 operador pueda revisarlo e imprimirlo.
 """
 
+import hashlib
 import logging
 import sqlite3
 import threading
@@ -536,7 +537,17 @@ def _leer_confirmados_postgres(desde, hasta):
 
 
 @transaction.atomic
-def _importar_pedido(sucursal_local, pedido, items, origen, *, identidad_estricta=False):
+def _importar_pedido(
+    sucursal_local,
+    pedido,
+    items,
+    origen,
+    *,
+    identidad_estricta=False,
+    sender_id=None,
+    order_canonical_json="",
+    order_sha256="",
+):
     try:
         origen_id = int(pedido["id"])
     except (KeyError, TypeError, ValueError) as exc:
@@ -558,9 +569,41 @@ def _importar_pedido(sucursal_local, pedido, items, origen, *, identidad_estrict
                 "El codigo_publico v2 no es un UUID canonico valido."
             ) from exc
 
-        # codigo_publico es la identidad durable. Si Pedidos reasigna su ID
-        # interno, el mismo UUID sigue representando el pedido ya importado.
-        if PedidoSucursalImportado.objects.filter(
+        # El contrato r7 usa (SucursalCliente.id, codigo_publico); filas legacy
+        # sin cuerpo/código probado siguen siendo ambiguas y no prueban un ACK.
+        if sender_id is not None:
+            if type(sender_id) is not int or sender_id <= 0:
+                raise PedidoRemotoInvalido("El sender_id v2 no es valido.")
+            if (
+                type(order_canonical_json) is not str
+                or not order_canonical_json
+                or len(order_canonical_json.encode("utf-8")) > settings.PEDIDOS_API_MAX_RESPONSE_BYTES
+                or type(order_sha256) is not str
+                or len(order_sha256) != 64
+                or any(caracter not in "0123456789abcdef" for caracter in order_sha256)
+                or hashlib.sha256(order_canonical_json.encode("utf-8")).hexdigest() != order_sha256
+            ):
+                raise PedidoRemotoInvalido("El cuerpo canonico del pedido v2 no es valido.")
+            existente = PedidoSucursalImportado.objects.filter(
+                sucursal=sucursal_local,
+                origen=ORIGEN_API_V2,
+                sender_id=sender_id,
+                codigo_publico=codigo_publico,
+            ).first()
+            if existente is not None:
+                if existente.order_sha256 and existente.order_sha256 != order_sha256:
+                    raise PedidoRemotoRequiereConciliacion(
+                        "El contenido del pedido v2 cambió para la misma identidad."
+                    )
+                return None
+            if PedidoSucursalImportado.objects.filter(
+                sucursal=sucursal_local,
+                origen__in=origenes_pedidos,
+                sender_id__isnull=True,
+                codigo_publico=codigo_publico,
+            ).exists():
+                return None
+        elif PedidoSucursalImportado.objects.filter(
             sucursal=sucursal_local,
             origen__in=origenes_pedidos,
             codigo_publico=codigo_publico,
@@ -592,6 +635,11 @@ def _importar_pedido(sucursal_local, pedido, items, origen, *, identidad_estrict
     ).exists():
         return None
 
+    if origen == ORIGEN_API_V2:
+        if sender_id is None:
+            raise PedidoRemotoInvalido("Falta sender_id y cuerpo canonico del pedido v2.")
+        if pedido.get("sucursal_cliente_id") != sender_id:
+            raise PedidoRemotoInvalido("El sender_id v2 no coincide con el pedido.")
     if not items or len(items) > MAX_ITEMS_POR_PEDIDO:
         raise PedidoRemotoInvalido("El pedido no tiene una cantidad válida de conceptos.")
 
@@ -723,6 +771,9 @@ def _importar_pedido(sucursal_local, pedido, items, origen, *, identidad_estrict
         origen=origen,
         origen_id=origen_id,
         codigo_publico=codigo_publico,
+        sender_id=sender_id if origen == ORIGEN_API_V2 else None,
+        order_canonical_json=order_canonical_json if origen == ORIGEN_API_V2 else "",
+        order_sha256=order_sha256 if origen == ORIGEN_API_V2 else "",
         estado_origen=pedido["estado"],
     )
     return ticket
@@ -1004,7 +1055,8 @@ def _sincronizar_pedidos_api_v2(sucursal_local):
                             "El alcance persistido dejó de ser válido."
                         ) from exc
                     if (
-                        cursor_esperado != checkpoint.cursor_entrada
+                        estado_pagina.estado != EstadoSincronizacionPedidos.Estado.LISTO
+                        or cursor_esperado != checkpoint.cursor_entrada
                         or estado_pagina.ventana_desde != desde
                         or estado_pagina.ventana_hasta != hasta
                         or alcance_pagina != ids_configurados
@@ -1022,6 +1074,9 @@ def _sincronizar_pedidos_api_v2(sucursal_local):
                             items,
                             ORIGEN_API_V2,
                             identidad_estricta=True,
+                            sender_id=pedido_remoto.sucursal.id,
+                            order_canonical_json=pedido_remoto.order_canonical_json,
+                            order_sha256=pedido_remoto.order_sha256,
                         ):
                             importados_pagina += 1
 
@@ -1075,7 +1130,8 @@ def _sincronizar_pedidos_api_v2(sucursal_local):
                     sucursal=sucursal_local
                 )
                 if (
-                    estado_confirmado.cursor
+                    estado_confirmado.estado != EstadoSincronizacionPedidos.Estado.LISTO
+                    or estado_confirmado.cursor
                     or estado_confirmado.agua_alta_hasta is None
                     or estado_confirmado.agua_alta_hasta < avance_hasta
                 ):
