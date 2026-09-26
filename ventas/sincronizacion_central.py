@@ -40,6 +40,8 @@ MAX_BODY_POR_DESTINO = {
     EventoOutbox.Destino.CENTRAL_CLIENTES: 64 * 1024,
     EventoOutbox.Destino.CENTRAL_CATALOGO_ACK: 16 * 1024,
 }
+ACK_V2_LARGE_PROFILE = "mappings-large-1"
+ACK_V2_LARGE_MAX_BYTES = 1024 * 1024
 
 
 def _limite_payload_evento(evento):
@@ -49,6 +51,23 @@ def _limite_payload_evento(evento):
     ):
         return 1024 * 1024
     return MAX_BODY_POR_DESTINO[evento.destino]
+
+
+def _capacidad_ack_v2_grande(respuesta):
+    """Sólo un OPTIONS autenticado, explícito y no cacheable amplía el ACK v2."""
+
+    if respuesta.status != 204:
+        return False
+    headers = respuesta.headers
+    cache_control = {
+        token.strip().lower()
+        for token in headers.get("cache-control", "").split(",")
+    }
+    return (
+        headers.get("x-catalog-ack-profile") == ACK_V2_LARGE_PROFILE
+        and headers.get("x-catalog-ack-max-body-bytes") == str(ACK_V2_LARGE_MAX_BYTES)
+        and "no-store" in cache_control
+    )
 
 
 def json_canonico(datos):
@@ -557,7 +576,16 @@ def sincronizar_outbox_central(*, limite=50, cliente_factory=ClienteCentral):
             ):
                 resultado["suspendidos"] += 1
             continue
-        if len(json_canonico(evento.datos)) > _limite_payload_evento(evento):
+        tamano_payload = len(json_canonico(evento.datos))
+        ack_v2_grande = (
+            evento.destino == EventoOutbox.Destino.CENTRAL_CATALOGO_ACK
+            and evento.version_contrato == 2
+            and tamano_payload > _limite_payload_evento(evento)
+        )
+        limite_aplicable = (
+            ACK_V2_LARGE_MAX_BYTES if ack_v2_grande else _limite_payload_evento(evento)
+        )
+        if tamano_payload > limite_aplicable:
             if _actualizar_evento(
                 evento.id,
                 intento=intento,
@@ -589,12 +617,42 @@ def sincronizar_outbox_central(*, limite=50, cliente_factory=ClienteCentral):
                 max_response_bytes=settings.CENTRAL_MAX_RESPONSE_BYTES,
             )
         try:
-            respuesta = clientes[token_tipo].solicitar(
-                metodo="POST",
-                ruta=_ruta_evento(evento),
-                payload=evento.datos,
-                idempotencia=str(evento.id),
-            )
+            ruta = _ruta_evento(evento)
+            parametros_post = {
+                "metodo": "POST",
+                "ruta": ruta,
+                "payload": evento.datos,
+                "idempotencia": str(evento.id),
+            }
+            if ack_v2_grande:
+                try:
+                    capacidad = clientes[token_tipo].solicitar(
+                        metodo="OPTIONS", ruta=ruta
+                    )
+                except ErrorContratoCentral:
+                    capacidad = None
+                if capacidad is not None and capacidad.status in {401, 403}:
+                    if _actualizar_evento(
+                        evento.id,
+                        intento=intento,
+                        estado=EventoOutbox.EstadoEntrega.SUSPENDIDO,
+                        http=capacidad.status,
+                        error="La credencial Central no autoriza el perfil ACK v2 grande.",
+                    ):
+                        resultado["suspendidos"] += 1
+                    continue
+                if capacidad is None or not _capacidad_ack_v2_grande(capacidad):
+                    if _actualizar_evento(
+                        evento.id,
+                        intento=intento,
+                        estado=EventoOutbox.EstadoEntrega.PENDIENTE,
+                        error="El Central aún no acredita el perfil ACK v2 grande; se conserva el evento.",
+                        demora=_demora_reintento(evento),
+                    ):
+                        resultado["pendientes"] += 1
+                    continue
+                parametros_post["perfil_ack"] = ACK_V2_LARGE_PROFILE
+            respuesta = clientes[token_tipo].solicitar(**parametros_post)
             if respuesta.status in {200, 201}:
                 acuse, estado_remoto = _validar_ack(evento, respuesta.datos)
                 if _actualizar_evento(
