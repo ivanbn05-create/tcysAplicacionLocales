@@ -892,6 +892,164 @@ class CatalogoV3AprovisionamientoTests(TestCase):
         self.assertEqual(producto.id.version, 4)
         self.assertEqual(producto.categoria_id.version, 4)
 
+    def test_dos_polls_v3_concurrentes_no_rechazan_cadena_ya_aplicada(self):
+        primera = self.snapshot()
+        segunda = self.snapshot(
+            version=2, anterior=primera["publicacion_id"], importe="37.00"
+        )
+        tercera = self.snapshot(
+            version=3, anterior=segunda["publicacion_id"], importe="39.00"
+        )
+        aplicada_por_otro = False
+
+        def responder(**kwargs):
+            nonlocal aplicada_por_otro
+            ruta = kwargs["ruta"]
+            if ruta.endswith("/publicaciones/actual/"):
+                return SimpleNamespace(status=200, datos=tercera)
+            if ruta.endswith(f"/publicaciones/{segunda['publicacion_id']}/"):
+                return SimpleNamespace(status=200, datos=segunda)
+            if ruta.endswith(f"/publicaciones/{primera['publicacion_id']}/"):
+                if not aplicada_por_otro:
+                    aplicada_por_otro = True
+                    for snapshot in (primera, segunda, tercera):
+                        aplicar_publicacion_catalogo(self.sucursal, snapshot)
+                return SimpleNamespace(status=200, datos=primera)
+            self.fail(f"Ruta historica inesperada: {ruta}")
+
+        cliente = SimpleNamespace(solicitar=Mock(side_effect=responder))
+        with self.central_v3_settings(), patch(
+            "ventas.management.commands.sincronizar_catalogo_central.ClienteCentral",
+            return_value=cliente,
+        ):
+            call_command("sincronizar_catalogo_central", stdout=StringIO())
+        self.assertEqual(
+            list(PublicacionCatalogoCentral.objects.filter(
+                sucursal=self.sucursal, version_contrato=3
+            ).order_by("version").values_list("version", flat=True)),
+            [1, 2, 3],
+        )
+        self.assertEqual(
+            EventoOutbox.objects.filter(
+                sucursal=self.sucursal, tipo="catalogo.aplicado"
+            ).count(),
+            3,
+        )
+        self.assertFalse(
+            EventoOutbox.objects.filter(
+                sucursal=self.sucursal, tipo="catalogo.rechazado"
+            ).exists()
+        )
+        producto = IdentidadProductoCentral.objects.get(
+            sucursal=self.sucursal, central_id=self.vendible_id
+        ).producto
+        self.assertEqual(producto.precio_actual().importe, Decimal("39.00"))
+
+    def test_poll_v3_concurrente_saltea_prefijo_y_aplica_sufijo(self):
+        primera = self.snapshot()
+        segunda = self.snapshot(
+            version=2, anterior=primera["publicacion_id"], importe="37.00"
+        )
+        tercera = self.snapshot(
+            version=3, anterior=segunda["publicacion_id"], importe="39.00"
+        )
+        aplicada_por_otro = False
+
+        def responder(**kwargs):
+            nonlocal aplicada_por_otro
+            ruta = kwargs["ruta"]
+            if ruta.endswith("/publicaciones/actual/"):
+                return SimpleNamespace(status=200, datos=tercera)
+            if ruta.endswith(f"/publicaciones/{segunda['publicacion_id']}/"):
+                return SimpleNamespace(status=200, datos=segunda)
+            if ruta.endswith(f"/publicaciones/{primera['publicacion_id']}/"):
+                if not aplicada_por_otro:
+                    aplicada_por_otro = True
+                    aplicar_publicacion_catalogo(self.sucursal, primera)
+                return SimpleNamespace(status=200, datos=primera)
+            self.fail(f"Ruta historica inesperada: {ruta}")
+
+        cliente = SimpleNamespace(solicitar=Mock(side_effect=responder))
+        with self.central_v3_settings(), patch(
+            "ventas.management.commands.sincronizar_catalogo_central.ClienteCentral",
+            return_value=cliente,
+        ):
+            call_command("sincronizar_catalogo_central", stdout=StringIO())
+        self.assertEqual(
+            list(PublicacionCatalogoCentral.objects.filter(
+                sucursal=self.sucursal, version_contrato=3
+            ).order_by("version").values_list("version", flat=True)),
+            [1, 2, 3],
+        )
+        self.assertEqual(
+            EventoOutbox.objects.filter(
+                sucursal=self.sucursal, tipo="catalogo.aplicado"
+            ).count(),
+            3,
+        )
+        self.assertFalse(
+            EventoOutbox.objects.filter(
+                sucursal=self.sucursal, tipo="catalogo.rechazado"
+            ).exists()
+        )
+
+    def test_prefijo_concurrente_divergente_falla_sin_ack_rechazado(self):
+        primera = self.snapshot()
+        segunda = self.snapshot(
+            version=2, anterior=primera["publicacion_id"], importe="37.00"
+        )
+        tercera = self.snapshot(
+            version=3, anterior=segunda["publicacion_id"], importe="39.00"
+        )
+        divergente = self.snapshot(
+            version=2, anterior=primera["publicacion_id"], importe="36.00"
+        )
+        aplicada_por_otro = False
+
+        def responder(**kwargs):
+            nonlocal aplicada_por_otro
+            ruta = kwargs["ruta"]
+            if ruta.endswith("/publicaciones/actual/"):
+                return SimpleNamespace(status=200, datos=tercera)
+            if ruta.endswith(f"/publicaciones/{segunda['publicacion_id']}/"):
+                return SimpleNamespace(status=200, datos=segunda)
+            if ruta.endswith(f"/publicaciones/{primera['publicacion_id']}/"):
+                if not aplicada_por_otro:
+                    aplicada_por_otro = True
+                    aplicar_publicacion_catalogo(self.sucursal, primera)
+                    aplicar_publicacion_catalogo(self.sucursal, divergente)
+                return SimpleNamespace(status=200, datos=primera)
+            self.fail(f"Ruta historica inesperada: {ruta}")
+
+        cliente = SimpleNamespace(solicitar=Mock(side_effect=responder))
+        with self.central_v3_settings(), patch(
+            "ventas.management.commands.sincronizar_catalogo_central.ClienteCentral",
+            return_value=cliente,
+        ):
+            with self.assertRaises(CommandError):
+                call_command("sincronizar_catalogo_central", stdout=StringIO())
+        self.assertEqual(
+            list(PublicacionCatalogoCentral.objects.filter(
+                sucursal=self.sucursal, version_contrato=3
+            ).order_by("version").values_list("version", flat=True)),
+            [1, 2],
+        )
+        self.assertEqual(
+            EventoOutbox.objects.filter(
+                sucursal=self.sucursal, tipo="catalogo.aplicado"
+            ).count(),
+            2,
+        )
+        self.assertFalse(
+            EventoOutbox.objects.filter(
+                sucursal=self.sucursal, tipo="catalogo.rechazado"
+            ).exists()
+        )
+        producto = IdentidadProductoCentral.objects.get(
+            sucursal=self.sucursal, central_id=self.vendible_id
+        ).producto
+        self.assertEqual(producto.precio_actual().importe, Decimal("36.00"))
+
     def test_ack_v3_respuesta_perdida_reintenta_misma_identidad_y_acepta_repetido(self):
         """Un ACK recibido por Central con respuesta perdida conserva su idempotencia."""
         from datetime import timedelta
