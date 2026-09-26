@@ -133,7 +133,7 @@ class ClienteCentral:
     def __repr__(self):
         return f"ClienteCentral(base_url={self.base_url!r})"
 
-    def solicitar(self, *, metodo, ruta, payload=None, idempotencia=""):
+    def solicitar(self, *, metodo, ruta, payload=None, idempotencia="", perfil_ack=""):
         if (
             type(ruta) is not str
             or not ruta.startswith("/")
@@ -164,6 +164,15 @@ class ClienteCentral:
             headers["Content-Type"] = "application/json"
         if idempotencia:
             headers["Idempotency-Key"] = str(idempotencia)
+        if perfil_ack:
+            if (
+                perfil_ack != "mappings-large-1"
+                or metodo != "POST"
+                or not ruta.startswith("/api/v2/edge/catalogo/publicaciones/")
+                or not ruta.endswith("/acuse/")
+            ):
+                raise ErrorConfiguracionCentral("El perfil de ACK de catálogo no es válido.")
+            headers["X-Catalog-Ack-Profile"] = perfil_ack
         solicitud = Request(url, data=body, headers=headers, method=metodo)
         try:
             respuesta = self._opener.open(solicitud, timeout=self.timeout)
