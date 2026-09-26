@@ -199,7 +199,41 @@ class ClientePedidosV2Tests(unittest.TestCase):
         self.assertEqual(query["sucursal_id"], ["1,3"])
         self.assertEqual(query["cursor"], ["cursor-opaco"])
         self.assertEqual(solicitud.get_header("Authorization"), f"Bearer {TOKEN}")
+        self.assertIsNone(solicitud.get_header("X-POS-Edge-ID"))
+        self.assertIsNone(solicitud.get_header("X-POS-Branch-ID"))
         self.assertNotIn(TOKEN, repr(api))
+
+    def test_credencial_agregada_envia_identidades_explicitamente(self):
+        edge_id = "11111111-1111-4111-8111-111111111111"
+        branch_id = "22222222-2222-4222-8222-222222222222"
+        transporte = TransporteSecuencial(
+            respuesta(200, pagina_payload(limite=2, request_id="req-agg"), request_id="req-agg")
+        )
+        api = cliente(
+            transporte, edge_id=edge_id, pos_branch_id=branch_id,
+            sucursal_ids=[3],
+        )
+
+        api.listar_pagina(desde=DESDE, hasta=HASTA, limite=2, request_id="req-agg")
+
+        solicitud = transporte.solicitudes[0][0]
+        self.assertEqual(solicitud.get_header("X-POS-Edge-ID"), edge_id)
+        self.assertEqual(solicitud.get_header("X-POS-Branch-ID"), branch_id)
+        self.assertEqual(solicitud.get_header("Authorization"), f"Bearer {TOKEN}")
+        self.assertNotIn(TOKEN, repr(api))
+
+    def test_credencial_agregada_rechaza_identidades_incompletas_o_no_canonicas(self):
+        valido = "11111111-1111-4111-8111-111111111111"
+        casos = [
+            {"edge_id": valido},
+            {"pos_branch_id": valido},
+            {"edge_id": valido.upper(), "pos_branch_id": valido},
+            {"edge_id": valido, "pos_branch_id": "00000000-0000-0000-0000-000000000000"},
+            {"edge_id": "no-uuid", "pos_branch_id": valido},
+        ]
+        for caso in casos:
+            with self.subTest(caso=caso), self.assertRaises(ErrorConfiguracionPedidos):
+                cliente(TransporteSecuencial(), **caso)
 
     def test_configuracion_rechaza_http_userinfo_query_token_y_alcance_ambiguo(self):
         casos = [
@@ -283,6 +317,8 @@ class ClientePedidosV2Tests(unittest.TestCase):
         )
         api = cliente(
             transporte,
+            edge_id="11111111-1111-4111-8111-111111111111",
+            pos_branch_id="22222222-2222-4222-8222-222222222222",
             max_reintentos=1,
             max_retry_after=7,
             dormir=pausas.append,
@@ -297,6 +333,14 @@ class ClientePedidosV2Tests(unittest.TestCase):
         self.assertEqual(
             [solicitud.get_header("X-request-id") for solicitud, _, _ in transporte.solicitudes],
             ["req-rate", "req-rate"],
+        )
+        self.assertEqual(
+            [solicitud.get_header("X-POS-Edge-ID") for solicitud, _, _ in transporte.solicitudes],
+            [api.edge_id, api.edge_id],
+        )
+        self.assertEqual(
+            [solicitud.get_header("X-POS-Branch-ID") for solicitud, _, _ in transporte.solicitudes],
+            [api.pos_branch_id, api.pos_branch_id],
         )
 
     def test_429_agotado_conserva_retry_after_tipado(self):
