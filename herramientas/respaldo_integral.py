@@ -198,6 +198,11 @@ def create(source_root: Path, output_root: Path) -> dict[str, object]:
         path = source_root / excluded
         if output_root == path or path in output_root.parents:
             _fail("El destino del paquete no puede estar dentro de los datos capturados.")
+    version_path = source_root / "VERSION"
+    _physical(version_path, directory=False)
+    release_version = version_path.read_text(encoding="utf-8").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}", release_version):
+        _fail("VERSION de la instalación no es válida.")
     env_path = source_root / ".env"
     _, values = _dotenv(env_path)
     env_hash = _hash(env_path)
@@ -240,6 +245,7 @@ def create(source_root: Path, output_root: Path) -> dict[str, object]:
             _fail("El paquete contiene nombres de archivo ambiguos.")
         manifest = {
             "schema": SCHEMA,
+            "release_version": release_version,
             "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
             "sqlite": sqlite_result,
             "trust": trust,
@@ -272,6 +278,11 @@ def verify(bundle: Path) -> dict[str, object]:
         raise BackupIntegralError("Manifiesto H18 inválido.") from exc
     if type(manifest) is not dict or manifest.get("schema") != SCHEMA:
         _fail("Versión de manifiesto H18 no soportada.")
+    release_version = manifest.get("release_version")
+    if type(release_version) is not str or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}", release_version
+    ):
+        _fail("VERSION de release H18 inválida.")
     entries = manifest.get("files")
     if type(entries) is not list or not entries:
         _fail("Manifiesto H18 sin archivos.")
@@ -350,6 +361,9 @@ def restore(bundle: Path, target_root: Path, source_root: Path) -> dict[str, obj
         _fail("Falta la marca exacta de instalación aislada.")
     for required in ("manage.py", "VERSION"):
         _physical(target_root / required, directory=False)
+    target_version = (target_root / "VERSION").read_text(encoding="utf-8").strip()
+    if target_version != manifest["release_version"]:
+        _fail("La release de destino no coincide con el respaldo.")
     files = manifest["files"]
     target_files: dict[str, Path] = {}
     for item in files:
