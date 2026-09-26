@@ -1,6 +1,7 @@
 """Pruebas offline del vector público r7, sin claves privadas versionadas."""
 import base64
 import copy
+from dataclasses import replace
 import io
 import json
 import unittest
@@ -12,7 +13,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from ventas.pedidos_recovery_v2 import (
     PinnedPedidosKey, RecoveryV2Error, canonical_json, sha256,
-    sign_edge_ack, verify_archive_proof, verify_baseline, verify_receipt,
+    sign_edge_ack, verify_archive_proof, verify_archive_rows,
+    verify_baseline, verify_receipt,
     _json,
 )
 
@@ -74,6 +76,12 @@ class RecoveryV2CodecTests(unittest.TestCase):
         self.assertEqual(len(baseline.recovered_orders), 1)
         self.assertEqual(len(baseline.tombstones), 1)
         self.assertEqual(len(self.proof(baseline)), 1)
+        original = verify_archive_rows(
+            baseline, self.archive_bytes,
+            "99999999-9999-4999-8999-999999999999",
+        )
+        self.assertEqual(next(iter(original.values())).estado, "confirmado")
+        self.assertTrue(next(iter(original.values())).importable)
         result = verify_receipt(
             baseline, ACK, RECEIPT, pedidos_keys=self.pins,
             archive_proven=self.proof(baseline),
@@ -163,6 +171,36 @@ class RecoveryV2CodecTests(unittest.TestCase):
             verify_receipt(
                 baseline, ACK, RECEIPT, pedidos_keys=self.pins,
             )
+
+    def test_verified_terminal_archive_row_is_manual(self):
+        baseline = self.baseline()
+        with zipfile.ZipFile(io.BytesIO(self.archive_bytes)) as original:
+            row = json.loads(original.read("pedidos.jsonl"))
+            manifest = json.loads(original.read("manifest.json"))
+        row["estado"] = "enviado"
+        lines = canonical_json(row) + b"\n"
+        manifest["sha256_pedidos_jsonl"] = sha256(lines)
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as altered:
+            altered.writestr("manifest.json", canonical_json(manifest) + b"\n")
+            altered.writestr("pedidos.jsonl", lines)
+        archive_bytes = output.getvalue()
+        tombstone = copy.deepcopy(baseline.tombstones[0])
+        tombstone["archive_sha256"] = sha256(archive_bytes)
+        current = baseline.orders[0]
+        pair = (current["sender_id"], current["order"]["codigo_publico"])
+        variant = replace(
+            baseline, recovered_orders=(), tombstones=(tombstone,),
+            order_hashes={pair: baseline.order_hashes[pair]},
+        )
+        export_id = tombstone["exportacion_id"]
+        proofs = verify_archive_rows(variant, archive_bytes, export_id)
+        self.assertEqual(next(iter(proofs.values())).estado, "enviado")
+        self.assertFalse(next(iter(proofs.values())).importable)
+        self.assertEqual(
+            verify_archive_proof(variant, archive_bytes, export_id),
+            frozenset(),
+        )
 
     def test_ack_signing_requires_exact_coverage_and_archive_proof(self):
         baseline = self.baseline()
