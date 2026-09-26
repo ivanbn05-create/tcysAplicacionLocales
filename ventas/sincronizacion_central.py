@@ -673,6 +673,11 @@ def sincronizar_outbox_central(*, limite=50, cliente_factory=ClienteCentral):
                 estado = EventoOutbox.EstadoEntrega.CONCILIACION
                 demora = None
                 contador = "conciliacion"
+            elif respuesta.status == 413 and ack_v2_grande:
+                # Un proxy o worker antiguo pudo no aplicar el perfil recién anunciado.
+                estado = EventoOutbox.EstadoEntrega.PENDIENTE
+                demora = _demora_reintento(evento, respuesta)
+                contador = "pendientes"
             elif respuesta.status in {400, 413, 415, 422}:
                 estado = EventoOutbox.EstadoEntrega.CUARENTENA
                 demora = None
@@ -708,11 +713,19 @@ def sincronizar_outbox_central(*, limite=50, cliente_factory=ClienteCentral):
             ):
                 resultado["pendientes"] += 1
         except ErrorContratoCentral:
+            # El ACK v2 grande ya fue validado localmente; una respuesta/proxy
+            # incompatible no demuestra que ese evento durable sea inválido.
+            estado = (
+                EventoOutbox.EstadoEntrega.PENDIENTE
+                if ack_v2_grande
+                else EventoOutbox.EstadoEntrega.CUARENTENA
+            )
             if _actualizar_evento(
                 evento.id,
                 intento=intento,
-                estado=EventoOutbox.EstadoEntrega.CUARENTENA,
+                estado=estado,
                 error="Respuesta Central incompatible con el contrato candidato.",
+                demora=_demora_reintento(evento) if ack_v2_grande else None,
             ):
-                resultado["suspendidos"] += 1
+                resultado["pendientes" if ack_v2_grande else "suspendidos"] += 1
     return resultado
