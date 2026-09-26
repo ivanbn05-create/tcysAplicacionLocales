@@ -467,32 +467,40 @@ def restore(
                 continue
             _fail("Restore H18 no sobrescribe datos existentes.")
         target_files[item["path"]] = destination
-    env_text, _ = _dotenv(bundle / ".env")
-    restored_env = _rewrite_env(env_text, manifest["trust"])
     stage = Path(tempfile.mkdtemp(prefix=".h18-stage-", dir=target_root))
     created: list[Path] = []
     try:
+        # Cada byte usado se contrasta con el manifiesto después de verify().
+        # El staging completo se valida antes de publicar un solo archivo.
         for item in files:
             name = item["path"]
-            if name not in target_files:
-                continue
-            staged = stage / _relative(name)
-            staged.parent.mkdir(parents=True, exist_ok=True)
-            if name == ".env":
-                staged.write_text(restored_env, encoding="utf-8")
+            if name == RELEASE_TRUST_REL and release_destination is not None:
+                staged = stage / "release-trust-pending.json"
+            elif name in target_files:
+                staged = stage / _relative(name)
             else:
-                _copy_file(bundle / _relative(name), staged)
+                continue
+            source = bundle / _relative(name)
+            _physical(source, directory=False)
+            if _hash(source) != item["sha256"]:
+                _fail("El paquete H18 cambió después de verify.")
+            _copy_file(source, staged)
+            if _hash(staged) != item["sha256"]:
+                _fail("El archivo en staging H18 difiere del manifiesto.")
+            if name == ".env":
+                env_text, _ = _dotenv(staged)
+                restored_env = _rewrite_env(env_text, manifest["trust"])
+                expected_env_hash = hashlib.sha256(restored_env.encode("utf-8")).hexdigest()
+                staged.write_bytes(restored_env.encode("utf-8"))
+                if _hash(staged) != expected_env_hash:
+                    _fail(".env reescrito difiere del staging esperado.")
         for name, destination in target_files.items():
             staged = stage / _relative(name)
             destination.parent.mkdir(parents=True, exist_ok=True)
             staged.replace(destination)
             created.append(destination)
         if release_destination is not None:
-            source_release = bundle / _relative(RELEASE_TRUST_REL)
             staged_release = stage / "release-trust-pending.json"
-            _copy_file(source_release, staged_release)
-            if _hash(staged_release) != _hash(source_release):
-                _fail("Trust store de release cambió durante restore.")
             staged_release.replace(release_destination)
             created.append(release_destination)
         result = _sqlite_check(target_root / DB_REL)
