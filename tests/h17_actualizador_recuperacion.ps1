@@ -255,24 +255,13 @@ foreach ($phase in @('prepared', 'old_moved', 'state_copied', 'engine_running', 
         }
         $creator.Dispose()
     }
-    $stdout = $handoff + '.stdout'
-    $stderr = $handoff + '.stderr'
-    $recoverArguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
-        $PSCommandPath + '" -Mode Recover -Phase ' + $phase + ' -HandoffPath "' + $handoff + '"'
-    $recovery = Start-Process -FilePath $powerShell -ArgumentList $recoverArguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-    try {
-        if (-not $recovery.WaitForExit(30000)) {
-            Stop-Process -Id $recovery.Id -Force
-            throw "La recuperación nueva $phase excedió 30 segundos."
-        }
-        $recovery.Refresh()
-        if ($recovery.ExitCode -ne 0) {
-            throw ("Recuperación nueva $phase falló: " +
-                (Get-Content -LiteralPath $stdout -Raw) +
-                (Get-Content -LiteralPath $stderr -Raw))
-        }
+    $recoveryOutput = @(
+        & $powerShell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PSCommandPath -Mode Recover -Phase $phase -HandoffPath $handoff 2>&1
+    )
+    if ($LASTEXITCODE -ne 0) {
+        throw ("Recuperación nueva $phase falló con ExitCode=[$LASTEXITCODE]: " +
+            ($recoveryOutput -join [Environment]::NewLine))
     }
-    finally { $recovery.Dispose() }
 }
 $beforeStops = $script:stops
 $script:failDisable = $true
