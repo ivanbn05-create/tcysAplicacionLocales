@@ -1,3 +1,4 @@
+import hashlib
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -191,8 +192,13 @@ class CheckpointVentanasPedidosV2Tests(TestCase):
         }
 
         def sincronizar_ventana(*, aplicar_pagina, cursor_inicial, **kwargs):
+            remoto = SimpleNamespace(
+                sucursal=SimpleNamespace(id=77),
+                order_canonical_json="{}",
+                order_sha256=hashlib.sha256(b"{}").hexdigest(),
+            )
             aplicar_pagina(
-                SimpleNamespace(pedidos=(object(),), request_id="req-conflicto"),
+                SimpleNamespace(pedidos=(remoto,), request_id="req-conflicto"),
                 SimpleNamespace(
                     cursor_entrada=cursor_inicial,
                     cursor_siguiente=None,
@@ -293,6 +299,52 @@ class CheckpointVentanasPedidosV2Tests(TestCase):
             PedidoSucursalImportado.objects.filter(codigo_publico=codigo_legacy).count(),
             2,
         )
+    def test_identidad_v2_compuesta_permite_mismo_codigo_en_dos_remitentes(self):
+        codigo = str(uuid.uuid4())
+        legacy = self._crear_importado(811, codigo)
+        self.assertIsNone(legacy.sender_id)
+        PedidoSucursalImportado.objects.create(
+            sucursal=self.sucursal,
+            ticket=self._crear_ticket(2),
+            origen=ORIGEN_API_V2,
+            origen_id=812,
+            codigo_publico=codigo,
+            sender_id=77,
+            estado_origen="confirmado",
+        )
+        PedidoSucursalImportado.objects.create(
+            sucursal=self.sucursal,
+            ticket=self._crear_ticket(3),
+            origen=ORIGEN_API_V2,
+            origen_id=813,
+            codigo_publico=codigo,
+            sender_id=78,
+            estado_origen="confirmado",
+        )
+        self.assertEqual(
+            PedidoSucursalImportado.objects.filter(codigo_publico=codigo).count(), 3
+        )
+
+    def test_identidad_v2_misma_pareja_con_hash_distinto_exige_conciliacion(self):
+        codigo = str(uuid.uuid4())
+        existente = self._crear_importado(821, codigo)
+        existente.sender_id = 77
+        existente.order_canonical_json = "{}"
+        existente.order_sha256 = hashlib.sha256(b"{}").hexdigest()
+        existente.save(update_fields=["sender_id", "order_canonical_json", "order_sha256"])
+        cuerpo = '{"id":821}'
+        with self.assertRaises(PedidoRemotoRequiereConciliacion):
+            _importar_pedido(
+                self.sucursal,
+                {"id": 821, "codigo_publico": codigo, "estado": "confirmado"},
+                [],
+                ORIGEN_API_V2,
+                identidad_estricta=True,
+                sender_id=77,
+                order_canonical_json=cuerpo,
+                order_sha256=hashlib.sha256(cuerpo.encode("utf-8")).hexdigest(),
+            )
+
     def test_parser_rechaza_decimal_enorme_y_escala_excesiva(self):
         with self.assertRaises(ErrorContratoPedidos):
             _decimal(
