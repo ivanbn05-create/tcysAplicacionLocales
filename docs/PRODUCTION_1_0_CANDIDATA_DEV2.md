@@ -39,7 +39,7 @@ Estas pruebas usan SQLite de test y fixture sintético. Cubren equivalencia PB/P
 
 ## Gates restantes
 
-1. Importar y auditar el catálogo vigente real de Arboledas en Central: categorías, UUID estables, productos, precios, PB/PL/P4/PK como datos, fotos y excepciones. Resolver colisiones sin empatar por nombre. Aprobar la fuente y el acta de import.
+1. Clasificar primero las fuentes reales de Arboledas: `catalogo.Producto`/precios del menú POS por separado de `ventas.ProductoSucursal`/`PrecioProductoSucursal` del catálogo mayorista. Importar a Central únicamente maestros de menú validados, con categorías, UUID estables, precios, PB/PL/P4/PK como datos, fotos y excepciones; no transformar automáticamente los 228 registros pendientes de clasificación. Resolver colisiones sin empatar por nombre y aprobar el acta de import.
 2. Ejecutar E2E completo con Central PostgreSQL y TLS operativo: descarga, ACK, reintento, falla parcial, reinicio, offline y restauración en Edge limpio y con historial v2. El E2E sintético SQLite de v2/2→v3/1 pasó; falta reconciliar UUID maestros reales de Arboledas y repetir sobre infraestructura de laboratorio. Mantener v2/legado como rollback hasta el corte.
 3. Ensayar instalación nueva y actualización 1.x en Windows aislado, con impresoras físicas, backup y restore, colas/outbox, dos terminales y APK. La confirmación de `listo` sólo sigue a esa verificación.
 4. Verificar UI táctil con operador real y pruebas de varias promociones simultáneas. No habilitar venta ni declarar versión base Production 1.0 por pasar sólo pruebas sintéticas.
