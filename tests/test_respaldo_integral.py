@@ -98,6 +98,7 @@ class RespaldoIntegralTests(unittest.TestCase):
         # El origen cambia después del backup; restore usa sólo la copia externa.
         with sqlite3.connect(self.source / "runtime" / "db.sqlite3") as db:
             db.execute("DELETE FROM ventas_eventooutbox")
+        db.close()
         (self.source / ".env").write_text("DB_ENGINE=sqlite\n", encoding="utf-8")
         self.source.rename(self.base / "edge-origen-perdido")
         restored = h18.restore(bundle, self.target, self.trust_dest)
