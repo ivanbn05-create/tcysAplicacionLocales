@@ -194,6 +194,8 @@ class ClienteCentral:
             contenido = respuesta.read(self.max_response_bytes + 1)
             if len(contenido) > self.max_response_bytes:
                 raise ErrorContratoCentral("La respuesta Central supera el limite.")
+            if content_length is not None and len(contenido) != int(content_length):
+                raise ErrorContratoCentral("La respuesta Central esta truncada o tiene longitud incorrecta.")
             status = int(respuesta.getcode())
             if status in {204, 304}:
                 if contenido:
