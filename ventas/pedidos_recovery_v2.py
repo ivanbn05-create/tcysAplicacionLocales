@@ -96,6 +96,14 @@ class BaselineV2:
 
 
 @dataclass(frozen=True)
+class ArchivedRowProof:
+    estado: str
+    eliminado: bool
+    row_sha256: str
+    importable: bool
+
+
+@dataclass(frozen=True)
 class VerifiedReceiptV2:
     payload: dict[str, Any]
     completed: bool
@@ -514,33 +522,40 @@ def _archive_to_api_v2(row: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def verify_archive_proof(
+def verify_archive_rows(
     baseline: BaselineV2, archive_bytes: bytes, exportacion_id: str,
-) -> frozenset[tuple[int, str]]:
-    """Verifica un ZIP custodio independiente para permitir ACK de recuperados."""
+) -> Mapping[tuple[int, str], ArchivedRowProof]:
+    """Prueba filas originales, incluido estado terminal, contra ZIP custodio.
+
+    Un estado enviado/recibido nunca se declara importable. El llamador lo
+    registra como unresolved/manual; ningún contenido terminal se reabre.
+    """
     export_id = _uuid(exportacion_id, "exportacion_id")
     entries = _zip_entries(archive_bytes, ARCHIVE_MEMBERS)
-    manifest = _json(
-        entries["manifest.json"], maximum=MAX_MANIFEST_BYTES,
-    )
+    manifest = _json(entries["manifest.json"], maximum=MAX_MANIFEST_BYTES)
     if type(manifest) is not dict or manifest.get("lote_id") != export_id:
         raise RecoveryV2Error("Manifest de archivo no corresponde a exportación.")
     lines = entries["pedidos.jsonl"]
     if manifest.get("sha256_pedidos_jsonl") != sha256(lines):
         raise RecoveryV2Error("Hash de archivo custodio inválido.")
-    expected = {
+    tombstones = {
+        (row["sender_id"], row["codigo_publico"]): row
+        for row in baseline.tombstones
+        if row["exportacion_id"] == export_id
+    }
+    if not tombstones:
+        raise RecoveryV2Error("Archivo sin tombstones esperados.")
+    archive_hash = sha256(archive_bytes)
+    if any(row["archive_sha256"] != archive_hash for row in tombstones.values()):
+        raise RecoveryV2Error("ZIP custodio alterado.")
+    recovered = {
         (row["sender_id"], row["order"]["codigo_publico"]): row
         for row in baseline.recovered_orders
         if row["exportacion_id"] == export_id
     }
-    if not expected:
-        raise RecoveryV2Error("Archivo sin recuperados esperados.")
-    archive_hash = sha256(archive_bytes)
-    if any(row["archive_sha256"] != archive_hash for row in expected.values()):
-        raise RecoveryV2Error("ZIP custodio alterado.")
     if not lines.endswith(b"\n") or len(lines.splitlines()) > MAX_ROWS:
         raise RecoveryV2Error("JSONL de archivo custodio inválido.")
-    matched: set[tuple[int, str]] = set()
+    proofs: dict[tuple[int, str], ArchivedRowProof] = {}
     for line in lines.splitlines():
         row = _json(line, maximum=MAX_ZIP_BYTES)
         if type(row) is not dict:
@@ -552,21 +567,44 @@ def verify_archive_proof(
             "sender_id": branch.get("id"),
             "codigo_publico": row.get("codigo_publico"),
         })
-        recovered = expected.get(pair)
-        if recovered is None:
+        tomb = tombstones.get(pair)
+        if tomb is None:
             continue
-        tomb = next(
-            item for item in baseline.tombstones
-            if (item["sender_id"], item["codigo_publico"]) == pair
+        row_hash = sha256(canonical_json(row))
+        if pair in proofs or row.get("id") != tomb["pedido_id_origen"]:
+            raise RecoveryV2Error("Identidad original duplicada o incompatible.")
+        status = row.get("estado")
+        deleted = row.get("eliminado")
+        if type(status) is not str or type(deleted) is not bool:
+            raise RecoveryV2Error("Estado archivado inválido.")
+        matched = recovered.get(pair)
+        if matched is not None and row_hash != matched["archive_row_sha256"]:
+            raise RecoveryV2Error("Hash de fila archivada incompatible.")
+        importable = False
+        if status == "confirmado" and deleted is False and matched is not None:
+            importable = _archive_to_api_v2(row) == matched["order"]
+            if not importable:
+                raise RecoveryV2Error("Conversión archivada difiere de baseline.")
+        elif matched is not None:
+            raise RecoveryV2Error("Orden recuperada marcada como terminal.")
+        proofs[pair] = ArchivedRowProof(
+            estado=status, eliminado=deleted,
+            row_sha256=row_hash, importable=importable,
         )
-        if (pair in matched or row.get("id") != tomb["pedido_id_origen"]
-                or sha256(canonical_json(row)) != recovered["archive_row_sha256"]
-                or _archive_to_api_v2(row) != recovered["order"]):
-            raise RecoveryV2Error("Prueba de fila archivada incompatible.")
-        matched.add(pair)
-    if matched != set(expected):
-        raise RecoveryV2Error("Faltan filas originales de recuperados.")
-    return frozenset(matched)
+    if set(proofs) != set(tombstones):
+        raise RecoveryV2Error("Faltan filas originales de tombstones.")
+    return proofs
+
+
+def verify_archive_proof(
+    baseline: BaselineV2, archive_bytes: bytes, exportacion_id: str,
+) -> frozenset[tuple[int, str]]:
+    """API compatible: sólo parejas confirmadas con contenido v2 probado."""
+    return frozenset(
+        pair for pair, proof in verify_archive_rows(
+            baseline, archive_bytes, exportacion_id
+        ).items() if proof.importable
+    )
 
 
 def _ack_payload(
