@@ -326,11 +326,11 @@ try {
             )
             if ($executable.Equals($expected, [StringComparison]::OrdinalIgnoreCase) -and
                 $service.State -eq "Running") {
+                $restartService = $true
                 Stop-Service -Name "LosTocayosPOS" -ErrorAction Stop
                 (Get-Service -Name "LosTocayosPOS").WaitForStatus(
                     "Stopped", [TimeSpan]::FromSeconds(60)
                 )
-                $restartService = $true
             }
         }
         if (-not [IO.Path]::IsPathRooted($TrustStorePath)) {
@@ -426,7 +426,10 @@ try {
     }
 } finally {
     if ($restartService) {
-        Start-Service -Name "LosTocayosPOS" -ErrorAction Stop
+        $currentService = Get-Service -Name "LosTocayosPOS" -ErrorAction Stop
+        if ($currentService.Status -ne "Running") {
+            Start-Service -Name "LosTocayosPOS" -ErrorAction Stop
+        }
     }
     if ($null -ne $mutex) {
         try { $mutex.ReleaseMutex() } catch { }
