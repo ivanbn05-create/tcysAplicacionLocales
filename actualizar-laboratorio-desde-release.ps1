@@ -633,6 +633,19 @@ function Disable-LabManagedTasks {
         }
     }
 }
+function Suspend-LabCandidate {
+    param([object[]]$Snapshots)
+    $issues = New-Object 'System.Collections.Generic.List[string]'
+    try { Stop-LabService }
+    catch { [void]$issues.Add('No se pudo detener servicio: ' + $_.Exception.Message) }
+    try { Set-LabStartMode -Mode 'Manual' -Delayed $false }
+    catch { [void]$issues.Add('No se pudo fijar inicio manual: ' + $_.Exception.Message) }
+    try { Disable-LabManagedTasks -Snapshots $Snapshots }
+    catch { [void]$issues.Add('No se pudieron deshabilitar tareas: ' + $_.Exception.Message) }
+    if ($issues.Count -gt 0) {
+        throw ('Cuarentena H17 incompleta: ' + ($issues -join ' | '))
+    }
+}
 function Get-LabStartMode {
     $record = Get-CimInstance Win32_Service -Filter "Name='$serviceName'" -ErrorAction Stop
     $delayed = Get-ItemPropertyValue -Path (
@@ -665,9 +678,7 @@ function Recover-LabJournal {
     $backup = [string]$journal.backup
     $failed = [string]$journal.failed
     if ($phase -eq 'engine_running') {
-        Disable-LabManagedTasks -Snapshots @($journal.tasks)
-        Set-LabStartMode -Mode 'Manual' -Delayed $false
-        Stop-LabService
+        Suspend-LabCandidate -Snapshots @($journal.tasks)
         throw 'H17: el motor pudo migrar o iniciar la candidata. Servicio detenido; conserva journal, instalación y respaldo para conciliación SQLite/outbox.'
     }
     if ($phase -in @('engine_complete', 'complete')) {
@@ -675,9 +686,7 @@ function Recover-LabJournal {
             -not (Test-Path -LiteralPath $backup -PathType Container) -or
             (Get-Content -LiteralPath (Join-Path $Installation 'VERSION') -Raw).Trim() -cne
                 [string]$journal.newVersion) {
-            Disable-LabManagedTasks -Snapshots @($journal.tasks)
-            Set-LabStartMode -Mode 'Manual' -Delayed $false
-            Stop-LabService
+            Suspend-LabCandidate -Snapshots @($journal.tasks)
             throw 'H17: la candidata posterior a migración no coincide con el journal; ambos árboles quedan conservados.'
         }
         try {
@@ -689,11 +698,11 @@ function Recover-LabJournal {
             return
         }
         catch {
-            Disable-LabManagedTasks -Snapshots @($journal.tasks)
-            Set-LabStartMode -Mode 'Manual' -Delayed $false
-            Stop-LabService
+            $healthFailure = $_.Exception.Message
+            try { Suspend-LabCandidate -Snapshots @($journal.tasks) }
+            catch { $healthFailure += ' | ' + $_.Exception.Message }
             throw ('H17: candidata posterior a migración sin salud verificada; ambos árboles quedan conservados. ' +
-                $_.Exception.Message)
+                $healthFailure)
         }
     }
     Stop-LabService
@@ -713,9 +722,11 @@ function Recover-LabJournal {
     Set-LabStartMode -Mode ([string]$journal.startMode) -Delayed ([bool]$journal.delayed)
     try { Start-LabServiceAndVerify -Root $Installation }
     catch {
-        Set-LabStartMode -Mode 'Manual' -Delayed $false
-        Stop-LabService
-        throw
+        $healthFailure = $_
+        try { Suspend-LabCandidate -Snapshots @($journal.tasks) }
+        catch { throw ('H17: rollback anterior sin salud y cuarentena incompleta: ' +
+            $healthFailure.Exception.Message + ' | ' + $_.Exception.Message) }
+        throw $healthFailure
     }
     Close-LabJournal -Journal $journal -Path $Path -Outcome 'rolled_back'
 }
@@ -1081,7 +1092,7 @@ try {
 catch {
     $originalFailure = $_
     if ($engineStarted) {
-        try { Disable-LabManagedTasks -Snapshots @($journal.tasks); Set-LabStartMode -Mode 'Manual' -Delayed $false; Stop-LabService }
+        try { Suspend-LabCandidate -Snapshots @($journal.tasks) }
         catch { Write-Warning ('No se pudo detener candidata ambigua: ' + $_.Exception.Message) }
         throw ('H17: el motor pudo migrar o aceptar ventas. Ambos árboles y el journal ' +
             'quedan intactos para conciliación; no se hará rollback automático. Causa: ' +
