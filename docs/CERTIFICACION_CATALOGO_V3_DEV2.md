@@ -17,15 +17,15 @@ Estado: **abierta, no certificada**. Rama `codex/production-1.0-catalogo-promoci
 
 | Caso | Estado verificable | Evidencia que falta |
 | --- | --- | --- |
-| Central laboratorio PostgreSQL + TLS/CA; Edge vacío y v2 previo | Edge vacío v3/1→v3/4 y ACK reales pasaron con fixture sintética; v2/1 grande falló por ACK de 35 354 bytes | Transición v2 pequeño→v3 por HTTP/TLS; resolver formalmente v2 grande con agente1 sin elevar unilateralmente 16 KiB |
+| Central laboratorio PostgreSQL + TLS/CA; Edge vacío y v2 previo | Edge vacío v3/1→v3/4 y ACK reales pasaron; ACK v2 grande (35 354 bytes) usa perfil opt-in `mappings-large-1` en código y CI POS | Repetir v2 grande y transición v2→v3 con Central candidato por HTTPS/CA y PostgreSQL; confirmar flag/OPTIONS/POST/replay |
 | Catálogo representativo/grande | Fixture **100 % sintética** 275→277 productos y 148 603 bytes iniciales aplicó por HTTPS | Snapshot cercano al límite canónico de 1 MiB por PostgreSQL/TLS; importar sólo el menú real clasificado y autorizado |
 | PB/PL/P4/PK y promoción nueva | PB/PL/P4/PK publicados como datos en el E2E PG/TLS; equivalencia funcional y nueva promoción probadas en SQLite sintético previo | Selección manual, venta y comprobante histórico en E2E PG/TLS, incluida una nueva promoción dinámica |
 | ACK perdido/repetido | E2E real: Central registró 201, Edge perdió respuesta, replay 200 con mismo evento | Repetir junto a v2→v3 si procede |
-| Checksum incorrecto y publicación parcial | Trigger SQLite en Edge desechable revirtió íntegra v3/4, sin ACK falso; posterior aplicación pasó | Corrupción/checksum y respuesta HTTP truncada reales, no sólo mocks |
+| Checksum incorrecto y publicación parcial | Trigger SQLite en Edge desechable revirtió íntegra v3/4; CI del transporte rechaza Content-Length divergente e IncompleteRead | Corrupción/checksum y respuesta HTTP truncada sobre TLS real; no sólo mocks |
 | Concurrencia, reinicio y offline | 24 GET HTTPS concurrentes de sólo lectura devolvieron mismo hash; carrera intercalada de Edge en CI (`53d5158`) | Dos polls Edge independientes, publicación concurrente, reinicio de proceso y offline real con menú/ACK persistentes |
 | Restore v3 atrasado | E2E backup v3/1→v3/3, GET histórico, mismos UUID y ACK nuevos aceptados; remapeo diferente 409 | Restore de VM nueva con release firmada, BitLocker y servicio bajo H15/H18; el test sintético Windows ya pasó |
 | Precios/promociones/tickets cerrados | Cambios de precio v3/2–3 aplicados; pruebas de ticket cerrado sólo en SQLite sintético previo | Venta/cobro y reconstrucción de ticket cerrado en PostgreSQL/TLS tras publicación/restauración |
-| Instalación/update/rollback/EXE/APK/PWA/impresoras/soporte/backup | Protocolo H01–H18 | H17/H18 software CI pasó; wrapper BitLocker y pruebas físicas posteriores, sin sucursal real |
+| Instalación/update/rollback/EXE/APK/PWA/impresoras/soporte/backup | Protocolo H01–H18; H17 y H18 superaron CI sintético Windows | Wrapper BitLocker elevado, VM/restauración real y pruebas físicas H01–H18; ninguna sucursal real |
 
 ## Bloqueos y cambios indispensables
 
