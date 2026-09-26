@@ -618,6 +618,16 @@ def sincronizar_outbox_central(*, limite=50, cliente_factory=ClienteCentral):
             )
         try:
             ruta = _ruta_evento(evento)
+        except ErrorContratoCentral:
+            if _actualizar_evento(
+                evento.id,
+                intento=intento,
+                estado=EventoOutbox.EstadoEntrega.CUARENTENA,
+                error="El evento local no tiene una ruta de ACK válida.",
+            ):
+                resultado["suspendidos"] += 1
+            continue
+        try:
             parametros_post = {
                 "metodo": "POST",
                 "ruta": ruta,
