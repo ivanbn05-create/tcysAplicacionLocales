@@ -6,6 +6,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from herramientas import respaldo_integral as h18
@@ -157,6 +158,27 @@ class RespaldoIntegralTests(unittest.TestCase):
         with self.assertRaises(h18.BackupIntegralError):
             h18.restore(bundle, self.target, self.target / "release-trust.json")
         self.assertFalse((self.target / ".env").exists())
+
+    def test_mutacion_despues_de_verify_rechaza_env_y_ca_sin_publicar(self):
+        original_verify = h18.verify
+        for relative, altered in (
+            (".env", b"DB_ENGINE=sqlite\nSQLITE_PATH=runtime/db.sqlite3\n"),
+            ("trust/CENTRAL_API_CA_BUNDLE.pem", b"CA-MODIFICADA"),
+        ):
+            with self.subTest(relative=relative):
+                bundle = Path(h18.create(self.source, self.output, self.trust_source)["bundle"])
+
+                def mutate_after_verify(path):
+                    manifest = original_verify(path)
+                    (path / relative).write_bytes(altered)
+                    return manifest
+
+                with patch.object(h18, "verify", side_effect=mutate_after_verify):
+                    with self.assertRaises(h18.BackupIntegralError):
+                        h18.restore(bundle, self.target, self.trust_dest)
+                self.assertFalse((self.target / ".env").exists())
+                self.assertFalse((self.target / "runtime").exists())
+                self.assertFalse(self.trust_dest.exists())
 
     def test_tamper_rechazado_antes_de_modificar_destino(self):
         bundle = Path(h18.create(self.source, self.output, self.trust_source)["bundle"])
