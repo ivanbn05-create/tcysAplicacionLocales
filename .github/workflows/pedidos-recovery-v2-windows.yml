@@ -1,0 +1,45 @@
+name: Pedidos recovery v2 Windows lab
+
+on:
+  push:
+    branches:
+      - codex/production-1.0-catalogo-promociones-dev.2
+    paths:
+      - requirements-lock.txt
+      - requirements.txt
+      - ventas/pedidos_recovery_v2.py
+      - ventas/recuperacion_pedidos_v2.py
+      - ventas/test_pedidos_recovery_v2.py
+      - ventas/test_recuperacion_pedidos_v2.py
+      - ventas/migrations/0027_pedido_v2_sender_hash.py
+      - ventas/migrations/0028_recuperacion_pedidos_v2.py
+      - .github/workflows/pedidos-recovery-v2-windows.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wheelhouse-and-codec:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Construir wheelhouse binario Windows CPython 3.13
+        shell: pwsh
+        run: |
+          $wheelhouse = Join-Path $env:RUNNER_TEMP 'pos-recovery-wheels'
+          python -m pip download --only-binary=:all: -r requirements-lock.txt -d $wheelhouse
+          if ($LASTEXITCODE -ne 0) { throw 'Wheelhouse Windows incompleto.' }
+          python -m venv (Join-Path $env:RUNNER_TEMP 'pos-recovery-venv')
+          if ($LASTEXITCODE -ne 0) { throw 'No se creó el entorno aislado.' }
+          $python = Join-Path $env:RUNNER_TEMP 'pos-recovery-venv\Scripts\python.exe'
+          & $python -m pip install --no-index --find-links $wheelhouse -r requirements-lock.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Instalación offline fallida.' }
+          & $python -m unittest ventas.test_pedidos_recovery_v2 -v
+          if ($LASTEXITCODE -ne 0) { throw 'Codec recovery r7 falló.' }
+          & $python manage.py test ventas.test_pedidos_api_v2 ventas.test_dev10_pedidos_checkpoint --noinput
+          if ($LASTEXITCODE -ne 0) { throw 'Integración Pedidos v2 falló.' }
