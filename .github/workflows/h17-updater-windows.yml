@@ -8,6 +8,7 @@ on:
       - actualizar-laboratorio-desde-release.ps1
       - tests/test_actualizador_laboratorio.py
       - tests/h17_actualizador_recuperacion.ps1
+      - tests/h17_sqlite_fixture.py
       - .github/workflows/h17-updater-windows.yml
   workflow_dispatch:
 
@@ -16,6 +17,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - name: Validar sintaxis y recuperación con fixtures temporales
         shell: powershell
         run: .\tests\h17_actualizador_recuperacion.ps1
