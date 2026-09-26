@@ -108,6 +108,7 @@ class RespaldoIntegralTests(unittest.TestCase):
             row = db.execute(
                 "SELECT estado_entrega FROM ventas_eventooutbox"
             ).fetchone()
+        db.close()
         self.assertEqual(row, ("pendiente",))
         env = (self.target / ".env").read_text(encoding="utf-8")
         self.assertIn("CENTRAL_CATALOG_TOKEN=secreto-de-laboratorio", env)
