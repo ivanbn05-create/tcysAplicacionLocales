@@ -7,6 +7,7 @@ su checkpoint dentro de una unica transaccion SQLite.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -139,6 +140,8 @@ class PedidoRemoto:
     total: Decimal
     sucursal: SucursalPedidoRemota
     items: tuple[ItemPedidoRemoto, ...]
+    order_canonical_json: str
+    order_sha256: str
 
     @property
     def identidad_remota(self) -> tuple[int, uuid.UUID]:
@@ -500,6 +503,9 @@ def _pedido(valor: Any, ruta: str, sucursales_permitidas: frozenset[int]) -> Ped
     ids_items = [item.id for item in items]
     if len(ids_items) != len(set(ids_items)):
         raise ErrorContratoPedidos(f"Hay IDs de item duplicados en {ruta}.")
+    order_canonical_json = json.dumps(
+        valor, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
     return PedidoRemoto(
         id=pedido_id,
         codigo_publico=_uuid_canonico(datos["codigo_publico"], f"{ruta}.codigo_publico"),
@@ -518,6 +524,8 @@ def _pedido(valor: Any, ruta: str, sucursales_permitidas: frozenset[int]) -> Ped
             tipo=tipo,
         ),
         items=items,
+        order_canonical_json=order_canonical_json,
+        order_sha256=hashlib.sha256(order_canonical_json.encode("utf-8")).hexdigest(),
     )
 
 
@@ -559,8 +567,8 @@ def parsear_pagina_v2(
         for indice, pedido in enumerate(_lista(raiz["data"], "data"))
     )
     ids = [pedido.id for pedido in pedidos]
-    codigos = [pedido.codigo_publico for pedido in pedidos]
-    if len(ids) != len(set(ids)) or len(codigos) != len(set(codigos)):
+    parejas = [(pedido.sucursal.id, pedido.codigo_publico) for pedido in pedidos]
+    if len(ids) != len(set(ids)) or len(parejas) != len(set(parejas)):
         raise ErrorContratoPedidos("La pagina contiene identidades de pedido duplicadas.")
     claves_orden = [(pedido.fecha_confirmacion, pedido.id) for pedido in pedidos]
     if claves_orden != sorted(claves_orden) or len(claves_orden) != len(set(claves_orden)):
@@ -874,7 +882,7 @@ class ClientePedidosV2:
 
         cursor = cursor_inicial
         cursores_vistos = {cursor} if cursor is not None else set()
-        codigos_vistos: set[uuid.UUID] = set()
+        parejas_vistas: set[tuple[int, uuid.UUID]] = set()
         ultima_clave: tuple[datetime, int] | None = None
         for _numero in range(1, self.max_paginas + 1):
             pagina = self.listar_pagina(
@@ -884,10 +892,11 @@ class ClientePedidosV2:
                 clave = pedido.fecha_confirmacion, pedido.id
                 if ultima_clave is not None and clave <= ultima_clave:
                     raise ErrorContratoPedidos("La paginacion retrocedio o repitio pedidos.")
-                if pedido.codigo_publico in codigos_vistos:
-                    raise ErrorContratoPedidos("La paginacion repitio un codigo_publico.")
+                pareja = (pedido.sucursal.id, pedido.codigo_publico)
+                if pareja in parejas_vistas:
+                    raise ErrorContratoPedidos("La paginacion repitio una identidad de pedido.")
                 ultima_clave = clave
-                codigos_vistos.add(pedido.codigo_publico)
+                parejas_vistas.add(pareja)
             if pagina.has_more and pagina.next_cursor in cursores_vistos:
                 raise ErrorContratoPedidos("La API de Pedidos repitio un cursor.")
             yield pagina
