@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import ssl
+from http.client import IncompleteRead
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -191,7 +192,10 @@ class ClienteCentral:
                     raise ErrorContratoCentral("Content-Length Central no es valido.")
                 if int(content_length) > self.max_response_bytes:
                     raise ErrorContratoCentral("La respuesta Central supera el limite.")
-            contenido = respuesta.read(self.max_response_bytes + 1)
+            try:
+                contenido = respuesta.read(self.max_response_bytes + 1)
+            except (IncompleteRead, OSError) as exc:
+                raise ErrorContratoCentral("La respuesta Central esta truncada.") from exc
             if len(contenido) > self.max_response_bytes:
                 raise ErrorContratoCentral("La respuesta Central supera el limite.")
             if content_length is not None and len(contenido) != int(content_length):
