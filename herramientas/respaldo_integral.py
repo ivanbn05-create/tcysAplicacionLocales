@@ -6,6 +6,8 @@ protege el paquete y el destino con ACL antes de escribir secretos.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import datetime as dt
 import hashlib
 import json
@@ -18,6 +20,7 @@ import tempfile
 import uuid
 from contextlib import closing
 from pathlib import Path, PurePosixPath
+from xml.etree import ElementTree
 
 SCHEMA = 1
 MARKER = "H18:ISOLATED\n"
@@ -27,6 +30,7 @@ TRUST_KEYS = (
     "PEDIDOS_SUCURSALES_DB_SSLROOTCERT",
 )
 DB_REL = Path("runtime/db.sqlite3")
+RELEASE_TRUST_REL = "trust/release-trust.json"
 SKIP_RUNTIME = {"db.sqlite3", "db.sqlite3-wal", "db.sqlite3-shm", "db.sqlite3-journal"}
 REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
@@ -189,7 +193,46 @@ def _source_db(root: Path, values: dict[str, str]) -> Path:
     return expected
 
 
-def create(source_root: Path, output_root: Path) -> dict[str, object]:
+def _release_trust(path: Path) -> None:
+    _physical(path, directory=False)
+    if path.stat().st_size > 65536:
+        _fail("Trust store de release demasiado grande.")
+    try:
+        trust = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise BackupIntegralError("Trust store de release inválido.") from exc
+    if type(trust) is not dict or set(trust) != {"schema_version", "keys"} or trust["schema_version"] != 1:
+        _fail("Contrato de trust store de release desconocido.")
+    keys = trust["keys"]
+    if type(keys) is not list or not keys:
+        _fail("Trust store de release sin claves públicas.")
+    seen = set()
+    for key in keys:
+        if type(key) is not dict or set(key) != {"key_id", "public_xml", "status"}:
+            _fail("Entrada de trust store de release inválida.")
+        public_xml = key["public_xml"]
+        key_id = key["key_id"]
+        if type(public_xml) is not str or type(key_id) is not str or type(key["status"]) is not str:
+            _fail("Entrada de trust store de release inválida.")
+        if key["status"] not in {"trusted", "revoked"} or not re.fullmatch(r"[0-9a-f]{64}", key_id):
+            _fail("Estado o identidad de clave pública inválido.")
+        if key_id in seen or hashlib.sha256(public_xml.encode("utf-8")).hexdigest() != key_id:
+            _fail("Identidad de clave pública discordante.")
+        seen.add(key_id)
+        try:
+            root = ElementTree.fromstring(public_xml)
+            children = list(root)
+            if root.tag != "RSAKeyValue" or [item.tag for item in children] != ["Modulus", "Exponent"]:
+                _fail("Trust store contiene material distinto de clave pública RSA.")
+            if any(list(item) or item.attrib or not item.text for item in children):
+                _fail("Clave pública RSA inválida.")
+            for item in children:
+                base64.b64decode(item.text, validate=True)
+        except (ElementTree.ParseError, ValueError, binascii.Error) as exc:
+            raise BackupIntegralError("XML de clave pública inválido.") from exc
+
+
+def create(source_root: Path, output_root: Path, release_trust_path: Path | None = None) -> dict[str, object]:
     _physical(source_root, directory=True)
     _physical(output_root, directory=True)
     source_root = source_root.resolve(strict=True)
@@ -207,6 +250,17 @@ def create(source_root: Path, output_root: Path) -> dict[str, object]:
     _, values = _dotenv(env_path)
     env_hash = _hash(env_path)
     database = _source_db(source_root, values)
+    if release_trust_path is None:
+        if release_version.split(".")[0] == "1":
+            _fail("Release 1.x requiere trust store de firmas externo.")
+    else:
+        if not release_trust_path.is_absolute():
+            _fail("Trust store de release exige ruta absoluta.")
+        _physical(release_trust_path, directory=False)
+        release_trust_path = release_trust_path.resolve(strict=True)
+        if release_trust_path == source_root or source_root in release_trust_path.parents:
+            _fail("Trust store de release debe ser externo a la instalación.")
+        _release_trust(release_trust_path)
     stage = Path(tempfile.mkdtemp(prefix=".h18-pendiente-", dir=output_root))
     try:
         _copy_file(env_path, stage / ".env")
@@ -237,6 +291,11 @@ def create(source_root: Path, output_root: Path) -> dict[str, object]:
             relative = f"trust/{key}.pem"
             _copy_file(file, stage / _relative(relative))
             trust[key] = relative
+        if release_trust_path is not None:
+            source_trust_hash = _hash(release_trust_path)
+            _copy_file(release_trust_path, stage / _relative(RELEASE_TRUST_REL))
+            if _hash(stage / _relative(RELEASE_TRUST_REL)) != source_trust_hash:
+                _fail("Trust store de release cambió durante su copia.")
         if _hash(env_path) != env_hash:
             _fail(".env cambió durante el respaldo.")
         files = [_entry(stage, file) for file in _walk(stage)]
@@ -249,6 +308,7 @@ def create(source_root: Path, output_root: Path) -> dict[str, object]:
             "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
             "sqlite": sqlite_result,
             "trust": trust,
+            "release_trust": RELEASE_TRUST_REL if release_trust_path is not None else None,
             "files": sorted(files, key=lambda item: item["path"]),
         }
         (stage / "manifest.json").write_text(
@@ -317,6 +377,15 @@ def verify(bundle: Path) -> dict[str, object]:
     for key, value in trust.items():
         if value != f"trust/{key}.pem" or value not in expected:
             _fail("Archivo de confianza H18 inválido.")
+    release_trust = manifest.get("release_trust")
+    if release_trust not in (None, RELEASE_TRUST_REL):
+        _fail("Índice de trust store de release inválido.")
+    if release_version.split(".")[0] == "1" and release_trust is None:
+        _fail("Release 1.x requiere trust store de firmas externo.")
+    if release_trust is not None:
+        if release_trust not in expected:
+            _fail("Trust store de release faltante.")
+        _release_trust(bundle / _relative(RELEASE_TRUST_REL))
     _, env_values = _dotenv(bundle / ".env")
     configured_trust = {key for key in TRUST_KEYS if env_values.get(key, "").strip()}
     if configured_trust != set(trust):
@@ -345,16 +414,31 @@ def _rewrite_env(content: str, trust: dict[str, str]) -> str:
     return "".join(lines)
 
 
-def restore(bundle: Path, target_root: Path, source_root: Path) -> dict[str, object]:
+def restore(
+    bundle: Path, target_root: Path, release_trust_path: Path | None = None
+) -> dict[str, object]:
     manifest = verify(bundle)
     _physical(bundle, directory=True)
-    _physical(source_root, directory=True)
     _physical(target_root, directory=True)
     bundle = bundle.resolve(strict=True)
-    source_root = source_root.resolve(strict=True)
     target_root = target_root.resolve(strict=True)
-    if target_root == source_root or target_root in source_root.parents or source_root in target_root.parents:
-        _fail("Restore H18 exige otra instalación aislada.")
+    if target_root == bundle or target_root in bundle.parents or bundle in target_root.parents:
+        _fail("Restore H18 exige un destino ajeno al paquete.")
+    release_destination = None
+    if manifest["release_trust"] is not None:
+        if release_trust_path is None or not release_trust_path.is_absolute():
+            _fail("Restore requiere ruta absoluta externa de trust store.")
+        release_destination = release_trust_path
+        parent = release_destination.parent
+        _physical(parent, directory=True)
+        _physical_parents(parent, Path(parent.anchor))
+        parent = parent.resolve(strict=True)
+        release_destination = parent / release_destination.name
+        if (release_destination.exists() or release_destination.is_symlink()
+            or target_root == parent or target_root in parent.parents
+            or parent in target_root.parents or bundle == parent or bundle in parent.parents
+            or parent in bundle.parents):
+            _fail("Destino de trust store de release no es externo y nuevo.")
     marker = target_root / ".h18-restauracion-aislada"
     _physical(marker, directory=False)
     if marker.read_text(encoding="utf-8") != MARKER:
@@ -368,6 +452,8 @@ def restore(bundle: Path, target_root: Path, source_root: Path) -> dict[str, obj
     target_files: dict[str, Path] = {}
     for item in files:
         relative = _relative(item["path"])
+        if item["path"] == RELEASE_TRUST_REL:
+            continue
         if relative.parts[0] == "trust":
             if len(relative.parts) != 2:
                 _fail("Ruta de confianza H18 inválida.")
@@ -401,12 +487,21 @@ def restore(bundle: Path, target_root: Path, source_root: Path) -> dict[str, obj
             destination.parent.mkdir(parents=True, exist_ok=True)
             staged.replace(destination)
             created.append(destination)
+        if release_destination is not None:
+            source_release = bundle / _relative(RELEASE_TRUST_REL)
+            staged_release = stage / "release-trust-pending.json"
+            _copy_file(source_release, staged_release)
+            if _hash(staged_release) != _hash(source_release):
+                _fail("Trust store de release cambió durante restore.")
+            staged_release.replace(release_destination)
+            created.append(release_destination)
         result = _sqlite_check(target_root / DB_REL)
         if result != manifest["sqlite"]:
             _fail("SQLite restaurada no coincide con el manifiesto.")
         return {
             "status": "ok", "target": str(target_root),
-            "files": len(target_files), "sqlite_sha256": _hash(target_root / DB_REL),
+            "files": len(target_files) + int(release_destination is not None),
+            "sqlite_sha256": _hash(target_root / DB_REL),
         }
     except BaseException:
         for path in reversed(created):
@@ -425,16 +520,17 @@ def main(argv: list[str] | None = None) -> int:
     create_parser = commands.add_parser("create")
     create_parser.add_argument("--source-root", required=True, type=Path)
     create_parser.add_argument("--output-root", required=True, type=Path)
+    create_parser.add_argument("--release-trust-path", type=Path)
     verify_parser = commands.add_parser("verify")
     verify_parser.add_argument("--bundle", required=True, type=Path)
     restore_parser = commands.add_parser("restore")
     restore_parser.add_argument("--bundle", required=True, type=Path)
     restore_parser.add_argument("--target-root", required=True, type=Path)
-    restore_parser.add_argument("--source-root", required=True, type=Path)
+    restore_parser.add_argument("--release-trust-path", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.action == "create":
-            result = create(args.source_root, args.output_root)
+            result = create(args.source_root, args.output_root, args.release_trust_path)
         elif args.action == "verify":
             manifest = verify(args.bundle)
             result = {
@@ -445,7 +541,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             }
         else:
-            result = restore(args.bundle, args.target_root, args.source_root)
+            result = restore(args.bundle, args.target_root, args.release_trust_path)
     except (BackupIntegralError, OSError, sqlite3.Error, ValueError) as exc:
         # No mostrar mensajes de OSError ni rutas que puedan incluir secretos.
         print(json.dumps({"status": "error", "reason": type(exc).__name__}))
