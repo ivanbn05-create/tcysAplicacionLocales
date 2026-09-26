@@ -203,6 +203,31 @@ class CatalogoV3AprovisionamientoTests(TestCase):
             self.assertFalse(producto_vendible(self.sucursal, no_disponible))
             exigir_catalogo_operativo(self.sucursal)
 
+    def test_comando_outbox_entrega_ack_con_solo_catalogo_v3_habilitado(self):
+        with self.identidad_settings():
+            aplicar_publicacion_catalogo(self.sucursal, self.snapshot())
+        self.assertTrue(
+            EventoOutbox.objects.filter(
+                sucursal=self.sucursal,
+                destino=EventoOutbox.Destino.CENTRAL_CATALOGO_ACK,
+                version_contrato=3,
+            ).exists()
+        )
+        resultado = {
+            "entregados": 1,
+            "pendientes": 0,
+            "suspendidos": 0,
+            "conciliacion": 0,
+        }
+        with self.central_v3_settings(), patch(
+            "ventas.management.commands.sincronizar_backend_central.sincronizar_outbox_central",
+            return_value=resultado,
+        ) as sincronizar:
+            salida = StringIO()
+            call_command("sincronizar_backend_central", "--limite", "1", stdout=salida)
+        sincronizar.assert_called_once_with(limite=1)
+        self.assertIn("1 entregado(s)", salida.getvalue())
+
     def test_rechazo_v3_encola_acuse_v3_sin_aplicar_catalogo(self):
         datos = self.snapshot()
         datos["contenido_sha256"] = "0" * 64
