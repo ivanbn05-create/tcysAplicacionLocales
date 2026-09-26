@@ -17,6 +17,7 @@ class RespaldoIntegralTests(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.source = self.base / "edge-origen"
         self.source.mkdir()
+        (self.source / "VERSION").write_text("1.0.0\n", encoding="utf-8")
         (self.source / "runtime").mkdir()
         (self.source / "certs").mkdir()
         (self.source / "media").mkdir()
@@ -124,6 +125,13 @@ class RespaldoIntegralTests(unittest.TestCase):
         self.assertEqual(
             (self.target / ".env").read_text(encoding="utf-8"), "SECRETO=otro\n"
         )
+
+    def test_version_de_release_distinta_bloquea_restore(self):
+        bundle = Path(h18.create(self.source, self.output)["bundle"])
+        (self.target / "VERSION").write_text("1.0.1\n", encoding="utf-8")
+        with self.assertRaises(h18.BackupIntegralError):
+            h18.restore(bundle, self.target, self.source)
+        self.assertFalse((self.target / ".env").exists())
 
     def test_enlace_en_media_rechazado(self):
         outside = self.base / "afuera.txt"
