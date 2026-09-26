@@ -106,6 +106,73 @@ class Command(BaseCommand):
             )
         return list(reversed(cadena))
 
+    @staticmethod
+    def _coincide_publicacion_v3(local, snapshot):
+        return (
+            local.version_contrato == 3
+            and local.version == snapshot["version_sucursal"]
+            and str(local.publicacion_id) == snapshot["publicacion_id"]
+            and str(local.release_id) == snapshot["release_id"]
+            and (
+                str(local.publicacion_anterior_id)
+                if local.publicacion_anterior_id else None
+            ) == snapshot["publicacion_anterior_id"]
+            and local.checksum == snapshot["contenido_sha256"]
+            and local.snapshot == snapshot
+        )
+
+    @classmethod
+    def _prefijo_aplicado_v3(cls, sucursal, ancla, cadena):
+        """Relee bajo lock y sólo salta un prefijo idéntico al descargado."""
+
+        type(sucursal).objects.select_for_update().get(pk=sucursal.pk)
+        publicaciones = PublicacionCatalogoCentral.objects.select_for_update().filter(
+            sucursal=sucursal,
+            estado=PublicacionCatalogoCentral.Estado.APLICADA,
+            version_contrato=3,
+        )
+        actual = publicaciones.order_by("-version").first()
+        base = ancla.version if ancla is not None else 0
+        if ancla is not None:
+            ancla_guardada = publicaciones.filter(version=base).first()
+            if (
+                ancla_guardada is None
+                or ancla_guardada.pk != ancla.pk
+                or not cls._coincide_publicacion_v3(ancla_guardada, ancla.snapshot)
+            ):
+                raise CommandError(
+                    "El ancla local de catalogo v3 cambio durante la descarga; "
+                    "requiere conciliacion sin emitir ACK."
+                )
+        if actual is None:
+            if ancla is not None:
+                raise CommandError(
+                    "La ultima publicacion local desaparecio durante la descarga."
+                )
+            return 0, None
+        if not base <= actual.version <= base + len(cadena):
+            raise CommandError(
+                "La cadena local de catalogo v3 avanzo fuera del tramo descargado; "
+                "se conserva la ultima version sin emitir ACK."
+            )
+        aplicadas = actual.version - base
+        if aplicadas:
+            prefijo = list(
+                publicaciones.filter(
+                    version__gt=base, version__lte=actual.version
+                ).order_by("version")
+            )
+            if len(prefijo) != aplicadas or any(
+                local.version != base + indice
+                or not cls._coincide_publicacion_v3(local, cadena[indice - 1])
+                for indice, local in enumerate(prefijo, start=1)
+            ):
+                raise CommandError(
+                    "La cadena local de catalogo v3 diverge de la descargada; "
+                    "requiere conciliacion sin emitir ACK."
+                )
+        return aplicadas, actual
+
     def _sincronizar_v3(self, sucursal, cliente, datos):
         try:
             if type(datos) is not dict or datos.get("version_contrato") != 3:
@@ -132,13 +199,15 @@ class Command(BaseCommand):
                 "se conserva la ultima version local sin emitir otro ACK."
             )
         if ultima is not None and actual["version_sucursal"] == ultima.version:
-            try:
-                publicacion, creada = aplicar_publicacion_catalogo(sucursal, actual)
-            except ErrorCatalogoCentral as exc:
-                self._rechazar_v3(sucursal, actual, exc)
-            estado = "aplicada" if creada else "ya aplicada"
+            if not self._coincide_publicacion_v3(ultima, actual):
+                raise CommandError(
+                    "La publicacion Central v3 diverge de la ultima version local; "
+                    "requiere conciliacion sin emitir ACK."
+                )
+            with transaction.atomic():
+                self._prefijo_aplicado_v3(sucursal, ultima, [])
             self.stdout.write(self.style.SUCCESS(
-                f"Publicacion {publicacion.publicacion_id} version {publicacion.version} {estado}."
+                f"Publicacion {ultima.publicacion_id} version {ultima.version} ya aplicada."
             ))
             return
 
@@ -156,20 +225,25 @@ class Command(BaseCommand):
             return
 
         en_aplicacion = None
+        nuevas = 0
         try:
             # Las descargas ocurren antes del lock; todo el catch-up se confirma o revierte.
             with transaction.atomic():
-                for en_aplicacion in vigentes:
+                prefijo, aplicada = self._prefijo_aplicado_v3(
+                    sucursal, ultima, cadena
+                )
+                for en_aplicacion in vigentes[prefijo:]:
                     aplicada, _creada = aplicar_publicacion_catalogo(
                         sucursal, en_aplicacion
                     )
+                    nuevas += 1
         except ErrorCatalogoCentral as exc:
             self._rechazar_v3(sucursal, en_aplicacion, exc)
         self.stdout.write(self.style.SUCCESS(
             f"Catalogo v3 recuperado hasta publicacion {aplicada.publicacion_id} "
-            f"version {aplicada.version} ({len(vigentes)} publicaciones aplicadas)."
+            f"version {aplicada.version} ({nuevas} publicaciones aplicadas)."
         ))
-        if len(vigentes) < len(cadena):
+        if aplicada.version < cadena[-1]["version_sucursal"]:
             self.stdout.write(self.style.WARNING(
                 "Hay una publicacion posterior pendiente de vigencia; "
                 "se conserva el ultimo menu valido."
