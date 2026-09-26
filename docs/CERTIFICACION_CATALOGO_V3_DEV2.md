@@ -19,7 +19,7 @@ Estado: **abierta, no certificada**. Rama `codex/production-1.0-catalogo-promoci
 | Caso | Estado verificable | Evidencia que falta |
 | --- | --- | --- |
 | Central laboratorio PostgreSQL + TLS/CA; Edge vacío y v2 previo | Edge vacío v3/1→v3/4 y ACK reales pasaron; ACK v2 grande (35 354 bytes) usa perfil opt-in `mappings-large-1` en código y CI POS | Repetir v2 grande y transición v2→v3 con Central candidato por HTTPS/CA y PostgreSQL con el paquete `36f9835` transferido y verificado; confirmar flag/OPTIONS/POST/replay |
-| Catálogo representativo/grande | Fixture **100 % sintética** 275→277 productos y 148 603 bytes iniciales aplicó por HTTPS | Snapshot cercano al límite canónico de 1 MiB por PostgreSQL/TLS; importar sólo el menú real clasificado y autorizado |
+| Catálogo representativo/grande | Fixture **100 % sintética** 275→277 productos y 148 603 bytes iniciales aplicó por HTTPS; CI POS valida snapshot canónico >950 KiB y respuesta HTTP Django >1 MiB | Repetir snapshot cercano a 1 MiB por PostgreSQL/TLS; importar sólo el menú real clasificado y autorizado |
 | PB/PL/P4/PK y promoción nueva | PB/PL/P4/PK publicados como datos en el E2E PG/TLS; equivalencia funcional y nueva promoción probadas en SQLite sintético previo | Selección manual, venta y comprobante histórico en E2E PG/TLS, incluida una nueva promoción dinámica |
 | ACK perdido/repetido | E2E real: Central registró 201, Edge perdió respuesta, replay 200 con mismo evento | Repetir junto a v2→v3 si procede |
 | Checksum incorrecto y publicación parcial | Trigger SQLite en Edge desechable revirtió íntegra v3/4; CI del transporte rechaza Content-Length divergente e IncompleteRead | Corrupción/checksum y respuesta HTTP truncada sobre TLS real; no sólo mocks |
