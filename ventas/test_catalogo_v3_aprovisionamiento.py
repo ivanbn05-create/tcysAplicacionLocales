@@ -590,3 +590,73 @@ class FixtureCatalogoV3Tests(TestCase):
             1,
         )
         self.assertTrue(estado_aprovisionamiento(self.sucursal)["listo"])
+
+    def test_ack_v3_respuesta_perdida_reintenta_misma_identidad_y_acepta_repetido(self):
+        """Un ACK recibido por Central con respuesta perdida conserva su idempotencia."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from ventas.central_api import ErrorTransporteCentral
+        from ventas.sincronizacion_central import sincronizar_outbox_central
+
+        with self.identidad_settings():
+            aplicar_publicacion_catalogo(self.sucursal, self.snapshot())
+        ack = EventoOutbox.objects.get(tipo="catalogo.aplicado")
+        llamadas = []
+
+        class ClienteConRespuestaPerdida:
+            def solicitar(self, **kwargs):
+                llamadas.append(kwargs)
+                if len(llamadas) == 1:
+                    raise ErrorTransporteCentral("Respuesta perdida después de recepción")
+                return SimpleNamespace(
+                    status=200,
+                    headers={},
+                    datos={
+                        "recibido": True,
+                        "acuse": str(uuid.uuid4()),
+                        "ack_id": str(ack.id),
+                        "estado_registrado": "aplicado",
+                    },
+                )
+
+        cliente = ClienteConRespuestaPerdida()
+        with override_settings(
+            CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2=False,
+            CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3=True,
+            CENTRAL_API_BASE_URL="https://central.example.invalid",
+            CENTRAL_BRANCH_ID=str(self.sucursal.id),
+            CENTRAL_BRANCH_CODE=self.sucursal.clave,
+            CENTRAL_POS_INSTANCE_ID=str(self.config.instalacion_id),
+            CENTRAL_CATALOG_TOKEN="T" * 40,
+        ):
+            primero = sincronizar_outbox_central(
+                cliente_factory=lambda **_opciones: cliente
+            )
+            ack.refresh_from_db()
+            self.assertEqual(primero["pendientes"], 1)
+            self.assertEqual(
+                ack.estado_entrega, EventoOutbox.EstadoEntrega.PENDIENTE
+            )
+            EventoOutbox.objects.filter(pk=ack.pk).update(
+                proximo_intento_en=timezone.now() - timedelta(seconds=1)
+            )
+            segundo = sincronizar_outbox_central(
+                cliente_factory=lambda **_opciones: cliente
+            )
+            tercero = sincronizar_outbox_central(
+                cliente_factory=lambda **_opciones: cliente
+            )
+
+        self.assertEqual(segundo["entregados"], 1)
+        self.assertEqual(tercero["entregados"], 0)
+        self.assertEqual(len(llamadas), 2)
+        self.assertEqual(llamadas[0]["idempotencia"], str(ack.id))
+        self.assertEqual(llamadas[1]["idempotencia"], str(ack.id))
+        self.assertEqual(llamadas[0]["payload"], llamadas[1]["payload"])
+        self.assertEqual(llamadas[0]["ruta"], llamadas[1]["ruta"])
+        self.assertIn("/api/v3/", llamadas[0]["ruta"])
+        ack.refresh_from_db()
+        self.assertEqual(ack.estado_entrega, EventoOutbox.EstadoEntrega.ENTREGADO)
+        self.assertEqual(ack.intentos, 2)
