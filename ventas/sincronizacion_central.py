@@ -664,7 +664,20 @@ def sincronizar_outbox_central(*, limite=50, cliente_factory=ClienteCentral):
                 parametros_post["perfil_ack"] = ACK_V2_LARGE_PROFILE
             respuesta = clientes[token_tipo].solicitar(**parametros_post)
             if respuesta.status in {200, 201}:
-                acuse, estado_remoto = _validar_ack(evento, respuesta.datos)
+                try:
+                    acuse, estado_remoto = _validar_ack(evento, respuesta.datos)
+                except ErrorContratoCentral:
+                    if not ack_v2_grande:
+                        raise
+                    if _actualizar_evento(
+                        evento.id,
+                        intento=intento,
+                        estado=EventoOutbox.EstadoEntrega.CONCILIACION,
+                        http=respuesta.status,
+                        error="El Central devolvió un ACK incompatible; se conserva el evento para conciliación.",
+                    ):
+                        resultado["conciliacion"] += 1
+                    continue
                 if _actualizar_evento(
                     evento.id,
                     intento=intento,
