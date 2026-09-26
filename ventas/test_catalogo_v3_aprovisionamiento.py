@@ -678,6 +678,103 @@ class CatalogoV3AprovisionamientoTests(TestCase):
             1,
         )
 
+    def test_restore_producto_nuevo_cambia_mapping_y_409_retiene_ack_en_conciliacion(self):
+        """El catch-up local es seguro; el ACK requiere acuerdo de restore con Central."""
+        from django.db import transaction
+
+        from ventas.sincronizacion_central import sincronizar_outbox_central
+
+        with self.identidad_settings():
+            primera, _ = aplicar_publicacion_catalogo(self.sucursal, self.snapshot())
+            marcar_listo(self.sucursal)
+        EventoOutbox.objects.filter(
+            sucursal=self.sucursal, tipo="catalogo.aplicado"
+        ).update(estado_entrega=EventoOutbox.EstadoEntrega.ENTREGADO)
+        nueva_identidad = uuid.uuid4()
+        segunda = self.snapshot(
+            version=2, anterior=primera.publicacion_id, importe="37.00"
+        )
+        nuevo = copy.deepcopy(segunda["contenido"]["productos"][0])
+        nuevo.update({
+            "producto_central_id": str(nueva_identidad),
+            "codigo": "NUEVO-RESTORE",
+            "nombre": "Producto nuevo tras restore",
+            "nombre_corto": "NUEVO",
+            "orden": 3,
+        })
+        segunda["contenido"]["productos"].append(nuevo)
+        segunda["conteos"]["productos"] = 3
+        segunda["contenido_sha256"] = checksum_snapshot(segunda)
+
+        # Un savepoint representa la base antes de v3/2, conservando el ACK
+        # histórico de v3/1. El primer v3/2 ya pudo haber sido confirmado por Central.
+        punto = transaction.savepoint()
+        with self.identidad_settings():
+            aplicar_publicacion_catalogo(self.sucursal, segunda)
+        mapping_pre_restore = IdentidadProductoCentral.objects.get(
+            sucursal=self.sucursal, central_id=nueva_identidad
+        ).producto_id
+        transaction.savepoint_rollback(punto)
+        self.assertFalse(IdentidadProductoCentral.objects.filter(
+            sucursal=self.sucursal, central_id=nueva_identidad
+        ).exists())
+
+        cliente_catalogo = SimpleNamespace(solicitar=Mock(return_value=SimpleNamespace(
+            status=200, datos=segunda
+        )))
+        with self.central_v3_settings(), patch(
+            "ventas.management.commands.sincronizar_catalogo_central.ClienteCentral",
+            return_value=cliente_catalogo,
+        ):
+            call_command("sincronizar_catalogo_central", stdout=StringIO())
+        mapping_reaplicado = IdentidadProductoCentral.objects.get(
+            sucursal=self.sucursal, central_id=nueva_identidad
+        ).producto_id
+        self.assertNotEqual(mapping_pre_restore, mapping_reaplicado)
+        ack = EventoOutbox.objects.get(
+            sucursal=self.sucursal,
+            tipo="catalogo.aplicado",
+            agregado_id=uuid.UUID(segunda["publicacion_id"]),
+        )
+        self.assertIn(
+            str(mapping_reaplicado),
+            {item["producto_local_id"] for item in ack.datos["mapeos_producto"]},
+        )
+        self.assertNotIn(
+            str(mapping_pre_restore),
+            {item["producto_local_id"] for item in ack.datos["mapeos_producto"]},
+        )
+        hash_inicial = ack.payload_hash
+        rutas = []
+
+        class ClienteConflicto:
+            def solicitar(self, **kwargs):
+                rutas.append(kwargs["ruta"])
+                return SimpleNamespace(
+                    status=409,
+                    headers={},
+                    datos={"codigo": "ack_state_conflict"},
+                )
+
+        with self.central_v3_settings():
+            resultado = sincronizar_outbox_central(
+                cliente_factory=lambda **_opciones: ClienteConflicto()
+            )
+            segundo_intento = sincronizar_outbox_central(
+                cliente_factory=lambda **_opciones: ClienteConflicto()
+            )
+        ack.refresh_from_db()
+        self.assertEqual(resultado["conciliacion"], 1)
+        self.assertEqual(segundo_intento["conciliacion"], 0)
+        self.assertEqual(len(rutas), 1)
+        self.assertIn("/api/v3/", rutas[0])
+        self.assertEqual(
+            ack.estado_entrega, EventoOutbox.EstadoEntrega.CONCILIACION
+        )
+        self.assertEqual(ack.payload_hash, hash_inicial)
+        self.assertEqual(ack.datos["ack_id"], str(ack.id))
+        self.assertTrue(estado_aprovisionamiento(self.sucursal)["listo"])
+
     def test_ack_v3_respuesta_perdida_reintenta_misma_identidad_y_acepta_repetido(self):
         """Un ACK recibido por Central con respuesta perdida conserva su idempotencia."""
         from datetime import timedelta
