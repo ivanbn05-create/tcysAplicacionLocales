@@ -126,7 +126,12 @@ class Command(BaseCommand):
             .order_by("-version")
             .first()
         )
-        if ultima is not None and actual["version_sucursal"] <= ultima.version:
+        if ultima is not None and actual["version_sucursal"] < ultima.version:
+            raise CommandError(
+                "El Central presento una publicacion v3 obsoleta; "
+                "se conserva la ultima version local sin emitir otro ACK."
+            )
+        if ultima is not None and actual["version_sucursal"] == ultima.version:
             try:
                 publicacion, creada = aplicar_publicacion_catalogo(sucursal, actual)
             except ErrorCatalogoCentral as exc:
