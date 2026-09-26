@@ -114,6 +114,18 @@ class CatalogoV3AprovisionamientoTests(TestCase):
             CENTRAL_POS_INSTANCE_ID=str(self.config.instalacion_id),
         )
 
+    def central_v3_settings(self):
+        return override_settings(
+            CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2=False,
+            CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3=True,
+            SUCURSAL_CLAVE=self.sucursal.clave,
+            CENTRAL_API_BASE_URL="https://central.example.invalid",
+            CENTRAL_BRANCH_ID=str(self.sucursal.id),
+            CENTRAL_BRANCH_CODE=self.sucursal.clave,
+            CENTRAL_POS_INSTANCE_ID=str(self.config.instalacion_id),
+            CENTRAL_CATALOG_TOKEN="T" * 40,
+        )
+
     def test_edge_enrolado_espera_catalogo_y_no_vende_sin_menu(self):
         with self.identidad_settings():
             iniciar_aprovisionamiento(self.sucursal)
@@ -429,46 +441,179 @@ class CatalogoV3AprovisionamientoTests(TestCase):
 
 
 
-    def test_restore_v3_1_frente_a_central_v3_3_repite_rechazo_sin_reponer_v3_2(self):
-        """Caracteriza el bloqueo tras restaurar un Edge más viejo que Central."""
+    def test_restore_v3_1_recupera_v3_2_y_v3_3_y_segundo_poll_es_idempotente(self):
         with self.identidad_settings():
             primera, _ = aplicar_publicacion_catalogo(self.sucursal, self.snapshot())
             marcar_listo(self.sucursal)
-            segunda_remota = self.snapshot(
-                version=2, anterior=primera.publicacion_id, importe="37.00"
-            )
-            tercera_remota = self.snapshot(
-                version=3,
-                anterior=segunda_remota["publicacion_id"],
-                importe="39.00",
-            )
+        segunda = self.snapshot(
+            version=2, anterior=primera.publicacion_id, importe="37.00"
+        )
+        tercera = self.snapshot(
+            version=3, anterior=segunda["publicacion_id"], importe="39.00"
+        )
+        rutas = []
 
-        with override_settings(
-            CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2=False,
-            CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3=True,
-            SUCURSAL_CLAVE=self.sucursal.clave,
-            CENTRAL_API_BASE_URL="https://central.example.invalid",
-            CENTRAL_BRANCH_ID=str(self.sucursal.id),
-            CENTRAL_BRANCH_CODE=self.sucursal.clave,
-            CENTRAL_POS_INSTANCE_ID=str(self.config.instalacion_id),
-            CENTRAL_CATALOG_TOKEN="T" * 40,
+        def responder(**kwargs):
+            ruta = kwargs["ruta"]
+            rutas.append(ruta)
+            if ruta.endswith("/publicaciones/actual/"):
+                return SimpleNamespace(status=200, datos=tercera)
+            if ruta.endswith(f"/publicaciones/{segunda['publicacion_id']}/"):
+                return SimpleNamespace(status=200, datos=segunda)
+            self.fail(f"Descarga historica inesperada: {ruta}")
+
+        cliente = SimpleNamespace(solicitar=Mock(side_effect=responder))
+        with self.central_v3_settings(), patch(
+            "ventas.management.commands.sincronizar_catalogo_central.ClienteCentral",
+            return_value=cliente,
         ):
-            cliente = SimpleNamespace(
-                solicitar=Mock(return_value=SimpleNamespace(status=200, datos=tercera_remota))
-            )
-            with patch(
-                "ventas.management.commands.sincronizar_catalogo_central.ClienteCentral",
-                return_value=cliente,
-            ):
-                for _ in range(2):
-                    with self.assertRaisesMessage(CommandError, "version_fuera_de_orden"):
-                        call_command("sincronizar_catalogo_central", stdout=StringIO())
+            call_command("sincronizar_catalogo_central", stdout=StringIO())
+            call_command("sincronizar_catalogo_central", stdout=StringIO())
 
-        self.assertEqual(cliente.solicitar.call_count, 2)
-        self.assertTrue(all(
-            llamada.kwargs["ruta"].endswith("/publicaciones/actual/")
-            for llamada in cliente.solicitar.call_args_list
-        ))
+        self.assertEqual(
+            rutas,
+            [
+                "/api/v3/edge/catalogo/publicaciones/actual/",
+                f"/api/v3/edge/catalogo/publicaciones/{segunda['publicacion_id']}/",
+                "/api/v3/edge/catalogo/publicaciones/actual/",
+            ],
+        )
+        self.assertEqual(
+            list(PublicacionCatalogoCentral.objects.filter(
+                sucursal=self.sucursal, version_contrato=3
+            ).order_by("version").values_list("version", flat=True)),
+            [1, 2, 3],
+        )
+        self.assertEqual(
+            EventoOutbox.objects.filter(
+                sucursal=self.sucursal, tipo="catalogo.aplicado",
+                version_contrato=3,
+            ).count(),
+            3,
+        )
+        self.assertFalse(
+            EventoOutbox.objects.filter(
+                sucursal=self.sucursal, tipo="catalogo.rechazado"
+            ).exists()
+        )
+        producto = IdentidadProductoCentral.objects.get(
+            sucursal=self.sucursal, central_id=self.vendible_id
+        ).producto
+        self.assertEqual(producto.precio_actual().importe, Decimal("39.00"))
+        self.assertTrue(estado_aprovisionamiento(self.sucursal)["listo"])
+
+    def test_edge_vacio_recupera_cadena_v3_completa_sin_autoalistar(self):
+        primera = self.snapshot()
+        segunda = self.snapshot(
+            version=2, anterior=primera["publicacion_id"], importe="37.00"
+        )
+        tercera = self.snapshot(
+            version=3, anterior=segunda["publicacion_id"], importe="39.00"
+        )
+        respuestas = {
+            "/api/v3/edge/catalogo/publicaciones/actual/": tercera,
+            f"/api/v3/edge/catalogo/publicaciones/{segunda['publicacion_id']}/": segunda,
+            f"/api/v3/edge/catalogo/publicaciones/{primera['publicacion_id']}/": primera,
+        }
+        rutas = []
+
+        def responder(**kwargs):
+            ruta = kwargs["ruta"]
+            rutas.append(ruta)
+            return SimpleNamespace(status=200, datos=respuestas[ruta])
+
+        cliente = SimpleNamespace(solicitar=Mock(side_effect=responder))
+        with self.central_v3_settings(), patch(
+            "ventas.management.commands.sincronizar_catalogo_central.ClienteCentral",
+            return_value=cliente,
+        ):
+            call_command("sincronizar_catalogo_central", stdout=StringIO())
+
+        self.assertEqual(len(rutas), 3)
+        self.assertEqual(
+            list(PublicacionCatalogoCentral.objects.filter(
+                sucursal=self.sucursal, version_contrato=3
+            ).order_by("version").values_list("version", flat=True)),
+            [1, 2, 3],
+        )
+        self.assertEqual(
+            EventoOutbox.objects.filter(
+                sucursal=self.sucursal, tipo="catalogo.aplicado",
+                version_contrato=3,
+            ).count(),
+            3,
+        )
+        self.assertEqual(
+            estado_aprovisionamiento(self.sucursal)["estado"],
+            "catalogo_aplicado",
+        )
+        self.assertFalse(estado_aprovisionamiento(self.sucursal)["listo"])
+
+    def test_historial_v3_ausente_corrupto_o_ciclico_no_aplica_ningun_tramo(self):
+        for caso in ("ausente", "id_ajeno", "checksum", "ciclo"):
+            with self.subTest(caso=caso):
+                primera = self.snapshot()
+                segunda = self.snapshot(
+                    version=2, anterior=primera["publicacion_id"]
+                )
+                tercera = self.snapshot(
+                    version=3, anterior=segunda["publicacion_id"]
+                )
+                historica = copy.deepcopy(segunda)
+                if caso == "id_ajeno":
+                    historica["publicacion_id"] = str(uuid.uuid4())
+                elif caso == "checksum":
+                    historica["contenido_sha256"] = "0" * 64
+                elif caso == "ciclo":
+                    historica["publicacion_anterior_id"] = tercera["publicacion_id"]
+                if caso in {"id_ajeno", "ciclo"}:
+                    historica["contenido_sha256"] = checksum_snapshot(historica)
+
+                def responder(**kwargs):
+                    ruta = kwargs["ruta"]
+                    if ruta.endswith("/publicaciones/actual/"):
+                        return SimpleNamespace(status=200, datos=tercera)
+                    if caso == "ausente":
+                        return SimpleNamespace(status=404, datos={})
+                    return SimpleNamespace(status=200, datos=historica)
+
+                cliente = SimpleNamespace(solicitar=Mock(side_effect=responder))
+                with self.central_v3_settings(), patch(
+                    "ventas.management.commands.sincronizar_catalogo_central.ClienteCentral",
+                    return_value=cliente,
+                ):
+                    with self.assertRaises(CommandError):
+                        call_command("sincronizar_catalogo_central", stdout=StringIO())
+                self.assertFalse(PublicacionCatalogoCentral.objects.exists())
+                self.assertFalse(
+                    EventoOutbox.objects.filter(tipo="catalogo.aplicado").exists()
+                )
+
+    def test_publicacion_futura_no_impide_recuperar_prefijo_vigente(self):
+        primera = self.snapshot()
+        segunda = self.snapshot(
+            version=2, anterior=primera["publicacion_id"], importe="37.00"
+        )
+        tercera = self.snapshot(
+            version=3, anterior=segunda["publicacion_id"], importe="39.00"
+        )
+        segunda["aplicar_desde"] = "2030-01-01"
+        tercera["aplicar_desde"] = "2030-01-02"
+        respuestas = {
+            "/api/v3/edge/catalogo/publicaciones/actual/": tercera,
+            f"/api/v3/edge/catalogo/publicaciones/{segunda['publicacion_id']}/": segunda,
+            f"/api/v3/edge/catalogo/publicaciones/{primera['publicacion_id']}/": primera,
+        }
+        cliente = SimpleNamespace(
+            solicitar=Mock(side_effect=lambda **kwargs: SimpleNamespace(
+                status=200, datos=respuestas[kwargs["ruta"]]
+            ))
+        )
+        with self.central_v3_settings(), patch(
+            "ventas.management.commands.sincronizar_catalogo_central.ClienteCentral",
+            return_value=cliente,
+        ):
+            call_command("sincronizar_catalogo_central", stdout=StringIO())
         self.assertEqual(
             list(PublicacionCatalogoCentral.objects.filter(
                 sucursal=self.sucursal, version_contrato=3
@@ -477,13 +622,11 @@ class CatalogoV3AprovisionamientoTests(TestCase):
         )
         self.assertEqual(
             EventoOutbox.objects.filter(
-                sucursal=self.sucursal,
-                tipo="catalogo.rechazado",
+                sucursal=self.sucursal, tipo="catalogo.aplicado",
                 version_contrato=3,
             ).count(),
             1,
         )
-        self.assertTrue(estado_aprovisionamiento(self.sucursal)["listo"])
 
     def test_ack_v3_respuesta_perdida_reintenta_misma_identidad_y_acepta_repetido(self):
         """Un ACK recibido por Central con respuesta perdida conserva su idempotencia."""
