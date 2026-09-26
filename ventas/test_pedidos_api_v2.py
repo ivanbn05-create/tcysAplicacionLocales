@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import socket
 import ssl
@@ -193,6 +194,14 @@ class ClientePedidosV2Tests(unittest.TestCase):
 
         self.assertEqual(pagina.returned, 1)
         self.assertEqual(pagina.pedidos[0].total, Decimal("245.50"))
+        canonico = json.dumps(
+            pedido_payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        self.assertEqual(pagina.pedidos[0].order_canonical_json, canonico)
+        self.assertEqual(
+            pagina.pedidos[0].order_sha256,
+            hashlib.sha256(canonico.encode("utf-8")).hexdigest(),
+        )
         self.assertEqual(
             pagina.pedidos[0].identidad_remota,
             (12001, uuid.UUID("00000000-0000-4000-8000-000000000001")),
@@ -205,6 +214,22 @@ class ClientePedidosV2Tests(unittest.TestCase):
         self.assertIsNone(cabecera_enviada(solicitud, "X-POS-Edge-ID"))
         self.assertIsNone(cabecera_enviada(solicitud, "X-POS-Branch-ID"))
         self.assertNotIn(TOKEN, repr(api))
+
+    def test_identidad_compuesta_permite_mismo_uuid_en_remitentes_distintos(self):
+        primero = pedido_payload(1, sucursal_id=3)
+        segundo = pedido_payload(2, sucursal_id=4)
+        segundo["codigo_publico"] = primero["codigo_publico"]
+        remoto = respuesta(200, pagina_payload([primero, segundo], limite=2))
+        pagina = parsear_pagina_v2(
+            remoto.body,
+            headers=remoto.headers,
+            sucursales_permitidas=[3, 4],
+            limite_solicitado=2,
+            max_response_bytes=65536,
+        )
+        self.assertEqual(len(pagina.pedidos), 2)
+        self.assertEqual(pagina.pedidos[0].codigo_publico, pagina.pedidos[1].codigo_publico)
+        self.assertNotEqual(pagina.pedidos[0].sucursal.id, pagina.pedidos[1].sucursal.id)
 
     def test_credencial_agregada_envia_identidades_explicitamente(self):
         edge_id = "11111111-1111-4111-8111-111111111111"
