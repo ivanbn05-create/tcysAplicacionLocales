@@ -226,6 +226,28 @@ class AckCatalogoV2GrandeTests(TestCase):
                 proximo_intento_en=timezone.now() - timedelta(seconds=1)
             )
 
+    def test_405_html_de_central_viejo_deja_ack_pendiente(self):
+        ack = self.aplicar_v2()
+
+        class _Html405(_CentralAckFalso):
+            def solicitar(self, **argumentos):
+                if argumentos["metodo"] == "OPTIONS":
+                    self.llamadas.append(argumentos)
+                    raise ErrorContratoCentral("405 de Central viejo con text/html.")
+                return super().solicitar(**argumentos)
+
+        central = _Html405(ack)
+        with self.ajustes():
+            resultado = sincronizar_outbox_central(
+                cliente_factory=lambda **_opciones: central
+            )
+        ack.refresh_from_db()
+        self.assertEqual(resultado["pendientes"], 1)
+        self.assertEqual(ack.estado_entrega, EventoOutbox.EstadoEntrega.PENDIENTE)
+        self.assertEqual([c["metodo"] for c in central.llamadas], ["OPTIONS"])
+        self.assertEqual(central.posts, [])
+        self.assertEqual(ack.payload_hash, hash_payload(ack.datos))
+
     def test_413_o_respuesta_no_parseable_tras_options_conserva_ack(self):
         ack = self.aplicar_v2()
         payload_original = copy.deepcopy(ack.datos)
