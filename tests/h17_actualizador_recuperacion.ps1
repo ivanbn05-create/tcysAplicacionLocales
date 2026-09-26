@@ -1,4 +1,9 @@
 # H17. Se ejecuta sólo en Windows runner con fixtures efímeros bajo RUNNER_TEMP.
+param(
+    [ValidateSet('SelfTest', 'Create', 'Recover')][string]$Mode = 'SelfTest',
+    [string]$Phase = '',
+    [string]$HandoffPath = ''
+)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 $scriptPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'actualizar-laboratorio-desde-release.ps1'
@@ -18,6 +23,7 @@ $script:healthChecks = 0
 $script:restores = 0
 $script:startMode = ''
 $script:failHealth = $false
+$script:failDisable = $false
 function Assert-ServiceTargetsInstallation { param([string]$Root) }
 function Stop-LabService { $script:stops++ }
 function Start-LabServiceAndVerify {
@@ -29,7 +35,10 @@ function Set-LabStartMode {
     param([string]$Mode, [bool]$Delayed)
     $script:startMode = $Mode
 }
-function Disable-LabManagedTasks { param([object[]]$Snapshots) }
+function Disable-LabManagedTasks {
+    param([object[]]$Snapshots)
+    if ($script:failDisable) { throw 'task fixture failure' }
+}
 function Restore-ManagedTaskSnapshots {
     param([object[]]$Snapshots)
     if ($Snapshots.Count -ne 2) { throw 'task fixture invalid' }
@@ -124,6 +133,41 @@ function Recover-Fixture {
     param([object]$Fixture)
     Recover-LabJournal -Path $Fixture.Journal -Installation $Fixture.Installation -Workspace $Fixture.Workspace
 }
+if ($Mode -eq 'Create') {
+    $backupExists = $Phase -ne 'prepared'
+    $candidateExists = $Phase -in @('state_copied', 'engine_running', 'engine_complete')
+    $fixture = New-Fixture -Phase $Phase -BackupExists $backupExists -CandidateExists $candidateExists
+    [IO.File]::WriteAllText($HandoffPath, ($fixture | ConvertTo-Json -Compress))
+    # El padre mata este proceso tras observar el marcador durable.
+    while ($true) { Start-Sleep -Seconds 1 }
+}
+if ($Mode -eq 'Recover') {
+    $fixture = Get-Content -LiteralPath $HandoffPath -Raw | ConvertFrom-Json
+    if ($Phase -eq 'engine_running') {
+        try { Recover-Fixture -Fixture $fixture; throw 'Se esperaba cuarentena.' }
+        catch { if ($_.Exception.Message -notmatch 'motor pudo migrar') { throw } }
+        if (-not (Test-Path -LiteralPath $fixture.Journal) -or
+            -not (Test-Path -LiteralPath $fixture.Backup) -or
+            -not (Test-Path -LiteralPath $fixture.Installation)) {
+            throw 'Pérdida de proceso destruyó un árbol o journal.'
+        }
+        & python $sqliteHelper verify (Join-Path $fixture.Installation 'runtime\db.sqlite3') 'candidate-db' 'candidate-outbox'
+        if ($LASTEXITCODE -ne 0) { throw 'SQLite/outbox ambiguo perdió integridad.' }
+    }
+    elseif ($Phase -eq 'engine_complete') {
+        Recover-Fixture -Fixture $fixture
+        & python $sqliteHelper verify (Join-Path $fixture.Installation 'runtime\db.sqlite3') 'candidate-db' 'candidate-outbox'
+        if ($LASTEXITCODE -ne 0) { throw 'SQLite/outbox posterior a migración perdió integridad.' }
+        if (-not (Test-Path -LiteralPath $fixture.Backup)) { throw 'El respaldo desapareció.' }
+    }
+    else {
+        Recover-Fixture -Fixture $fixture
+        Assert-OldRestored -Fixture $fixture
+    }
+    Write-Host "H17 proceso nuevo: fase $Phase OK."
+    return
+}
+
 # Corte previo a Stop-Service.
 $fixture = New-Fixture -Phase 'prepared' -BackupExists $false -CandidateExists $false
 Recover-Fixture -Fixture $fixture
@@ -181,4 +225,61 @@ if (-not (Test-Path -LiteralPath $fixture.Journal) -or
 $script:failHealth = $false
 Recover-Fixture -Fixture $fixture
 if (Test-Path -LiteralPath $fixture.Journal) { throw 'Health reintentado no cerró journal.' }
-Write-Host 'H17 fixtures: 6 ventanas y reintento idempotente OK.'
+
+# Pérdida del proceso: journal y árboles se crean en un proceso, se mata ese
+# proceso y un segundo PowerShell ejecuta la recuperación desde cero.
+$powerShell = (Get-Process -Id $PID).Path
+foreach ($phase in @('prepared', 'old_moved', 'state_copied', 'engine_running', 'engine_complete')) {
+    $handoff = Join-Path $env:RUNNER_TEMP ('h17-handoff-' + [Guid]::NewGuid().ToString('N') + '.json')
+    $createArguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+        $PSCommandPath + '" -Mode Create -Phase ' + $phase + ' -HandoffPath "' + $handoff + '"'
+    $creator = Start-Process -FilePath $powerShell -ArgumentList $createArguments -PassThru -WindowStyle Hidden
+    $deadline = (Get-Date).AddSeconds(30)
+    try {
+        while (-not (Test-Path -LiteralPath $handoff -PathType Leaf) -and
+            (Get-Date) -lt $deadline -and -not $creator.HasExited) {
+            Start-Sleep -Milliseconds 200
+        }
+        if (-not (Test-Path -LiteralPath $handoff -PathType Leaf)) {
+            throw "El proceso creador $phase no publicó journal."
+        }
+    }
+    finally {
+        if (-not $creator.HasExited) {
+            Stop-Process -Id $creator.Id -Force -ErrorAction Stop
+            [void]$creator.WaitForExit(10000)
+        }
+        $creator.Dispose()
+    }
+    $stdout = $handoff + '.stdout'
+    $stderr = $handoff + '.stderr'
+    $recoverArguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+        $PSCommandPath + '" -Mode Recover -Phase ' + $phase + ' -HandoffPath "' + $handoff + '"'
+    $recovery = Start-Process -FilePath $powerShell -ArgumentList $recoverArguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    try {
+        if (-not $recovery.WaitForExit(30000)) {
+            Stop-Process -Id $recovery.Id -Force
+            throw "La recuperación nueva $phase excedió 30 segundos."
+        }
+        if ($recovery.ExitCode -ne 0) {
+            throw ("Recuperación nueva $phase falló: " +
+                (Get-Content -LiteralPath $stdout -Raw) +
+                (Get-Content -LiteralPath $stderr -Raw))
+        }
+    }
+    finally { $recovery.Dispose() }
+}
+$beforeStops = $script:stops
+$script:failDisable = $true
+try {
+    Suspend-LabCandidate -Snapshots @()
+    throw 'La cuarentena incompleta debió fallar.'
+}
+catch {
+    if ($_.Exception.Message -notmatch 'Cuarentena H17 incompleta') { throw }
+}
+$script:failDisable = $false
+if ($script:stops -le $beforeStops) { throw 'Fallo de tarea impidió Stop-LabService.' }
+Assert-Equal $script:startMode 'Manual' 'inicio manual pese a fallo de tarea'
+Write-Host 'H17 fixtures: seis ventanas, cinco pérdidas de proceso y Stop independiente OK.'
+
