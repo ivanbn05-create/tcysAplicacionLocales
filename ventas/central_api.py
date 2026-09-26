@@ -101,7 +101,7 @@ class ClienteCentral:
         token,
         ca_bundle=None,
         timeout=15,
-        max_response_bytes=1024 * 1024,
+        max_response_bytes=2 * 1024 * 1024,
         opener=None,
     ):
         self.base_url = str(base_url or "").rstrip("/") + "/"
