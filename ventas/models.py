@@ -616,6 +616,10 @@ class PedidoSucursalImportado(models.Model):
     origen = models.CharField(max_length=40, default="pedidos_sucursales_sqlite")
     origen_id = models.PositiveIntegerField()
     codigo_publico = models.CharField(max_length=40, blank=True)
+    # Sólo v2: identidad de SucursalCliente y cuerpo exacto para verificar ACK r7.
+    sender_id = models.PositiveIntegerField(null=True, blank=True)
+    order_canonical_json = models.TextField(blank=True)
+    order_sha256 = models.CharField(max_length=64, blank=True)
     estado_origen = models.CharField(max_length=16, blank=True)
     importado_en = models.DateTimeField(auto_now_add=True)
 
@@ -630,8 +634,18 @@ class PedidoSucursalImportado(models.Model):
                 condition=models.Q(
                     origen="pedidos_sucursales_api_v2",
                     codigo_publico__gt="",
+                    sender_id__isnull=True,
                 ),
-                name="pedido_api_v2_codigo_publico_unico",
+                name="pedido_api_v2_codigo_legacy_unico",
+            ),
+            models.UniqueConstraint(
+                fields=["sucursal", "sender_id", "codigo_publico"],
+                condition=models.Q(
+                    origen="pedidos_sucursales_api_v2",
+                    codigo_publico__gt="",
+                    sender_id__isnull=False,
+                ),
+                name="pedido_api_v2_sender_codigo_unico",
             ),
         ]
 
