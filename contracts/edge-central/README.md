@@ -46,12 +46,11 @@ La implementación central v1 acepta actualmente propiedades adicionales dentro 
 | Consolidación mensual v1 | 256 KiB |
 | Lote de ventas v2 | 256 KiB y 100 eventos |
 | Evento de cliente v2 | 64 KiB, 10 teléfonos y 10 domicilios |
-| ACK de catálogo v2 | 16 KiB |
+| ACK de catálogo v2 legado | 16 KiB sin perfil |\n| ACK de catálogo v2 `mappings-large-1` | 1 MiB, sólo tras `OPTIONS` autenticado a la misma ruta de acuse con 204, `X-Catalog-Ack-Profile: mappings-large-1`, `X-Catalog-Ack-Max-Body-Bytes: 1048576` y `Cache-Control: no-store`; POST agrega el encabezado del perfil y conserva cuerpo, `ack_id` e idempotencia |
 | Snapshot completo de catálogo v2 | 1 MiB sin imágenes binarias |
 | Snapshot completo de catálogo/promociones v3 candidato | 1 MiB sin imágenes binarias |
 
-## Índices y matrices
-
+El perfil grande v2 es candidato de laboratorio y requiere activación explícita en Central. Si un servidor viejo no anuncia la capacidad, el ACK local válido queda pendiente con reintento; no se envía un cuerpo mayor al límite legado ni se descarta el outbox. Un 413 después de anunciar el perfil también conserva el evento para revisar proxy/worker. La forma JSON y `version_contrato=2` no cambian.\n\n## Índices y matrices\n
 - `contracts/edge-central/fixtures/index.json`: metadatos HTTP reproducibles de los flujos con el central.
 - `contracts/pedidos-v2/fixtures/index.json`: metadatos HTTP reproducibles de Pedidos v2, incluyendo cursor legado y `410 retention_gap`.
 - `contracts/edge-central/MATRIZ_IDENTIDADES.md`: correspondencias explícitas; la forma ejecutable está en `contracts/edge-central/fixtures/matriz-identidades-v1.json`.
