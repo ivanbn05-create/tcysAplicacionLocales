@@ -24,7 +24,11 @@ $script:restores = 0
 $script:startMode = ''
 $script:failHealth = $false
 $script:failDisable = $false
-function Assert-ServiceTargetsInstallation { param([string]$Root) }
+$script:foreignService = $false
+function Assert-ServiceTargetsInstallation {
+    param([string]$Root)
+    if ($script:foreignService) { throw 'service fixture points elsewhere' }
+}
 function Stop-LabService { $script:stops++ }
 function Start-LabServiceAndVerify {
     param([string]$Root)
@@ -165,7 +169,7 @@ if ($Mode -eq 'Recover') {
         Assert-OldRestored -Fixture $fixture
     }
     Write-Host "H17 proceso nuevo: fase $Phase OK."
-    return
+    exit 0
 }
 
 # Corte previo a Stop-Service.
@@ -261,6 +265,7 @@ foreach ($phase in @('prepared', 'old_moved', 'state_copied', 'engine_running', 
             Stop-Process -Id $recovery.Id -Force
             throw "La recuperación nueva $phase excedió 30 segundos."
         }
+        $recovery.Refresh()
         if ($recovery.ExitCode -ne 0) {
             throw ("Recuperación nueva $phase falló: " +
                 (Get-Content -LiteralPath $stdout -Raw) +
@@ -281,5 +286,22 @@ catch {
 $script:failDisable = $false
 if ($script:stops -le $beforeStops) { throw 'Fallo de tarea impidió Stop-LabService.' }
 Assert-Equal $script:startMode 'Manual' 'inicio manual pese a fallo de tarea'
-Write-Host 'H17 fixtures: seis ventanas, cinco pérdidas de proceso y Stop independiente OK.'
+$fixture = New-Fixture -Phase 'engine_running' -BackupExists $true -CandidateExists $true
+$beforeStops = $script:stops
+$script:foreignService = $true
+try {
+    Recover-Fixture -Fixture $fixture
+    throw 'Servicio ajeno debió bloquear recuperación.'
+}
+catch {
+    if ($_.Exception.Message -notmatch 'identidad del servicio no verificable') { throw }
+}
+$script:foreignService = $false
+Assert-Equal $script:stops $beforeStops 'servicio ajeno intacto'
+if (-not (Test-Path -LiteralPath $fixture.Journal) -or
+    -not (Test-Path -LiteralPath $fixture.Backup) -or
+    -not (Test-Path -LiteralPath $fixture.Installation)) {
+    throw 'Identidad ajena perdió journal o árboles.'
+}
+Write-Host 'H17 fixtures: seis ventanas, cinco pérdidas de proceso y cuarentena segura OK.'
 
