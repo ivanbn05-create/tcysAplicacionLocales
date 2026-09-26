@@ -16,11 +16,12 @@ class Command(BaseCommand):
                 settings.CENTRAL_ENABLE_SALES_V2,
                 settings.CENTRAL_ENABLE_CUSTOMERS_V2,
                 settings.CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V2,
+                settings.CENTRAL_ENABLE_CATALOG_DISTRIBUTION_V3,
             )
         ):
             self.stdout.write(
                 self.style.WARNING(
-                    "Todos los flujos Central v2 estan apagados; no se realizo ninguna solicitud."
+                    "Todos los flujos Central estan apagados; no se realizo ninguna solicitud."
                 )
             )
             return
