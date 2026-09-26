@@ -53,7 +53,8 @@ La implementación central v1 acepta actualmente propiedades adicionales dentro 
 
 El perfil grande v2 es candidato de laboratorio y requiere activación explícita en Central. Si un servidor viejo no anuncia la capacidad, el ACK local válido queda pendiente con reintento; no se envía un cuerpo mayor al límite legado ni se descarta el outbox. Un 413 después de anunciar el perfil también conserva el evento para revisar proxy/worker. La forma JSON y `version_contrato=2` no cambian. Si Central desactiva el perfil o revierte a un binario anterior después de recibir el ACK pero antes de que Edge guarde su respuesta, el evento local permanece pendiente hasta restaurar la capacidad o conciliarlo; drenar ACK grandes antes del rollback evita ese bloqueo operativo. La reversión no autoriza borrar ni regenerar eventos.
 
-## Índices y matrices\n
+## Índices y matrices
+
 - `contracts/edge-central/fixtures/index.json`: metadatos HTTP reproducibles de los flujos con el central.
 - `contracts/pedidos-v2/fixtures/index.json`: metadatos HTTP reproducibles de Pedidos v2, incluyendo cursor legado y `410 retention_gap`.
 - `contracts/edge-central/MATRIZ_IDENTIDADES.md`: correspondencias explícitas; la forma ejecutable está en `contracts/edge-central/fixtures/matriz-identidades-v1.json`.
