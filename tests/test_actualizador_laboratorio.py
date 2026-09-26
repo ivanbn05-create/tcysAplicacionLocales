@@ -63,17 +63,38 @@ class ActualizadorLaboratorioTests(unittest.TestCase):
         ):
             self.assertIn(name, text)
         snapshot = text.index("$taskSnapshots = @(Get-ManagedTaskSnapshots)")
+        journal = text.index("Write-LabJournal -Journal $journal -Path $journalPath")
+        disable = text.index("Disable-LabManagedTasks -Snapshots $taskSnapshots")
         stop = text.index("Stop-LabService\n    $serviceStopped")
         updater = text.index("& (Join-Path $installation 'actualizar-servidor.ps1')")
-        restore = text.index("Restore-ManagedTaskSnapshots -Snapshots $taskSnapshots")
-        self.assertLess(snapshot, stop)
+        self.assertLess(snapshot, journal)
+        self.assertLess(journal, disable)
+        self.assertLess(disable, stop)
         self.assertLess(stop, updater)
-        self.assertLess(updater, restore)
+        self.assertIn("Restore-ManagedTaskSnapshots -Snapshots @($journal.tasks)", text)
         self.assertIn("Export-ScheduledTask", text)
         self.assertIn("Register-ScheduledTask", text)
         self.assertIn("Unregister-ScheduledTask", text)
-        success_path = text[updater:text.index("\ncatch {", updater)]
-        self.assertNotIn("Restore-ManagedTaskSnapshots", success_path)
+
+    def test_h17_journal_durable_y_recuperacion_antes_de_preflight(self):
+        text = RUTA_SCRIPT.read_text(encoding="utf-8")
+        for required in (
+            "function Write-LabJournal",
+            "function Recover-LabJournal",
+            "Flush($true)",
+            "[IO.File]::Replace",
+            "actualizacion-pendiente.json",
+            "-Phase 'engine_running'",
+            "-Phase 'engine_complete'",
+            "no se hará rollback automático",
+        ):
+            self.assertIn(required, text)
+        recover = text.index("Recover-LabJournal -Path $journalPath -Installation $installation")
+        preflight = text.index("$installation = Resolve-AbsoluteLiteralPath -Path $InstallationRoot -ExpectedType Container")
+        self.assertLess(recover, preflight)
+        guard = text.index("$maintenanceMutex = Enter-LabMaintenanceMutex")
+        self.assertLess(guard, recover)
+        self.assertIn("if ($RecoverOnly)", text)
 
     def test_env_se_valida_y_copia_bajo_acl_privada_antes_de_escribir_secretos(self):
         text = RUTA_SCRIPT.read_text(encoding="utf-8")
