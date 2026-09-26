@@ -1,0 +1,24 @@
+name: H17 actualizador Windows aislado
+
+on:
+  push:
+    branches:
+      - codex/production-1.0-catalogo-promociones-dev.2
+    paths:
+      - actualizar-laboratorio-desde-release.ps1
+      - tests/test_actualizador_laboratorio.py
+      - tests/h17_actualizador_recuperacion.ps1
+      - .github/workflows/h17-updater-windows.yml
+  workflow_dispatch:
+
+jobs:
+  h17-fixtures:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validar sintaxis y recuperación con fixtures temporales
+        shell: powershell
+        run: .\tests\h17_actualizador_recuperacion.ps1
+      - name: Contratos estáticos del actualizador
+        shell: powershell
+        run: python -m unittest discover -s tests -p test_actualizador_laboratorio.py -v
