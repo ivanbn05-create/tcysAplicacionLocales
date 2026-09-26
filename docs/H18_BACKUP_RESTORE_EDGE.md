@@ -18,7 +18,7 @@ manifest.json enumera rutas, tamaños y hashes, la VERSION exacta del origen y l
 
 El paquete contiene .env en texto claro **dentro de un volumen cifrado**. Backup requiere -BackupRoot explícito en una unidad Windows distinta de la unidad del Edge, completamente cifrada con BitLocker y con protección activada. Verifica Get-BitLockerVolume antes de escribir. Rechaza UNC, unidad local compartida, junctions y estado de BitLocker no acreditable. La carpeta y cada archivo publicado reciben ACL sin herencia que permiten solamente SYSTEM y Administradores; el servicio no puede leer el paquete. No usar DPAPI ligada al equipo: impediría recuperar el Edge en otra VM.
 
-Conservar la clave de recuperación de BitLocker fuera de la VM y bajo custodia separada. La copia externa es el volumen BitLocker o una réplica de éste que mantenga cifrado y acceso controlado. No copiar el paquete a correo, una carpeta compartida sin cifrar, una release ZIP o un repositorio. Verificar periódicamente que el volumen externo se puede desbloquear en otra VM.
+Conservar la clave de recuperación de BitLocker fuera de la VM y bajo custodia separada. **Una letra distinta no acredita un dispositivo físico distinto**: dos particiones del mismo disco pueden pasar la comprobación del script. Antes de aceptar H18, registrar identificador/serial del disco de respaldo y del disco del Edge, acreditar que son dispositivos independientes y conservar una copia cifrada fuera de la VM y de su almacenamiento con fallo común. No copiar el paquete a correo, una carpeta compartida sin cifrar, una release ZIP o un repositorio. Verificar periódicamente que el volumen externo se puede desbloquear en otra VM.
 
 Ejemplo en Windows PowerShell 5.1 elevado, con la unidad externa BitLocker E: desbloqueada:
 
