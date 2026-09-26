@@ -31,11 +31,13 @@ _URL = "https://central.example.invalid/api/v3/edge/catalogo/publicaciones/actua
 
 
 class _RespuestaHTTP(BytesIO):
-    def __init__(self, cuerpo, *, declarar_longitud=True):
+    def __init__(self, cuerpo, *, declarar_longitud=True, longitud_declarada=None):
         super().__init__(cuerpo)
         self.headers = {"Content-Type": "application/json"}
         if declarar_longitud:
-            self.headers["Content-Length"] = str(len(cuerpo))
+            self.headers["Content-Length"] = str(
+                len(cuerpo) if longitud_declarada is None else longitud_declarada
+            )
 
     def geturl(self):
         return _URL
@@ -45,13 +47,16 @@ class _RespuestaHTTP(BytesIO):
 
 
 class _Opener:
-    def __init__(self, cuerpo, *, declarar_longitud=True):
+    def __init__(self, cuerpo, *, declarar_longitud=True, longitud_declarada=None):
         self.cuerpo = cuerpo
         self.declarar_longitud = declarar_longitud
+        self.longitud_declarada = longitud_declarada
 
     def open(self, _solicitud, *, timeout):
         return _RespuestaHTTP(
-            self.cuerpo, declarar_longitud=self.declarar_longitud
+            self.cuerpo,
+            declarar_longitud=self.declarar_longitud,
+            longitud_declarada=self.longitud_declarada,
         )
 
 
@@ -93,12 +98,16 @@ def _snapshot_grande_valido():
 
 
 class CatalogoV3TransporteGrandeTests(SimpleTestCase):
-    def _cliente(self, cuerpo, *, declarar_longitud=True):
+    def _cliente(self, cuerpo, *, declarar_longitud=True, longitud_declarada=None):
         return ClienteCentral(
             base_url="https://central.example.invalid",
             token="T" * 40,
             max_response_bytes=settings.CENTRAL_MAX_RESPONSE_BYTES,
-            opener=_Opener(cuerpo, declarar_longitud=declarar_longitud),
+            opener=_Opener(
+                cuerpo,
+                declarar_longitud=declarar_longitud,
+                longitud_declarada=longitud_declarada,
+            ),
         )
 
     def test_snapshot_canonico_valido_cabe_en_respuesta_http_django(self):
@@ -129,6 +138,28 @@ class CatalogoV3TransporteGrandeTests(SimpleTestCase):
         )
         self.assertEqual(respuesta.status, 200)
         self.assertEqual(respuesta.datos, snapshot)
+
+    def test_content_length_truncado_rechaza_json_aun_valido(self):
+        cuerpo = b'{"publicacion_id":"simulada"}'
+        with self.assertRaisesMessage(ErrorContratoCentral, "truncada"):
+            self._cliente(
+                cuerpo,
+                longitud_declarada=len(cuerpo) + 8,
+            ).solicitar(
+                metodo="GET",
+                ruta="/api/v3/edge/catalogo/publicaciones/actual/",
+            )
+
+    def test_content_length_menor_que_cuerpo_tambien_se_rechaza(self):
+        cuerpo = b'{"publicacion_id":"simulada"}'
+        with self.assertRaisesMessage(ErrorContratoCentral, "longitud incorrecta"):
+            self._cliente(
+                cuerpo,
+                longitud_declarada=len(cuerpo) - 1,
+            ).solicitar(
+                metodo="GET",
+                ruta="/api/v3/edge/catalogo/publicaciones/actual/",
+            )
 
     def test_respuesta_sin_content_length_mayor_que_limite_sigue_rechazada(self):
         limite = settings.CENTRAL_MAX_RESPONSE_BYTES
