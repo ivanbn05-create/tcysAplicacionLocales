@@ -2,6 +2,7 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 $scriptPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'actualizar-laboratorio-desde-release.ps1'
+$sqliteHelper = Join-Path $PSScriptRoot 'h17_sqlite_fixture.py'
 $tokens = $null
 $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
@@ -52,8 +53,8 @@ function New-Tree {
     [void](New-Item -ItemType Directory -Path (Join-Path $Root 'runtime') -Force)
     [IO.File]::WriteAllText((Join-Path $Root 'VERSION'), $Version)
     [IO.File]::WriteAllText((Join-Path $Root '.env'), 'LAB_ONLY=1')
-    [IO.File]::WriteAllText((Join-Path $Root 'runtime\db.sqlite3'), $Database)
-    [IO.File]::WriteAllText((Join-Path $Root 'runtime\outbox.fixture'), $Outbox)
+    & python $sqliteHelper create (Join-Path $Root 'runtime\db.sqlite3') $Database $Outbox
+    if ($LASTEXITCODE -ne 0) { throw 'No se pudo crear SQLite H17.' }
 }
 function New-Fixture {
     param([string]$Phase, [bool]$BackupExists, [bool]$CandidateExists)
@@ -114,8 +115,8 @@ function New-Fixture {
 function Assert-OldRestored {
     param([object]$Fixture)
     Assert-Equal (Get-Content -LiteralPath (Join-Path $Fixture.Installation 'VERSION') -Raw).Trim() '0.4.0-dev.10' 'VERSION'
-    Assert-Equal (Get-Content -LiteralPath (Join-Path $Fixture.Installation 'runtime\db.sqlite3') -Raw) 'old-db' 'SQLite'
-    Assert-Equal (Get-Content -LiteralPath (Join-Path $Fixture.Installation 'runtime\outbox.fixture') -Raw) 'old-outbox' 'outbox'
+    & python $sqliteHelper verify (Join-Path $Fixture.Installation 'runtime\db.sqlite3') 'old-db' 'old-outbox'
+    if ($LASTEXITCODE -ne 0) { throw 'SQLite/outbox anterior sin integridad.' }
     Assert-Equal (Get-Content -LiteralPath (Join-Path $Fixture.Installation '.env') -Raw) 'LAB_ONLY=1' '.env'
     if (Test-Path -LiteralPath $Fixture.Journal) { throw 'journal pendiente tras recuperación' }
 }
@@ -135,12 +136,13 @@ Assert-OldRestored -Fixture $fixture
 $fixture = New-Fixture -Phase 'state_copied' -BackupExists $true -CandidateExists $true
 Recover-Fixture -Fixture $fixture
 Assert-OldRestored -Fixture $fixture
-Assert-Equal (Get-Content -LiteralPath (Join-Path $fixture.Failed 'runtime\db.sqlite3') -Raw) 'candidate-db' 'candidata conservada'
+& python $sqliteHelper verify (Join-Path $fixture.Failed 'runtime\db.sqlite3') 'candidate-db' 'candidate-outbox'
+if ($LASTEXITCODE -ne 0) { throw 'SQLite/outbox de candidata fallida perdió integridad.' }
 # Corte después del motor y antes del health externo: se conserva candidata con datos nuevos.
 $fixture = New-Fixture -Phase 'engine_complete' -BackupExists $true -CandidateExists $true
 Recover-Fixture -Fixture $fixture
-Assert-Equal (Get-Content -LiteralPath (Join-Path $fixture.Installation 'runtime\db.sqlite3') -Raw) 'candidate-db' 'SQLite nueva'
-Assert-Equal (Get-Content -LiteralPath (Join-Path $fixture.Installation 'runtime\outbox.fixture') -Raw) 'candidate-outbox' 'outbox nuevo'
+& python $sqliteHelper verify (Join-Path $fixture.Installation 'runtime\db.sqlite3') 'candidate-db' 'candidate-outbox'
+if ($LASTEXITCODE -ne 0) { throw 'SQLite/outbox nuevo perdió integridad.' }
 if (-not (Test-Path -LiteralPath $fixture.Backup)) { throw 'respaldo anterior perdido' }
 if (Test-Path -LiteralPath $fixture.Journal) { throw 'journal pendiente tras health verificado' }
 Recover-Fixture -Fixture $fixture
