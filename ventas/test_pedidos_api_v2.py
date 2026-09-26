@@ -146,6 +146,9 @@ def cliente(transporte, **opciones):
         **opciones,
     )
 
+def cabecera_enviada(solicitud, nombre):
+    return {clave.lower(): valor for clave, valor in solicitud.header_items()}.get(nombre.lower())
+
 
 class LecturaLimitadaTests(unittest.TestCase):
     class Flujo:
@@ -199,8 +202,8 @@ class ClientePedidosV2Tests(unittest.TestCase):
         self.assertEqual(query["sucursal_id"], ["1,3"])
         self.assertEqual(query["cursor"], ["cursor-opaco"])
         self.assertEqual(solicitud.get_header("Authorization"), f"Bearer {TOKEN}")
-        self.assertIsNone(solicitud.get_header("X-POS-Edge-ID"))
-        self.assertIsNone(solicitud.get_header("X-POS-Branch-ID"))
+        self.assertIsNone(cabecera_enviada(solicitud, "X-POS-Edge-ID"))
+        self.assertIsNone(cabecera_enviada(solicitud, "X-POS-Branch-ID"))
         self.assertNotIn(TOKEN, repr(api))
 
     def test_credencial_agregada_envia_identidades_explicitamente(self):
@@ -217,13 +220,13 @@ class ClientePedidosV2Tests(unittest.TestCase):
         api.listar_pagina(desde=DESDE, hasta=HASTA, limite=2, request_id="req-agg")
 
         solicitud = transporte.solicitudes[0][0]
-        self.assertEqual(solicitud.get_header("X-POS-Edge-ID"), edge_id)
-        self.assertEqual(solicitud.get_header("X-POS-Branch-ID"), branch_id)
+        self.assertEqual(cabecera_enviada(solicitud, "X-POS-Edge-ID"), edge_id)
+        self.assertEqual(cabecera_enviada(solicitud, "X-POS-Branch-ID"), branch_id)
         self.assertEqual(solicitud.get_header("Authorization"), f"Bearer {TOKEN}")
         self.assertNotIn(TOKEN, repr(api))
 
     def test_credencial_agregada_rechaza_identidades_incompletas_o_no_canonicas(self):
-        valido = "11111111-1111-4111-8111-111111111111"
+        valido = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
         casos = [
             {"edge_id": valido},
             {"pos_branch_id": valido},
@@ -335,11 +338,11 @@ class ClientePedidosV2Tests(unittest.TestCase):
             ["req-rate", "req-rate"],
         )
         self.assertEqual(
-            [solicitud.get_header("X-POS-Edge-ID") for solicitud, _, _ in transporte.solicitudes],
+            [cabecera_enviada(solicitud, "X-POS-Edge-ID") for solicitud, _, _ in transporte.solicitudes],
             [api.edge_id, api.edge_id],
         )
         self.assertEqual(
-            [solicitud.get_header("X-POS-Branch-ID") for solicitud, _, _ in transporte.solicitudes],
+            [cabecera_enviada(solicitud, "X-POS-Branch-ID") for solicitud, _, _ in transporte.solicitudes],
             [api.pos_branch_id, api.pos_branch_id],
         )
 
